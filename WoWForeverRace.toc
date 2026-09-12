@@ -1,0 +1,38 @@
+## Interface: 50503
+## Interface-Vanilla: 11503
+## Interface-TBC: 20505
+## Interface-Mists: 50503
+## Title: WoWForeverRace
+## Author: Rubensayshi
+## Version: @project-version@
+## Notes: Keep track of the top 50 players in the race to max level.
+## DefaultState: Enabled
+## LoadOnDemand: 0
+## SavedVariables: WoWForeverRace_DB
+
+libs.xml
+
+src\main.lua
+#@debug@
+src\dev.lua
+#@end-debug@
+src\config.lua
+src\defaultdb.lua
+src\options.lua
+src\util\util.lua
+src\util\list-helpers.lua
+src\util\table-helpers.lua
+src\util\chat.lua
+src\networking\network.lua
+src\core\event-bus.lua
+src\core\core.lua
+src\core\tracker.lua
+src\core\scanner.lua
+src\core\chat-notifier.lua
+src\core\sync.lua
+src\core\serializer.lua
+src\core\leaderboard.lua
+src\core\updater.lua
+src\gui\pioneers-frame.lua
+src\gui\status-frame.lua
+src\gui\debug-frame.lua

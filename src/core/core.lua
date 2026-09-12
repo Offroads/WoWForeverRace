@@ -1,0 +1,109 @@
+-- Addon global
+local WoWForeverRace = _G.WoWForeverRace
+
+-- WoW API
+local GetServerTime, UnitClass = _G.GetServerTime, _G.UnitClass
+
+---@class WoWForeverRaceCore
+---@field Config WoWForeverRaceConfig
+local WoWForeverRaceCore = {}
+WoWForeverRaceCore.__index = WoWForeverRaceCore
+WoWForeverRace.Core = WoWForeverRaceCore
+
+setmetatable(WoWForeverRaceCore, {
+    __call = function(cls, ...)
+        return cls.new(...)
+    end,
+})
+
+function WoWForeverRaceCore.new(Config, player, realm)
+    local self = setmetatable({}, WoWForeverRaceCore)
+
+    self.Config = Config
+    self.loginTime = GetServerTime()
+
+    self.InitMe(self, player, realm)
+
+    return self
+end
+
+function WoWForeverRaceCore:InitMe(player, realm)
+    WoWForeverRace:DebugPrint("InitMe: " .. tostring(player)  .. ", " .. tostring(realm))
+    if realm == nil then
+        realm = "NaN"
+    end
+
+    self.realm = realm
+    self.realme = player
+    self.me = self.realme
+end
+
+function WoWForeverRaceCore:PlayerFull(player, realm)
+    if realm == nil then
+        realm = self.realm
+    end
+
+    return player .. "-" .. realm
+end
+
+function WoWForeverRaceCore:IsMyRealm(realm)
+    return realm == nil or realm == self.realm
+end
+
+function WoWForeverRaceCore:MyRealm()
+    return self.realm
+end
+
+function WoWForeverRaceCore:Me()
+    return self.me
+end
+
+function WoWForeverRaceCore:RealMe()
+    return self.realme
+end
+
+function WoWForeverRaceCore:FullMe()
+    return self:PlayerFull(self.me)
+end
+
+function WoWForeverRaceCore:FullRealMe()
+    return self:PlayerFull(self.realme)
+end
+
+function WoWForeverRaceCore:MyClass()
+    local _, className, _ = UnitClass("player")
+    return self:ClassIndex(className), className
+end
+
+function WoWForeverRaceCore:ClassIndex(className)
+    className = string.upper(className)
+    className = string.gsub(className, " ", "")
+    if self.Config.ClassIndexes[className] ~= nil then
+        return self.Config.ClassIndexes[className]
+    else
+        return self.Config.UnknownClassIndex
+    end
+end
+
+function WoWForeverRaceCore:ClassByIndex(classIndex)
+    if classIndex ~= nil and self.Config.Classes[classIndex] ~= nil then
+        return self.Config.Classes[classIndex]
+    else
+        return "UNKNOWN"
+    end
+end
+
+function WoWForeverRaceCore:SplitFullPlayer(fullPlayer)
+    local splt = WoWForeverRace.SplitString(fullPlayer, "-")
+
+    return splt[1], splt[2]
+end
+
+
+function WoWForeverRaceCore:Now()
+    return GetServerTime()
+end
+
+function WoWForeverRaceCore:LoginTime()
+    return self.loginTime
+end
