@@ -14,10 +14,6 @@ local BROWN = WoWForeverRace.Colors.BROWN
 function WoWForeverRace:RegisterOptions()
     local _self = self
 
-    local _, myClassName = self.Core:MyClass()
-    local myPrettyClassName = self.Config.PrettyClassNames[myClassName]
-    local myClassColored = self.Colors[myClassName] .. myPrettyClassName .. "|r"
-
     local configOptions = {
         type = "group",
         args = {

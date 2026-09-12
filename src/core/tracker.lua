@@ -108,7 +108,7 @@ local function isLeaderboardFinal(lb, config)
 end
 
 -- playerHistory records every character a scan ever saw and would grow unbounded
--- (thousands of players on a busy realm). While the race is live everyone is kept —
+-- (thousands of players on a busy realm). While the race is live everyone is kept -
 -- a player who temporarily drops off a leaderboard may re-enter it and would lose
 -- their history otherwise. Once the leaderboard a player competes on is final
 -- (full at max level), or the race is finished, non-members are dropped.
@@ -177,19 +177,16 @@ function WoWForeverRaceTracker:RaceFinished()
     end
 end
 
-function WoWForeverRaceTracker:OnNetPlayerInfoBatch(payload, _)
+-- payload = {batchstr, isRebroadcast, classIndex}; only the batch is needed here,
+-- the class index of the batch is implied by each player's own classIndex
+function WoWForeverRaceTracker:OnNetPlayerInfoBatch(payload)
     if not self.DB.profile.options.networking then return end
 
-    local batchstr = payload[1]
-    local isRebroadcast = payload[2]
-    local classIndex = payload[3] or 0
-
-    local batch = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(batchstr)
-    self:ProcessPlayerInfoBatch(batch, classIndex)
-
+    local batch = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(payload[1])
+    self:ProcessPlayerInfoBatch(batch)
 end
 
-function WoWForeverRaceTracker:OnSlashWhoResult(playerInfoBatch, classIndex)
+function WoWForeverRaceTracker:OnSlashWhoResult(playerInfoBatch)
     local changed = {}
     for _, playerInfo in ipairs(playerInfoBatch) do
         local normalizedInfo, isChanged = self:ProcessPlayerInfo(playerInfo)
@@ -264,7 +261,7 @@ function WoWForeverRaceTracker:FlushDingPush()
     end
 end
 
-function WoWForeverRaceTracker:ProcessPlayerInfoBatch(playerInfoBatch, classIndex)
+function WoWForeverRaceTracker:ProcessPlayerInfoBatch(playerInfoBatch)
     for _, playerInfo in ipairs(playerInfoBatch) do
         self:ProcessPlayerInfo(playerInfo)
     end
@@ -608,7 +605,7 @@ function WoWForeverRaceTracker:UpdatePioneers(playerInfo)
 end
 
 -- Merges a received playerHistory chunk, keeping the earliest dingedAt per
--- (player, level) and filling in a missing classIndex — deterministic and
+-- (player, level) and filling in a missing classIndex - deterministic and
 -- monotonic, so repeated exchanges converge instead of ping-ponging.
 -- batch = {[name] = {classIndex = ci, levels = {[level] = dingedAt}}}
 function WoWForeverRaceTracker:OnPHSyncResult(batch)

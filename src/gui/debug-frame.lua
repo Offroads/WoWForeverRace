@@ -19,7 +19,7 @@ local ORANGE = "|cffffaa00"
 -- Short label for a class index used in hash log display
 local CLASS_SHORT = { [0]="G","Wa","Pa","Hu","Ro","Pr","DK","Sh","Ma","Wl","Mo","Dr","DH" }
 
--- Relative column widths — must sum to < 1.0 so the leftover gap never
+-- Relative column widths - must sum to < 1.0 so the leftover gap never
 -- fits the next row's first widget, guaranteeing correct line breaks in
 -- AceGUI's Flow layout.
 local REL_EVENT = 0.62

@@ -100,7 +100,7 @@ function WoWForeverRacePioneersView:Render(container, classIndex)
         -- insert a hint at the very top (already added all rows, prepend a note via first child)
         local hint = AceGUI:Create("Label")
         hint:SetFullWidth(true)
-        hint:SetText(GRAY .. "No pioneer data yet — keep scanning!|r")
+        hint:SetText(GRAY .. "No pioneer data yet - keep scanning!|r")
         scroll:AddChild(hint)
     end
 

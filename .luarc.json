@@ -1,0 +1,41 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "runtime.version": "Lua 5.1",
+  "runtime.path": [
+    "src/?.lua",
+    "src/?/?.lua",
+    "tests/?.lua",
+    "tests/?/?.lua"
+  ],
+  "workspace.library": [
+    "libs"
+  ],
+  "workspace.ignoreDir": [
+    ".release",
+    ".git",
+    "env"
+  ],
+  "workspace.checkThirdParty": false,
+  "diagnostics.globals": [
+    "WoWForeverRace",
+    "LibStub",
+    "describe",
+    "it",
+    "pending",
+    "before_each",
+    "after_each",
+    "setup",
+    "teardown",
+    "spy",
+    "stub",
+    "mock",
+    "match",
+    "assert"
+  ],
+  "diagnostics.disable": [
+    "lowercase-global"
+  ],
+  "diagnostics.severity": {
+    "undefined-field": "Information"
+  }
+}

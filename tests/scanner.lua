@@ -144,4 +144,4 @@ describe("Scanner", function()
 
         assert.spy(eventBusSpy).called_at_most(0)
     end)
-end)
+end)

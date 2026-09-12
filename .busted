@@ -1,0 +1,29 @@
+-- busted configuration, see https://lunarmodules.github.io/busted/
+--
+-- Run from the repo root. `make tests` layers INCLUDES (file pattern) and
+-- TESTS (test name filter) on top of these defaults.
+return {
+    _all = {
+        lpath = "./src/?.lua;./src/?/?.lua;./src/?/init.lua;./libs/?.lua;./libs/?/?.lua;./tests/?.lua;./tests/?/?.lua",
+        ROOT = {"tests"},
+        -- every .lua file under tests/ is a test file ...
+        pattern = {"%.lua$"},
+        -- ... except the bootstrap and the WoW API stubs it loads
+        ["exclude-pattern"] = {
+            "^testbase%.lua$",
+            "^misc%.lua$",
+            "^player%.lua$",
+            "^createframe%.lua$",
+            "^chatinfo%.lua$",
+            "^libcompressmock%.lua$",
+        },
+        verbose = true,
+    },
+    default = {
+        coverage = true,
+    },
+    -- `busted --run=quick` skips coverage instrumentation
+    quick = {
+        coverage = false,
+    },
+}

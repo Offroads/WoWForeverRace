@@ -12,17 +12,6 @@ local DeserPInfoBatch = WoWForeverRace.Serializer.DeserializePlayerInfoBatch
 local SerFTLBatch = WoWForeverRace.Serializer.SerializeFTLBatch
 local DeserFTLBatch = WoWForeverRace.Serializer.DeserializeFTLBatch
 
-function mergeConfigs(...)
-    local config = {}
-    for _, c in pairs({...}) do
-        for k, v in pairs(c) do
-            config[k] = v
-        end
-    end
-
-    return config
-end
-
 local time = 1000000000
 
 describe("Serializer", function()

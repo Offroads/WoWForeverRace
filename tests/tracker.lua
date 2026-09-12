@@ -7,7 +7,7 @@ local DRUIDIDX, WARRIORIDX, PALADINIDX, PRIESTIDX =
 WoWForeverRace.Config.ClassIndexes["DRUID"], WoWForeverRace.Config.ClassIndexes["WARRIOR"],
 WoWForeverRace.Config.ClassIndexes["PALADIN"],WoWForeverRace.Config.ClassIndexes["PRIEST"]
 
-function merge(...)
+local function merge(...)
     local config = {}
     for _, c in pairs({...}) do
         for k, v in pairs(c) do
@@ -18,7 +18,7 @@ function merge(...)
     return config
 end
 
-function leaderboardSpies(tracker, config)
+local function leaderboardSpies(tracker, config)
     local spies = {}
 
     spies[0] = spy.on(tracker.lbGlobal, "ProcessPlayerInfo")
@@ -44,7 +44,7 @@ describe("Tracker", function()
     local tracker
     local time = 1000000000
 
-    function playerInfo(name, level, classIndex, dingedAt)
+    local function playerInfo(name, level, classIndex, dingedAt)
         if classIndex == nil then
             classIndex = 11
         end
