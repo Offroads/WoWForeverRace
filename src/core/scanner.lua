@@ -30,7 +30,7 @@ setmetatable(WoWForeverRaceScanner, {
 
 local SCAN_COOLDOWN  = 15  -- seconds between automatic scans
 local SCAN_TIMEOUT   = 60  -- seconds before an unanswered /who is abandoned
-local WHO_RESULT_CAP = 49  -- WoW caps /who results at this count
+local WHO_RESULT_CAP = 50  -- WoW never returns more than this many /who rows
 local LEVEL_STEP     = 10  -- levels to shift the scan floor up/down
 local CLASS_COMPLETE_TTL = 900  -- seconds before a fully-scanned class is scanned again
 
@@ -92,8 +92,11 @@ end
 function WoWForeverRaceScanner:OnWhoListUpdate()
     if not self.scanPending then return end
 
-    local total, numShown = C_FriendList.GetNumWhoResults()
-    numShown = numShown or total or 0
+    -- GetNumWhoResults() returns (numWhos, totalCount): the number of rows the
+    -- client received (capped at WHO_RESULT_CAP) and the server-side match count
+    local numShown, total = C_FriendList.GetNumWhoResults()
+    numShown = numShown or 0
+    total = total or numShown
 
     -- Collect the rows first: a manual /who fired while our scan is pending
     -- also raises WHO_LIST_UPDATE, and must not be misattributed to the scan.
@@ -152,7 +155,8 @@ function WoWForeverRaceScanner:OnWhoListUpdate()
         return
     end
 
-    local resultComplete = numShown < WHO_RESULT_CAP
+    -- the result is only complete when the server had no more matches than it sent us
+    local resultComplete = numShown < WHO_RESULT_CAP and total <= numShown
 
     if self.lastScanClassIndex then
         self.lastResultFull[self.lastScanClassIndex] = not resultComplete

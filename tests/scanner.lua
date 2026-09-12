@@ -44,6 +44,20 @@ describe("Scanner", function()
         assert.equals("70-90", GetWhoQuery())
     end)
 
+    it("treats a result the server truncated as incomplete", function()
+        scanner:TriggerScan()
+        assert.equals("80-90", GetWhoQuery())
+
+        -- one row shown, but the server reports many more matches: the range
+        -- is too wide, so the floor moves up instead of widening further
+        SetWhoResults({{fullName = "Top", level = 90, filename = "MAGE"}}, 120)
+        scanner:OnWhoListUpdate()
+        SetTime(time + 16)
+        scanner:TriggerScan()
+
+        assert.equals("89-90", GetWhoQuery())
+    end)
+
     it("marks a low-population class complete at the lower bound", function()
         db.factionrealm.leaderboard[0].players = {
             {name = "Seed", level = 90, classIndex = 1, dingedAt = time},
