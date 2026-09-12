@@ -187,6 +187,43 @@ describe("Tracker", function()
             assert.equals(0, db.factionrealm.leaderboard[0].players[1].classIndex)
         end)
 
+        it("ignores player info without a name", function()
+            local eventBusSpy = spy.on(eventbus, "PublishEvent")
+
+            tracker:ProcessPlayerInfo({level = 7, classIndex = DRUIDIDX})
+            tracker:ProcessPlayerInfo({name = "", level = 7, classIndex = DRUIDIDX})
+
+            assert.equals(0, #db.factionrealm.leaderboard[0].players)
+            assert.is_nil(next(db.factionrealm.playerHistory))
+            assert.spy(eventBusSpy).was_not_called()
+        end)
+
+        it("ignores player info with an invalid level", function()
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 0))
+            tracker:ProcessPlayerInfo(playerInfo("Nubtwo", "7"))
+            tracker:ProcessPlayerInfo(playerInfo("Nubthree", config.MaxLevel + 1))
+
+            assert.equals(0, #db.factionrealm.leaderboard[0].players)
+        end)
+
+        it("replaces a non-numeric dingedAt with the current time", function()
+            local lbSpies = leaderboardSpies(tracker, config)
+
+            tracker:ProcessPlayerInfo({name = "Nubone", level = 5, classIndex = DRUIDIDX, dingedAt = "soon"})
+
+            assert.spy(lbSpies[0]).was_called_with(match.is_ref(tracker.lbGlobal),
+                    playerInfo("Nubone", 5, DRUIDIDX, time))
+        end)
+
+        it("ignores malformed network batches", function()
+            assert.has_no.errors(function()
+                tracker:OnNetPlayerInfoBatch("not a table")
+                tracker:OnNetPlayerInfoBatch({})
+                tracker:OnNetPlayerInfoBatch({42})
+            end)
+            assert.equals(0, #db.factionrealm.leaderboard[0].players)
+        end)
+
         it("should broadcast to network OnSlashWhoResult", function()
             local networkSpy = spy.on(network, "SendObject")
 

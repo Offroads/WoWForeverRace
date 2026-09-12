@@ -181,6 +181,7 @@ end
 -- the class index of the batch is implied by each player's own classIndex
 function WoWForeverRaceTracker:OnNetPlayerInfoBatch(payload)
     if not self.DB.profile.options.networking then return end
+    if type(payload) ~= "table" or type(payload[1]) ~= "string" then return end
 
     local batch = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(payload[1])
     self:ProcessPlayerInfoBatch(batch)
@@ -483,7 +484,7 @@ function WoWForeverRaceTracker:ProcessPlayerInfo(playerInfo)
         return
     end
 
-    if playerInfo.dingedAt == nil then
+    if type(playerInfo.dingedAt) ~= "number" then
         playerInfo.dingedAt = self.Core:Now()
     end
     -- keep timestamps integral: the wire format truncates to whole seconds, so a
@@ -495,9 +496,15 @@ function WoWForeverRaceTracker:ProcessPlayerInfo(playerInfo)
         playerInfo.class = nil
     end
 
-    -- remote data is untrusted: a forged level above the configured max would
-    -- permanently outrank every real player and falsely finish the race
-    if type(playerInfo.level) ~= "number" or playerInfo.level > self.Config.MaxLevel then
+    -- remote data is untrusted: a nameless entry would corrupt the leaderboard and
+    -- history tables, and a forged level above the configured max would permanently
+    -- outrank every real player and falsely finish the race
+    if type(playerInfo.name) ~= "string" or playerInfo.name == "" then
+        WoWForeverRace:DebugPrint("Ignored player info without a name")
+        return
+    end
+    if type(playerInfo.level) ~= "number" or playerInfo.level < 1
+            or playerInfo.level > self.Config.MaxLevel then
         WoWForeverRace:DebugPrint("Ignored player info with invalid level: " .. tostring(playerInfo.level))
         return
     end
