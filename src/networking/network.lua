@@ -2,7 +2,8 @@
 local WoWForeverRace = _G.WoWForeverRace
 
 -- WoW API
-local IsInRaid, GetNumGroupMembers = _G.IsInRaid, _G.GetNumGroupMembers
+local IsInRaid, IsInGroup, GetNumGroupMembers = _G.IsInRaid, _G.IsInGroup, _G.GetNumGroupMembers
+local LE_PARTY_CATEGORY_INSTANCE = _G.LE_PARTY_CATEGORY_INSTANCE
 
 -- Libs
 local LibStub = _G.LibStub
@@ -151,12 +152,18 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
     self:TrackMessage("send", event)
 
     if channel == "GROUP" then
-        if IsInRaid() then
-            AceComm:SendCommMessage(WoWForeverRace.Config.Network.Prefix, encoded, "RAID", nil, prio)
+        -- PARTY/RAID addon messages are silently dropped while in an instance
+        -- group (dungeon finder, battleground); those must use INSTANCE_CHAT
+        if IsInGroup and LE_PARTY_CATEGORY_INSTANCE and IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then
+            channel = "INSTANCE_CHAT"
+        elseif IsInRaid() then
+            channel = "RAID"
         elseif GetNumGroupMembers() > 0 then
-            AceComm:SendCommMessage(WoWForeverRace.Config.Network.Prefix, encoded, "PARTY", nil, prio)
+            channel = "PARTY"
+        else
+            return
         end
-        return
+        target = nil
     end
 
     AceComm:SendCommMessage(
