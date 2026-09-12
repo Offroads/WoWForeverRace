@@ -87,7 +87,7 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
     WoWForeverRace:DebugPrint("Recv raw <- " .. tostring(sender))
 
     local ok, err = pcall(function()
-        -- YELL gives "Name", GUILD/WHISPER give "Name-Realm" — split before comparing
+        -- YELL gives "Name", GUILD/WHISPER give "Name-Realm" - split before comparing
         local senderName, senderRealm = self.Core:SplitFullPlayer(sender)
 
         -- completely ignore anything from other realms

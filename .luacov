@@ -1,2 +1,14 @@
-include = {"src/*",}
-
+-- luacov configuration, see https://lunarmodules.github.io/luacov/
+--
+-- `busted --coverage` (the default run config in .busted) collects stats into
+-- luacov.stats.out and renders luacov.report.out when the run ends. Only the
+-- addon sources count; main.lua, options.lua and gui/ are not exercised by the
+-- test suite because they are WoW API heavy (see README.md).
+return {
+    include = {"src/"},
+    exclude = {"tests/", "libs/"},
+    statsfile = "luacov.stats.out",
+    reportfile = "luacov.report.out",
+    runreport = true,
+    deletestats = true,
+}

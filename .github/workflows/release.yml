@@ -1,0 +1,35 @@
+name: Release
+
+# Tag a commit (e.g. `git tag v1.0.0 && git push --tags`) to build the addon zip
+# with the BigWigs packager and attach it to a GitHub release. The tag name
+# becomes the addon version (@project-version@ in the TOC and config.lua).
+#
+# Uploads to CurseForge / Wago / WoWInterface only happen when the matching
+# secret is configured in the repository settings.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Package and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Package with BigWigs packager
+        uses: BigWigsMods/packager@v2
+        with:
+          # one zip supporting every game version listed in the TOC
+          args: -S
+        env:
+          GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}
+          WOWI_API_TOKEN: ${{ secrets.WOWI_API_TOKEN }}

@@ -13,7 +13,7 @@ local function leaderboardClassIndexes(config)
     return indexes
 end
 
--- djb2 chain over all leaderboards — mirrors Tracker:ComputeFullHash without a cross-component dependency
+-- djb2 chain over all leaderboards - mirrors Tracker:ComputeFullHash without a cross-component dependency
 local function computeFullHash(db, config)
     local hash = 5381
     for _, classIndex in ipairs(leaderboardClassIndexes(config)) do
@@ -364,7 +364,7 @@ function WoWForeverRaceSync:OnNetStartSync(payload, sender)
         requesterClassIndex = payload[1]
 
         if type(payload[2]) == "table" then
-            -- guild sync: payload[2] is per-class hashes — send every leaderboard that differs
+            -- guild sync: payload[2] is per-class hashes - send every leaderboard that differs
             local perClassHashes = payload[2]
             for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
                 local lb = self.DB.factionrealm.leaderboard[classIndex]
@@ -376,7 +376,7 @@ function WoWForeverRaceSync:OnNetStartSync(payload, sender)
                 end
             end
             -- payload[3] is the requester's FTL hash; only send FTL when it differs
-            -- (older clients don't include it — send unconditionally for those)
+            -- (older clients don't include it - send unconditionally for those)
             local guildFTLHash = payload[3]
             if guildFTLHash == nil or guildFTLHash ~= computeFTLHash(self.DB, self.Config) then
                 self:SyncFTL(sender)
@@ -452,7 +452,7 @@ end
 
 -- Announce our presence to the guild and open a window for offers.
 -- Used both on login (called from InitSync) and by the periodic ticker.
--- withPlayerHistory: true only for the login call — player history is potentially
+-- withPlayerHistory: true only for the login call - player history is potentially
 -- large, so it's pulled once per login and never re-negotiated by the ticker.
 function WoWForeverRaceSync:SendGuildSync(withPlayerHistory)
     if not IsInGuild() then return end
@@ -519,7 +519,7 @@ end
 -- Add or update a buddy entry in the persistent DB list.
 function WoWForeverRaceSync:AddBuddy(name)
     -- sender format differs per channel (YELL gives "Name", GUILD/WHISPER give
-    -- "Name-Realm") — normalize same-realm names so we don't store duplicates
+    -- "Name-Realm") - normalize same-realm names so we don't store duplicates
     local shortName, realm = self.Core:SplitFullPlayer(name)
     if self.Core:IsMyRealm(realm) then
         if shortName == self.Core:RealMe() then return end
@@ -678,7 +678,7 @@ function WoWForeverRaceSync:SyncFTL(syncTo)
     self.Network:SendObject(self.Config.Network.Events.FTLSync, payload, "WHISPER", syncTo)
 end
 
--- Received a firstToLevel sync payload — deserialize and forward to tracker for merging.
+-- Received a firstToLevel sync payload - deserialize and forward to tracker for merging.
 -- Accepts both the new table format {ftlstr, realmOpenedAt} and the old bare-string format.
 function WoWForeverRaceSync:OnNetFTLSync(payload, sender)
     if not self.DB.profile.options.networking then return end
@@ -719,7 +719,7 @@ function WoWForeverRaceSync:SyncPlayerHistory(syncTo)
     end
 end
 
--- Received a playerHistory chunk — deserialize and forward to tracker for merging.
+-- Received a playerHistory chunk - deserialize and forward to tracker for merging.
 -- Chunks are independently parseable, so each is merged as it arrives.
 function WoWForeverRaceSync:OnNetPHSync(payload, sender)
     if not self.DB.profile.options.networking then return end

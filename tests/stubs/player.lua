@@ -1,3 +1,39 @@
+-- Stubs for player / realm / group state and the /who API. Every stub comes
+-- with a Set* helper so a test can put the world into the state it needs;
+-- calling a Set* helper with nil restores the default.
+local whoResults = {}
+local whoTotal = nil
+local whoQuery = nil
+
+_G.C_FriendList = {
+    -- returns (numWhos, totalCount) like the real API
+    GetNumWhoResults = function()
+        return #whoResults, whoTotal or #whoResults
+    end,
+    GetWhoInfo = function(index)
+        return whoResults[index]
+    end,
+    SetWhoToUi = function() end,
+    SendWho = function(query)
+        whoQuery = query
+    end,
+}
+-- results: list of {fullName, level, filename}; total: server-side match count
+-- (defaults to #results, pass a higher value to simulate a truncated result)
+_G.SetWhoResults = function(results, total)
+    whoResults = results or {}
+    whoTotal = total
+end
+_G.GetWhoQuery = function()
+    return whoQuery
+end
+_G.ResetWhoQuery = function()
+    whoQuery = nil
+end
+_G.FriendsFrame = {
+    RegisterEvent = function() end,
+    UnregisterEvent = function() end,
+}
 _G.GetRealmName = function()
     return "NubVille"
 end
@@ -18,17 +54,21 @@ _G.UnitFactionGroup = function()
     return "Alliance"
 end
 
+_G.GetBuildInfo = function()
+    return "5.5.3", "12345", "Jan 1 2026", 50503
+end
+
 local defaultIsInGuild = true
 local isInGuild = defaultIsInGuild
 _G.IsInGuild = function()
     return isInGuild
 end
 
-_G.SetIsInGuild = function(_isInGuild)
-    if _isInGuild == nil then
-        _isInGuild = defaultIsInGuild
+_G.SetIsInGuild = function(inGuild)
+    if inGuild == nil then
+        inGuild = defaultIsInGuild
     end
-    isInGuild = _isInGuild
+    isInGuild = inGuild
 end
 
 _G.GetLocale = function()
@@ -50,28 +90,51 @@ end
 
 local defaultRealZoneText = "Ironforge"
 local realZoneText = defaultRealZoneText
-_G.SetRealZoneText = function(_realZoneText)
-    if _realZoneText == nil then
-        _realZoneText = defaultRealZoneText
+_G.SetRealZoneText = function(zoneText)
+    if zoneText == nil then
+        zoneText = defaultRealZoneText
     end
-    realZoneText = _realZoneText
+    realZoneText = zoneText
 end
 
 _G.GetRealZoneText = function()
     return realZoneText
 end
 
+-- group state, see SetGroupState(numMembers, isRaid, isInstanceGroup)
 local defaultNumGroupMembers = 0
 local numGroupMembers = defaultNumGroupMembers
-_G.SetNumGroupMembers = function(_numGroupMembers)
-    if _numGroupMembers == nil then
-        _numGroupMembers = defaultNumGroupMembers
+local isInRaid = false
+local isInInstanceGroup = false
+_G.LE_PARTY_CATEGORY_HOME = 1
+_G.LE_PARTY_CATEGORY_INSTANCE = 2
+
+_G.SetNumGroupMembers = function(members)
+    if members == nil then
+        members = defaultNumGroupMembers
     end
-    numGroupMembers = _numGroupMembers
+    numGroupMembers = members
+end
+
+_G.SetGroupState = function(members, inRaid, inInstanceGroup)
+    _G.SetNumGroupMembers(members)
+    isInRaid = inRaid or false
+    isInInstanceGroup = inInstanceGroup or false
 end
 
 _G.GetNumGroupMembers = function()
     return numGroupMembers
+end
+
+_G.IsInRaid = function()
+    return isInRaid
+end
+
+_G.IsInGroup = function(category)
+    if category == _G.LE_PARTY_CATEGORY_INSTANCE then
+        return isInInstanceGroup
+    end
+    return numGroupMembers > 0
 end
 
 _G.GetRaidRosterInfo = function(i)

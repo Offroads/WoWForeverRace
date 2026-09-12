@@ -71,7 +71,9 @@ function WoWForeverRaceScanner.new(Core, DB, EventBus)
     return self
 end
 
-function WoWForeverRaceScanner:InitTicker(offset)
+-- Kept for the component lifecycle in main.lua: scans are driven by hardware
+-- events (see TriggerScan), so there is no ticker to start.
+function WoWForeverRaceScanner:InitTicker()
 end
 
 function WoWForeverRaceScanner:ResetState()
@@ -267,7 +269,7 @@ function WoWForeverRaceScanner:TriggerScan()
         self.lastScanClassIndex = nil
         local lb = self.DB.factionrealm.leaderboard[0]
 
-        -- Global leaderboard is also full with everyone at max level — the race
+        -- Global leaderboard is also full with everyone at max level - the race
         -- may be over; the Tracker verifies every class board before finishing.
         if #lb.players >= maxSize and lb.minLevel >= maxLevel then
             self.EventBus:PublishEvent(WoWForeverRace.Config.Events.ScanFinished, true)

@@ -12,8 +12,8 @@ function string:SplitString(seperator)
     return WoWForeverRace.SplitString(self, seperator)
 end
 
-function WoWForeverRace.SplitString(text, _sep)
-    local sep, fields = _sep or ":", {}
+function WoWForeverRace.SplitString(text, separator)
+    local sep, fields = separator or ":", {}
     local pattern = string.format("([^%s]+)", sep)
     text:gsub(pattern, function(c)
         fields[#fields + 1] = c

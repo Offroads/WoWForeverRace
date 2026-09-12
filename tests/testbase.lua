@@ -1,3 +1,7 @@
+-- Shared bootstrap for every test file: installs the WoW API stubs, loads the
+-- Ace3 libraries the addon depends on and finally the addon sources under test.
+-- Usage at the top of a test file: local WoWForeverRace = require("testbase")
+
 -- stubs
 require("stubs.misc")
 require("stubs.player")
@@ -18,6 +22,14 @@ WoWForeverRace = {}
 _G.WoWForeverRace = WoWForeverRace
 
 require("config")
+
+-- The unpackaged config (the @debug@ block in config.lua) turns debug prints on,
+-- which drowns the test output. Opt back in with WFR_TEST_DEBUG=1 when needed.
+if os.getenv("WFR_TEST_DEBUG") == nil then
+    WoWForeverRace.Config.Debug = false
+    WoWForeverRace.Config.Trace = false
+end
+
 require("defaultdb")
 require("util.chat")
 require("util.util")

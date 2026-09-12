@@ -1,0 +1,15 @@
+# Normalise line endings: Lua, TOC, shell and config files are LF in the repo
+# and in the working tree (the release script and the Docker toolchain run on
+# Linux, and mixed endings previously made git treat some tests as binary).
+* text=auto eol=lf
+
+# PowerShell is happy with LF too, but keep batch files CRLF for cmd.exe
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# binary assets
+*.png binary
+*.jpg binary
+*.tga binary
+*.blp binary
+*.zip binary

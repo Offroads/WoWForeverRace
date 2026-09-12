@@ -1,0 +1,27 @@
+{
+  "files.eol": "\n",
+  "files.insertFinalNewline": true,
+  "files.trimTrailingWhitespace": true,
+  "files.associations": {
+    ".luacheckrc": "lua",
+    ".luacov": "lua",
+    ".busted": "lua",
+    ".pkgmeta": "yaml",
+    "*.toc": "properties"
+  },
+  "files.exclude": {
+    ".release": true,
+    "luacov.*.out": true
+  },
+  "search.exclude": {
+    "libs": true,
+    ".release": true
+  },
+  "[lua]": {
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true
+  },
+  "[markdown]": {
+    "files.trimTrailingWhitespace": false
+  }
+}

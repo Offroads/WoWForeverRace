@@ -1,10 +1,7 @@
 -- load test base
 local WoWForeverRace = require("testbase")
 
--- aliases
-local Events = WoWForeverRace.Config.Events
-
-function merge(...)
+local function merge(...)
     local config = {}
     for _, c in pairs({...}) do
         for k, v in pairs(c) do
@@ -205,7 +202,7 @@ describe("Leaderboard", function()
 
         it("ignores later dingedAt for existing player", function()
             leaderboard:ProcessPlayerInfo({name = "Nub1", level = 5, dingedAt = time, classIndex = 11})
-            local rank, changed = leaderboard:ProcessPlayerInfo({name = "Nub1", level = 5, dingedAt = time + 10, classIndex = 11})
+            local _, changed = leaderboard:ProcessPlayerInfo({name = "Nub1", level = 5, dingedAt = time + 10, classIndex = 11})
 
             assert.equals(1, #dbboard.players)
             assert.equals(time, dbboard.players[1].dingedAt)
@@ -215,7 +212,7 @@ describe("Leaderboard", function()
         it("ignores stale lower-level info for existing player", function()
             leaderboard:ProcessPlayerInfo({name = "Nub1", level = 25, dingedAt = time, classIndex = 11})
             -- an earlier dingedAt at a lower level is stale data, not an update
-            local rank, changed = leaderboard:ProcessPlayerInfo({name = "Nub1", level = 20, dingedAt = time - 100, classIndex = 11})
+            local _, changed = leaderboard:ProcessPlayerInfo({name = "Nub1", level = 20, dingedAt = time - 100, classIndex = 11})
 
             assert.equals(1, #dbboard.players)
             assert.equals(25, dbboard.players[1].level)
@@ -225,7 +222,7 @@ describe("Leaderboard", function()
 
         it("fills in a previously unknown classIndex in place", function()
             leaderboard:ProcessPlayerInfo({name = "Nub1", level = 5, dingedAt = time, classIndex = 0})
-            local rank, changed = leaderboard:ProcessPlayerInfo({name = "Nub1", level = 5, dingedAt = time, classIndex = 11})
+            local _, changed = leaderboard:ProcessPlayerInfo({name = "Nub1", level = 5, dingedAt = time, classIndex = 11})
 
             assert.equals(1, #dbboard.players)
             assert.equals(11, dbboard.players[1].classIndex)

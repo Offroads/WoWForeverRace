@@ -35,4 +35,4 @@ describe("Network", function()
         assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus),
                 NetworkEvents.SyncPayload, {"data"}, "Dude-NubVille")
     end)
-end)
+end)

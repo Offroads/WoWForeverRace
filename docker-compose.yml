@@ -1,0 +1,14 @@
+# Containerised dev toolchain, see Dockerfile and README.md.
+#
+#   docker compose run --rm dev                 # lint + tests
+#   docker compose run --rm dev make tests      # any Makefile target
+#   docker compose run --rm dev bash            # interactive shell
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wowforeverrace-dev
+    volumes:
+      - .:/addon
+    working_dir: /addon
