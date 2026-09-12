@@ -85,7 +85,9 @@ end
 
 function WoWForeverRaceChatNotifier:DingNotification(playerInfo, globalRank, classRank, isSelf)
     local className = self.Core:ClassByIndex(playerInfo.classIndex)
-    local prettyClassName = self.Config.PrettyClassNames[className]
+    -- players with an unknown class (old clients, missing /who data) have no
+    -- class leaderboard, so classRank is nil and there is no pretty name either
+    local prettyClassName = self.Config.PrettyClassNames[className] or "unknown class"
     local chatLink
     local addressPerson
     if isSelf then
@@ -118,7 +120,7 @@ function WoWForeverRaceChatNotifier:DingNotification(playerInfo, globalRank, cla
             WoWForeverRace:PPrint("Gratz! " .. addressPerson .. " first to reach level " .. playerInfo.level .. " of all " ..
                     prettyClassName .. "!!")
         end
-    elseif globalRank ~= nil then
+    elseif globalRank ~= nil and classRank ~= nil then
         if playerInfo.level == self.Config.MaxLevel then
             WoWForeverRace:PPrint("Gratz!  " .. chatLink .. " reached max level as #" .. classRank .. " of all " .. prettyClassName .. ", " ..
                     "and #" .. globalRank .. " for all classes!!")
@@ -126,7 +128,14 @@ function WoWForeverRaceChatNotifier:DingNotification(playerInfo, globalRank, cla
             WoWForeverRace:PPrint("Gratz! " .. chatLink .. " reached level " .. playerInfo.level .. "! " ..
                     "Currently rank #" .. classRank .. " of all " .. prettyClassName .. " and #" .. globalRank .. " for all classes in the race!")
         end
-    else
+    elseif globalRank ~= nil then
+        if playerInfo.level == self.Config.MaxLevel then
+            WoWForeverRace:PPrint("Gratz!  " .. chatLink .. " reached max level as #" .. globalRank .. " for all classes!!")
+        else
+            WoWForeverRace:PPrint("Gratz! " .. chatLink .. " reached level " .. playerInfo.level .. "! " ..
+                    "Currently rank #" .. globalRank .. " for all classes in the race!")
+        end
+    elseif classRank ~= nil then
         if playerInfo.level == self.Config.MaxLevel then
             WoWForeverRace:PPrint("Gratz!  " .. chatLink .. " reached max level as #" .. classRank .. " of all " .. prettyClassName .. "!")
         else
@@ -137,5 +146,6 @@ function WoWForeverRaceChatNotifier:DingNotification(playerInfo, globalRank, cla
 end
 
 function WoWForeverRaceChatNotifier:OnRaceFinished()
-    WoWForeverRace:PPrint("More than " .. self.Config.MaxLeaderboardSize .. " players have reached max level, the race is over!")
+    WoWForeverRace:PPrint("Every class leaderboard is full with " .. self.Config.MaxLeaderboardSize ..
+            " players at max level, the race is over!")
 end
