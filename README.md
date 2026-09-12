@@ -1,14 +1,12 @@
 # WoW Addon: WoWForeverRace
 This is a WoW addon to keep track of the top 50 players on your realm in the race to lvl60!
 
-![demo](demo.png)
-
 ## Releases
 For latest releases that you can just unzip into your `Interface\Addons` folder,
 see the [Releases](https://github.com/Offroads/WoWForeverRace/releases) page on GitHub.
 
 ## Dev Setup
-If you want to keep your lua project envs seperated take a look at `hererocks` (used in `.travis.yml` as well).
+If you want to keep your lua project envs separated take a look at `hererocks`.
 
 ```bash
 # make sure you have `luarocks`, `luacov` and `busted` installed, you can install them easily with:

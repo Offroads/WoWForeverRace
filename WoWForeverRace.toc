@@ -3,7 +3,7 @@
 ## Interface-TBC: 20505
 ## Interface-Mists: 50503
 ## Title: WoWForeverRace
-## Author: Rubensayshi
+## Author: Offroad
 ## Version: @project-version@
 ## Notes: Keep track of the top 50 players in the race to max level.
 ## DefaultState: Enabled

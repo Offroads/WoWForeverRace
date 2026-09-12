@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+Guidance for AI coding agents (Claude Code, Codex, Copilot, etc.) working in this repository.
 
 ## Project Overview
 
@@ -76,9 +76,9 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 
 ### Key Conventions
 - Player identity format: `"Name-Realm"` (e.g. `"Nubone-NubVille"`)
-- Class indices: 1–12 (0 = unknown/all); valid playable classes are `Config.MopClassIndexes` (1–11, no Demon Hunter) — validate remote class indexes with `Config:IsValidClassIndex`
+- Class indices: 1-12 (0 = unknown/all); valid playable classes are `Config.MopClassIndexes` (1-11, no Demon Hunter) - validate remote class indexes with `Config:IsValidClassIndex`
 - Leaderboard capped at 50 players per faction-realm
-- Race finish: the race is finished only when **every** class leaderboard in `Config.MopClassIndexes` is full at `Config.MaxLevel`. `Tracker:CheckRaceFinished` is the single authority — the scanner's `SCAN_FINISHED(endofrace)` signal is verified against the boards, never trusted directly
+- Race finish: the race is finished only when **every** class leaderboard in `Config.MopClassIndexes` is full at `Config.MaxLevel`. `Tracker:CheckRaceFinished` is the single authority - the scanner's `SCAN_FINISHED(endofrace)` signal is verified against the boards, never trusted directly
 - Remote data is untrusted: player levels above `Config.MaxLevel` are rejected before reaching the leaderboards, and only events listed in `Config.Network.Events` are accepted from the wire
 - Scanner timings (constants in `scanner.lua`): 15s cooldown between scans, 60s timeout before an unanswered `/who` is abandoned, 15min rest for a fully-scanned class (`/who` only sees online players, so a "complete" result is just a snapshot)
 - WHO results are validated against the pending query (level range + class filter) so manual `/who` results are never misattributed to a scan

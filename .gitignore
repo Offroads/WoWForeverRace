@@ -1,41 +1,16 @@
-# Compiled Lua sources
-luac.out
+# Downloaded addon libraries (fetched via .pkgmeta / make libs)
+libs/
 
-# luarocks build files
-*.src.rock
+# BigWigs packager output
+.release/
+bw-release.sh
+
+# Test coverage output
+luacov.*.out
+luacov.stats.out
+
+# Lua environment (hererocks)
+env/
+
+# Packaged releases
 *.zip
-*.tar.gz
-
-# Object files
-*.o
-*.os
-*.ko
-*.obj
-*.elf
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Libraries
-*.lib
-*.a
-*.la
-*.lo
-*.def
-*.exp
-
-# Shared objects (inc. Windows DLLs)
-*.dll
-*.so
-*.so.*
-*.dylib
-
-# Executables
-*.exe
-*.out
-*.app
-*.i*86
-*.x86_64
-*.hex
-

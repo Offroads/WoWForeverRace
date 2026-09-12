@@ -22,4 +22,3 @@ ignore:
     - README.md
     - src/dev.lua
     - env
-    - demo.png
