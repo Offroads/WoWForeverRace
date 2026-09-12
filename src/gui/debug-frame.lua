@@ -39,6 +39,7 @@ local EVENT_NAMES = {
     BPING     = "BuddyPing",
     BPONG     = "BuddyPong",
     FTLSYNC   = "FTLSync",
+    PHSYNC    = "PlayerHistorySync",
 }
 
 local function formatAge(timestamp)
@@ -97,7 +98,7 @@ function WoWForeverRaceDebugFrame:Show()
     local _self = self
 
     local frame = AceGUI:Create("Window")
-    frame:SetTitle("TCR Debug")
+    frame:SetTitle("WoWForeverRace Debug")
     frame:SetWidth(320)
     frame:SetHeight(480)
     frame:SetLayout("Flow")

@@ -25,7 +25,6 @@ local WoWForeverRaceConfig = {
     Version = "@project-version@",
     Debug = false,
     Trace = false,
-    LibWhoDebug = false,
     --@debug@
     Debug = true,
     Trace = false,
@@ -39,7 +38,7 @@ local WoWForeverRaceConfig = {
     RetrySyncWait = 30,
     OfferSyncThrottle = 30,
 
-    AceConfig = "The Classic Race",
+    AceConfig = "WoWForeverRace",
     LDB = "WoWForeverRace",
 
     Classes = {
