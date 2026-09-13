@@ -106,7 +106,7 @@ function WoWForeverRaceChatNotifier:DingNotification(playerInfo, globalRank, cla
         end
     elseif classRank == 1 and globalRank ~= nil then
         if playerInfo.level == self.Config.MaxLevel then
-            WoWForeverRace:PPrint("Gratz! The race is over! " .. addressPerson .. " the first to reach max level of all " ..
+            WoWForeverRace:PPrint("Gratz! " .. addressPerson .. " the first to reach max level of all " ..
                     prettyClassName .. ", and #" .. globalRank .. " for all classes!!")
         else
             WoWForeverRace:PPrint("Gratz! " .. addressPerson .. " first to reach level " .. playerInfo.level .. " of all " ..
@@ -114,7 +114,7 @@ function WoWForeverRaceChatNotifier:DingNotification(playerInfo, globalRank, cla
         end
     elseif classRank == 1 then
         if playerInfo.level == self.Config.MaxLevel then
-            WoWForeverRace:PPrint("Gratz! The race is over! " .. addressPerson .. " the first to reach max level of all " ..
+            WoWForeverRace:PPrint("Gratz! " .. addressPerson .. " the first to reach max level of all " ..
                     prettyClassName .. "!!")
         else
             WoWForeverRace:PPrint("Gratz! " .. addressPerson .. " first to reach level " .. playerInfo.level .. " of all " ..
