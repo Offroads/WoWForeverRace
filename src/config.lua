@@ -38,6 +38,8 @@ local WoWForeverRaceConfig = {
     RetrySyncWait = 30,
     OfferSyncThrottle = 30,
 
+    -- display name used by every window title, the minimap tooltip and the LDB text
+    Name = "WoWForeverRace",
     AceConfig = "WoWForeverRace",
     LDB = "WoWForeverRace",
 

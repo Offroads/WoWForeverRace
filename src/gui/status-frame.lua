@@ -100,7 +100,7 @@ function WoWForeverRaceStatusFrame:Show()
     local frame = AceGUI:Create("Window")
     -- bind status to DB, default width/height in defaultdb schema
     frame:SetStatusTable(self.DB.profile.gui.statusFrameStatus)
-    frame:SetTitle("WoWForeverRace")
+    frame:SetTitle(self.Config.Name)
     frame.frame:SetFrameStrata("LOW")
     frame:SetLayout("Flow")
     frame:SetCallback("OnClose", function(widget)

@@ -98,7 +98,7 @@ function WoWForeverRaceDebugFrame:Show()
     local _self = self
 
     local frame = AceGUI:Create("Window")
-    frame:SetTitle("WoWForeverRace Debug")
+    frame:SetTitle(self.Config.Name .. " Debug")
     frame:SetWidth(320)
     frame:SetHeight(480)
     frame:SetLayout("Flow")

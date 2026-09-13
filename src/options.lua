@@ -130,13 +130,13 @@ function WoWForeverRace:RegisterOptions()
 
     local ldb = LibDataBroker:NewDataObject(WoWForeverRace.Config.LDB, {
         type = "data source",
-        text = "WoWForeverRace",
+        text = WoWForeverRace.Config.Name,
         icon = "Interface\\ICONS\\Ability_Mount_JungleTiger",
         OnClick = function(_, ...) _self:MinimapIconClick(...) end
     })
     LibDBIcon:Register(WoWForeverRace.Config.LDB, ldb, self.DB.profile.options.minimap)
 
-    local hint = WHITE .. "WoWForeverRace\n" ..
+    local hint = WHITE .. WoWForeverRace.Config.Name .. "\n" ..
                  BROWN .. "Click|r to show the leaderboard. " ..
                  BROWN .. "Right-Click|r to open options dialog."
     function ldb.OnTooltipShow(tt)
