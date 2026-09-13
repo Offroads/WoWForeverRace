@@ -25,7 +25,8 @@ require("config")
 
 -- The unpackaged config (the @debug@ block in config.lua) turns debug prints on,
 -- which drowns the test output. Opt back in with WFR_TEST_DEBUG=1 when needed.
-if os.getenv("WFR_TEST_DEBUG") == nil then
+local testDebug = os.getenv("WFR_TEST_DEBUG")
+if testDebug == nil or testDebug == "" or testDebug == "0" or testDebug == "false" then
     WoWForeverRace.Config.Debug = false
     WoWForeverRace.Config.Trace = false
 end
