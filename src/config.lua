@@ -25,7 +25,6 @@ local WoWForeverRaceConfig = {
     Version = "@project-version@",
     Debug = false,
     Trace = false,
-    LibWhoDebug = false,
     --@debug@
     Debug = true,
     Trace = false,
@@ -39,7 +38,9 @@ local WoWForeverRaceConfig = {
     RetrySyncWait = 30,
     OfferSyncThrottle = 30,
 
-    AceConfig = "The Classic Race",
+    -- display name used by every window title, the minimap tooltip and the LDB text
+    Name = "WoWForeverRace",
+    AceConfig = "WoWForeverRace",
     LDB = "WoWForeverRace",
 
     Classes = {
