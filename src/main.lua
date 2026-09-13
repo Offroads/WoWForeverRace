@@ -57,6 +57,10 @@ function WoWForeverRace:OnInitialize()
     WoWForeverRace.MsgStats = { send = {}, recv = {} }
     WoWForeverRace.HashLog = {}
 
+    -- any reset of the database (ours, the options panel, a dev command, a
+    -- future profile reset) hands the components fresh tables to bind to
+    self.DB.RegisterCallback(self, "OnDatabaseReset", "OnDatabaseReset")
+
     self:DBMigrations()
 
     self.EventBus:RegisterCallback(self.Config.Events.NetworkReady, self, function()
@@ -140,16 +144,30 @@ end
 function WoWForeverRace:ResetDB()
     -- Preserve realmOpenedAt so a manual data reset doesn't lose the realm launch timestamp.
     local realmOpenedAt = self.DB.factionrealm.realmOpenedAt
+    -- fires OnDatabaseReset, which re-binds the components to the new tables
     self.DB:ResetDB()
     self.DB.factionrealm.dbversion = self.Config.Version
     if realmOpenedAt then
         self.DB.factionrealm.realmOpenedAt = realmOpenedAt
     end
+end
+
+-- AceDB replaces db.factionrealm and db.profile on a reset; everything that
+-- cached a sub-table has to pick up the new one.
+function WoWForeverRace:OnDatabaseReset()
     if self.Tracker then
         self.Tracker:ReinitLeaderboards()
     end
     if self.scanner then
         self.scanner:ResetState()
+    end
+    if self.StatusFrame then
+        if self.StatusFrame.frame then
+            -- re-open so the window binds to the fresh profile status table too
+            self.StatusFrame:Show()
+        else
+            self.StatusFrame:Refresh()
+        end
     end
 end
 

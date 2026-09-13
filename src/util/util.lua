@@ -45,10 +45,10 @@ function WoWForeverRace.RecursivePrint(object, maxDepths, layer)
     if (type(object) == "table" and (maxDepths == nil or layer <= maxDepths)) then
         for key in pairs(object) do
             if (type(object[key]) == "table") then
-                WoWForeverRace.DebugPrint("Printing Table [" .. key .. "]")
+                WoWForeverRace:DebugPrint("Printing Table [" .. tostring(key) .. "]")
                 WoWForeverRace.RecursivePrint(object[key], maxDepths, layer + 1)
             else
-                WoWForeverRace.DebugPrint(key .. ":" .. object[key])
+                WoWForeverRace:DebugPrint(tostring(key) .. ":" .. tostring(object[key]))
             end
         end
     end
