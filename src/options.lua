@@ -117,7 +117,6 @@ function WoWForeverRace:RegisterOptions()
                         type = "execute",
                         func = function()
                             _self:ResetDB()
-                            _self.StatusFrame:Refresh()
                         end,
                     },
                 }

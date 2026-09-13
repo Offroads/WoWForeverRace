@@ -16,7 +16,7 @@ local HELP = {
     "/wfr update         re-run the login sync",
     "/wfr ding NAME LVL [CLASS]   fake a /who result for a player",
     "/wfr whoami NAME    pretend to be another player on this realm",
-    "/wfr reset          reset the database for this faction-realm",
+    "/wfr reset          wipe the leaderboards, pioneers and history for this faction-realm (keeps realmOpenedAt)",
 }
 
 --[[
@@ -31,9 +31,9 @@ function WoWForeverRace:slashwfr(input)
 
     --[[RESET]]--
     elseif action == "reset" then
-        -- go through our own ResetDB so the components re-bind to the fresh tables
+        -- go through our own ResetDB (keeps the realm-opened timestamp and
+        -- the db version; the components re-bind through OnDatabaseReset)
         self:ResetDB()
-        self.StatusFrame:Refresh()
         self:PPrint("Database reset.")
 
     --[[SHOW FRAME]]--
@@ -116,9 +116,6 @@ function WoWForeverRace:PrintDevStatus()
             .. " partner=" .. tostring(sync.syncPartner and sync.syncPartner.name)
             .. " lastSync=" .. tostring(sync.lastSync))
 
-    local buddies = 0
-    for _ in pairs(db.buddies) do buddies = buddies + 1 end
-    local history = 0
-    for _ in pairs(db.playerHistory or {}) do history = history + 1 end
-    self:PPrint("buddies: " .. buddies .. ", players with history: " .. history)
+    self:PPrint("buddies: " .. WoWForeverRace.table.cnt(db.buddies)
+            .. ", players with history: " .. WoWForeverRace.table.cnt(db.playerHistory))
 end
