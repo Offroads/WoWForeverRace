@@ -18,6 +18,10 @@ to us through the EventBus.
 ---@field lbPerClass table<string, WoWForeverRaceLeaderboard>
 local WoWForeverRaceTracker = {}
 
+-- bounds for remote timestamps, see ProcessPlayerInfo
+local MIN_DINGED_AT = 946684800  -- 2000-01-01, long before any Classic realm opened
+local MAX_CLOCK_SKEW = 600       -- seconds a peer's clock may run ahead of ours
+
 local function leaderboardClassIndexes(config)
     local indexes = {0}
     for _, classIndex in ipairs(config.MopClassIndexes) do
@@ -181,7 +185,7 @@ end
 -- the class index of the batch is implied by each player's own classIndex
 function WoWForeverRaceTracker:OnNetPlayerInfoBatch(payload)
     if not self.DB.profile.options.networking then return end
-    if type(payload) ~= "table" or type(payload[1]) ~= "string" then return end
+    if type(payload) ~= "table" then return end
 
     local batch = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(payload[1])
     self:ProcessPlayerInfoBatch(batch)
@@ -484,8 +488,17 @@ function WoWForeverRaceTracker:ProcessPlayerInfo(playerInfo)
         return
     end
 
-    if type(playerInfo.dingedAt) ~= "number" then
+    if playerInfo.dingedAt == nil then
         playerInfo.dingedAt = self.Core:Now()
+    end
+    -- a timestamp before the year 2000 (Classic realms opened in 2019) or in the
+    -- future is forged or corrupt: "earliest wins" everywhere downstream, so a
+    -- dingedAt of 0 would otherwise take rank 1, every pioneer slot and the race start
+    local now = self.Core:Now()
+    if type(playerInfo.dingedAt) ~= "number" or playerInfo.dingedAt ~= playerInfo.dingedAt
+            or playerInfo.dingedAt < MIN_DINGED_AT or playerInfo.dingedAt > now + MAX_CLOCK_SKEW then
+        WoWForeverRace:DebugPrint("Ignored player info with invalid dingedAt: " .. tostring(playerInfo.dingedAt))
+        return
     end
     -- keep timestamps integral: the wire format truncates to whole seconds, so a
     -- fractional local value would hash differently from its synced copy
@@ -503,8 +516,10 @@ function WoWForeverRaceTracker:ProcessPlayerInfo(playerInfo)
         WoWForeverRace:DebugPrint("Ignored player info without a name")
         return
     end
+    -- the level must also be integral: peers receive it floored, and a fractional
+    -- local value would hash differently from theirs forever
     if type(playerInfo.level) ~= "number" or playerInfo.level < 1
-            or playerInfo.level > self.Config.MaxLevel then
+            or playerInfo.level > self.Config.MaxLevel or playerInfo.level % 1 ~= 0 then
         WoWForeverRace:DebugPrint("Ignored player info with invalid level: " .. tostring(playerInfo.level))
         return
     end
