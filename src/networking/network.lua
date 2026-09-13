@@ -136,9 +136,35 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
     end
 end
 
+-- Resolves the virtual "GROUP" channel to the addon channel that actually
+-- reaches the player's current group, or nil when not grouped.
+-- PARTY/RAID addon messages are silently dropped while in an instance group
+-- (dungeon finder, battleground); those must use INSTANCE_CHAT.
+function WoWForeverRaceNetwork:ResolveGroupChannel()
+    if IsInGroup and LE_PARTY_CATEGORY_INSTANCE and IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then
+        return "INSTANCE_CHAT"
+    elseif IsInRaid() then
+        return "RAID"
+    elseif GetNumGroupMembers() > 0 then
+        return "PARTY"
+    end
+    return nil
+end
+
 function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
     if prio == nil then
         prio = "BULK"
+    end
+
+    -- resolve the channel first so nothing is serialized, logged or counted
+    -- for a group message that has nowhere to go
+    if channel == "GROUP" then
+        channel = self:ResolveGroupChannel()
+        if channel == nil then
+            WoWForeverRace:DebugPrint("Dropped " .. event .. " -> GROUP (not grouped)")
+            return
+        end
+        target = nil
     end
 
     local payload = Serializer:Serialize({event, object})
@@ -150,21 +176,6 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
     WoWForeverRace:DebugPrint("Send " .. event .. " -> " .. channel)
     debugLogPayload(event, object)
     self:TrackMessage("send", event)
-
-    if channel == "GROUP" then
-        -- PARTY/RAID addon messages are silently dropped while in an instance
-        -- group (dungeon finder, battleground); those must use INSTANCE_CHAT
-        if IsInGroup and LE_PARTY_CATEGORY_INSTANCE and IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then
-            channel = "INSTANCE_CHAT"
-        elseif IsInRaid() then
-            channel = "RAID"
-        elseif GetNumGroupMembers() > 0 then
-            channel = "PARTY"
-        else
-            return
-        end
-        target = nil
-    end
 
     AceComm:SendCommMessage(
             WoWForeverRace.Config.Network.Prefix,

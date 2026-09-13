@@ -27,6 +27,23 @@ describe("Network", function()
             assert.spy(sendToGroup()).was_not_called()
         end)
 
+        it("does not count a dropped GROUP send in the message stats", function()
+            SetGroupState(0)
+            local db = LibStub("AceDB-3.0"):New("WoWForeverRace_DB", WoWForeverRace.DefaultDB, true)
+            db:ResetDB()
+            db.profile.options.debug = true
+            WoWForeverRace.DB = db
+            WoWForeverRace.MsgStats = { send = {}, recv = {} }
+            local debugStub = stub(WoWForeverRace, "DebugPrint")
+
+            sendToGroup()
+
+            assert.is_nil(WoWForeverRace.MsgStats.send[NetworkEvents.BuddyPing])
+            debugStub:revert()
+            WoWForeverRace.DB = nil
+            WoWForeverRace.MsgStats = nil
+        end)
+
         it("goes to PARTY in a party", function()
             SetGroupState(3, false, false)
             assert.spy(sendToGroup()).was_called_with(match.is_ref(AceComm),
