@@ -80,7 +80,6 @@ function WoWForeverRace:OnEnable()
 
     self.Network:Init()
 
-    self.scanner:InitTicker()
     self.Tracker:InitDiscoveryTicker()
     self.Sync:InitGuildTicker()
     self.Sync:InitBuddyTicker()
