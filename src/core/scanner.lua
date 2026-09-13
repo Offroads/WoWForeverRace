@@ -71,11 +71,6 @@ function WoWForeverRaceScanner.new(Core, DB, EventBus)
     return self
 end
 
--- Kept for the component lifecycle in main.lua: scans are driven by hardware
--- events (see TriggerScan), so there is no ticker to start.
-function WoWForeverRaceScanner:InitTicker()
-end
-
 function WoWForeverRaceScanner:ResetState()
     self.lastScanTime = -SCAN_COOLDOWN
     self.nextScanClassIdx = 1
@@ -96,7 +91,6 @@ function WoWForeverRaceScanner:OnWhoListUpdate()
     -- client received (capped at WHO_RESULT_CAP) and the server-side match count
     local numShown, total = C_FriendList.GetNumWhoResults()
     numShown = numShown or 0
-    total = total or numShown
 
     -- Collect the rows first: a manual /who fired while our scan is pending
     -- also raises WHO_LIST_UPDATE, and must not be misattributed to the scan.
@@ -155,8 +149,14 @@ function WoWForeverRaceScanner:OnWhoListUpdate()
         return
     end
 
-    -- the result is only complete when the server had no more matches than it sent us
-    local resultComplete = numShown < WHO_RESULT_CAP and total <= numShown
+    -- the result is complete when the server had no more matches than it sent us;
+    -- the row cap is only a fallback for clients that don't report the total
+    local resultComplete
+    if total ~= nil then
+        resultComplete = total <= numShown
+    else
+        resultComplete = numShown < WHO_RESULT_CAP
+    end
 
     if self.lastScanClassIndex then
         self.lastResultFull[self.lastScanClassIndex] = not resultComplete
@@ -176,7 +176,7 @@ function WoWForeverRaceScanner:OnWhoListUpdate()
         table.sort(batch, function(a, b) return a.level > b.level end)
     end
 
-    self.EventBus:PublishEvent(WoWForeverRace.Config.Events.SlashWhoResult, batch, self.lastScanClassIndex)
+    self.EventBus:PublishEvent(WoWForeverRace.Config.Events.SlashWhoResult, batch)
 end
 
 -- TriggerScan sends a /who query for the next class leaderboard that isn't full.

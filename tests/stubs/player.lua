@@ -7,7 +7,9 @@ local whoQuery = nil
 
 _G.C_FriendList = {
     -- returns (numWhos, totalCount) like the real API
+    -- total: nil = same as the row count, false = the client reports no total
     GetNumWhoResults = function()
+        if whoTotal == false then return #whoResults end
         return #whoResults, whoTotal or #whoResults
     end,
     GetWhoInfo = function(index)

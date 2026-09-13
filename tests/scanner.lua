@@ -58,6 +58,37 @@ describe("Scanner", function()
         assert.equals("89-90", GetWhoQuery())
     end)
 
+    it("treats a result with exactly the cap as complete when the server agrees", function()
+        db.factionrealm.leaderboard[0].players = {
+            {name = "Seed", level = 90, classIndex = 1, dingedAt = time},
+        }
+        scanner.classScanFloor[1] = 2
+
+        scanner:TriggerScan()
+        assert.equals("2-90 c-Warrior", GetWhoQuery())
+
+        -- 50 rows shown and the server says there are exactly 50 matches
+        local rows = {}
+        for i = 1, 50 do rows[i] = {fullName = "Warr" .. i, level = 60, filename = "WARRIOR"} end
+        SetWhoResults(rows, 50)
+        scanner:OnWhoListUpdate()
+
+        assert.is_false(scanner.lastResultFull[1])
+        assert.is_not_nil(scanner.classScanComplete[1])
+    end)
+
+    it("falls back to the row cap when the server total is unknown", function()
+        scanner:TriggerScan()
+        assert.equals("80-90", GetWhoQuery())
+
+        local rows = {}
+        for i = 1, 50 do rows[i] = {fullName = "Top" .. i, level = 90, filename = "MAGE"} end
+        SetWhoResults(rows, false)
+        scanner:OnWhoListUpdate()
+
+        assert.is_true(scanner.globalResultFull)
+    end)
+
     it("marks a low-population class complete at the lower bound", function()
         db.factionrealm.leaderboard[0].players = {
             {name = "Seed", level = 90, classIndex = 1, dingedAt = time},
@@ -133,7 +164,7 @@ describe("Scanner", function()
         assert.is_false(scanner.scanPending)
         assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus),
                 WoWForeverRace.Config.Events.SlashWhoResult,
-                {{name = "Warr", level = 65, class = "WARRIOR"}}, 1)
+                {{name = "Warr", level = 65, class = "WARRIOR"}})
     end)
 
     it("restores FriendsFrame when the race finishes mid-scan", function()
