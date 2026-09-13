@@ -77,13 +77,12 @@ function Invoke-Dev {
 
 function Get-DefaultAddOnsPath {
     $folder = if ($Flavor -eq "era") { "_classic_era_" } else { "_classic_" }
-    $candidates = @(
-        (Join-Path ${env:ProgramFiles(x86)} "World of Warcraft\$folder\Interface\AddOns"),
-        (Join-Path $env:ProgramFiles "World of Warcraft\$folder\Interface\AddOns")
-    )
-    foreach ($candidate in $candidates) {
-        if (Test-Path $candidate) {
-            return $candidate
+    foreach ($root in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+        if ($root) {
+            $candidate = Join-Path $root "World of Warcraft\$folder\Interface\AddOns"
+            if (Test-Path $candidate) {
+                return $candidate
+            }
         }
     }
     throw "Could not find a '$folder' WoW install, pass -AddOnsPath explicitly."
@@ -98,6 +97,9 @@ function Invoke-Deploy {
     if (-not (Test-Path $target)) {
         throw "AddOns folder does not exist: $target"
     }
+    # .NET calls below resolve relative paths against the process directory,
+    # not PowerShell's current location, so make the path absolute first
+    $target = (Resolve-Path $target).ProviderPath
     $destination = Join-Path $target $AddonName
 
     if (Test-Path $destination) {
@@ -127,7 +129,14 @@ function Invoke-Deploy {
 }
 
 switch ($Command) {
-    "build"   { Push-Location $RepoRoot; try { & docker compose build dev } finally { Pop-Location } }
+    "build"   {
+        Push-Location $RepoRoot
+        try {
+            & docker compose build dev
+            if ($LASTEXITCODE -ne 0) { throw "docker compose build failed with exit code $LASTEXITCODE" }
+        }
+        finally { Pop-Location }
+    }
     "lint"    { Invoke-Dev @("make", "lint") }
     "tests"   { Invoke-Dev (@("make", "tests") + $Rest) }
     "check"   { Invoke-Dev @("make", "check") }

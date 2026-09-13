@@ -1,52 +1,31 @@
 -- Minimal stand-ins for WoW globals that are not tied to the player or to
 -- frames (those live in player.lua / createframe.lua). Only what the addon and
--- the Ace3 libraries loaded by testbase.lua actually touch is stubbed.
+-- the Ace3 libraries loaded by testbase.lua actually touch is stubbed; add a
+-- stub here when a library upgrade starts using a new global.
 
--- string helpers WoW adds to the global namespace
-_G.strmatch = string.match
-_G.strfind = string.find
-_G.strsub = string.sub
-_G.strlower = string.lower
-_G.strupper = string.upper
-_G.strtrim = function(s)
-    return (string.gsub(string.gsub(s, "^%s+", ""), "%s+$", ""))
-end
-_G.strsplit = function(sep, s)
-    local parts = {}
-    for part in string.gmatch(s, "([^" .. sep .. "]+)") do
-        parts[#parts + 1] = part
-    end
-    return unpack(parts)
-end
-_G.strjoin = function(sep, ...)
-    return table.concat({...}, sep)
-end
-_G.strlenutf8 = function(s)
+-- string / table helpers WoW adds to the global namespace
+_G.strmatch = string.match            -- LibStub
+_G.strlenutf8 = function(s)           -- AceDB
     -- count bytes that are not UTF-8 continuation bytes (0x80-0xBF)
     local _, count = string.gsub(s, "[^\128-\191]", "")
     return count
 end
-_G.tinsert = table.insert
-_G.tremove = table.remove
-_G.wipe = function(t)
+_G.wipe = function(t)                 -- ChatThrottleLib (as table.wipe)
     for k in pairs(t) do
         t[k] = nil
     end
     return t
 end
-_G.geterrorhandler = function()
+_G.table.wipe = _G.wipe
+_G.geterrorhandler = function()       -- ChatThrottleLib, EventBus
     return error
 end
-_G.hooksecurefunc = function() end
-_G.debugprofilestop = function()
-    return 0
-end
-_G.GetFramerate = function()
+_G.hooksecurefunc = function() end    -- ChatThrottleLib
+_G.GetFramerate = function()          -- ChatThrottleLib
     return 60
 end
 
--- Enum / chat globals required by ChatThrottleLib and AceComm
-_G.Enum = _G.Enum or {}
+-- chat globals required by ChatThrottleLib and AceComm (Enum lives in chatinfo.lua)
 _G.DEFAULT_CHAT_FRAME = { AddMessage = function() end }
 _G.SendChatMessage = function() end
 _G.SendAddonMessage = function() end
@@ -70,7 +49,9 @@ function _G.SetTime(newTime)
 end
 
 -- C_Timer with a manually advanced clock: C_Timer.Advance(seconds) fires every
--- After() callback and NewTicker() tick that became due. Reset() between tests.
+-- After() callback and NewTicker() tick that became due, in due-time order,
+-- including timers that a fired callback schedules for the same moment (WoW
+-- would run those on the next frame). Reset() between tests.
 _G.C_Timer = {
     now = 0,
     after = {},
@@ -105,29 +86,39 @@ function _G.C_Timer.NewTicker(seconds, cb, iterations)
     return ticker
 end
 
+local function tickerIsLive(ticker)
+    return not ticker.cancelled and (ticker.remaining == nil or ticker.remaining > 0)
+end
+
+-- pops the earliest due one-shot timer, or nil when none is due
+local function popDueTimer()
+    local now = _G.C_Timer.now
+    local dueIndex = nil
+    for i, after in ipairs(_G.C_Timer.after) do
+        if after[1] <= now and (dueIndex == nil or after[1] < _G.C_Timer.after[dueIndex][1]) then
+            dueIndex = i
+        end
+    end
+    if dueIndex == nil then
+        return nil
+    end
+    return table.remove(_G.C_Timer.after, dueIndex)
+end
+
 function _G.C_Timer.Advance(seconds)
     _G.C_Timer.now = _G.C_Timer.now + seconds
 
-    -- execute one-shot entries that passed (callbacks may schedule new ones)
-    local due = {}
-    for _, after in ipairs(_G.C_Timer.after) do
-        if after[1] <= _G.C_Timer.now then
-            due[#due + 1] = after
-        end
-    end
-    for _, after in ipairs(due) do
+    -- one-shot timers: keep firing until nothing is due anymore, so a timer
+    -- scheduled by a callback for a time we already passed still runs
+    local after = popDueTimer()
+    while after ~= nil do
         after[2]()
+        after = popDueTimer()
     end
-
-    -- truncate any entries that passed
-    _G.C_Timer.after = WoWForeverRace.list.filter(_G.C_Timer.after, function(after)
-        return after[1] > _G.C_Timer.now
-    end)
 
     -- tick repeating timers as often as they became due
     for _, ticker in ipairs(_G.C_Timer.tickers) do
-        while not ticker.cancelled and ticker.nextAt <= _G.C_Timer.now
-                and (ticker.remaining == nil or ticker.remaining > 0) do
+        while tickerIsLive(ticker) and ticker.nextAt <= _G.C_Timer.now do
             ticker.nextAt = ticker.nextAt + ticker.interval
             if ticker.remaining ~= nil then
                 ticker.remaining = ticker.remaining - 1
@@ -135,7 +126,5 @@ function _G.C_Timer.Advance(seconds)
             ticker.callback(ticker)
         end
     end
-    _G.C_Timer.tickers = WoWForeverRace.list.filter(_G.C_Timer.tickers, function(ticker)
-        return not ticker.cancelled and (ticker.remaining == nil or ticker.remaining > 0)
-    end)
+    _G.C_Timer.tickers = WoWForeverRace.list.filter(_G.C_Timer.tickers, tickerIsLive)
 end
