@@ -12,3 +12,6 @@ services:
     volumes:
       - .:/addon
     working_dir: /addon
+    environment:
+      # WFR_TEST_DEBUG=1 on the host shows the addon's debug prints in test output
+      - WFR_TEST_DEBUG

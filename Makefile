@@ -82,10 +82,10 @@ check: lint tests
 #
 # -- reflex-tests --
 # using reflex watch our source code and rerun the testsuite whenever something is changed
-# TESTS, INCLUDES, EXCLUDES will be passed down if you set them
+# TESTS and INCLUDES will be passed down if you set them; coverage is skipped for speed
 #
 reflex-tests:
-	reflex -r '.*\.lua' -s -- sh -c 'make hr lint tests'
+	reflex -r '.*\.lua' -s -- sh -c 'make hr lint tests BUSTED_RUN=quick'
 
 #
 # -- download-bw-release --
@@ -136,8 +136,10 @@ docker-build:
 docker-lint:
 	$(DOCKER_RUN) make lint
 
+# MAKEOVERRIDES carries every VAR=value given on the command line
+# (INCLUDES, TESTS, TESTOPTS, BUSTED_RUN, WFR_TEST_DEBUG, ...)
 docker-tests:
-	$(DOCKER_RUN) make tests INCLUDES='$(INCLUDES)' TESTS='$(TESTS)' TESTOPTS='$(TESTOPTS)'
+	$(DOCKER_RUN) make tests $(MAKEOVERRIDES)
 
 docker-check:
 	$(DOCKER_RUN) make check
@@ -146,7 +148,7 @@ docker-libs:
 	$(DOCKER_RUN) make fetch-libs
 
 docker-release:
-	$(DOCKER_RUN) make release UPLOADRELEASE='$(UPLOADRELEASE)'
+	$(DOCKER_RUN) make release $(MAKEOVERRIDES)
 
 docker-shell:
 	$(DOCKER_RUN) bash

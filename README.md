@@ -99,7 +99,9 @@ make tests BUSTED_RUN=quick
 Tests run with [busted](https://lunarmodules.github.io/busted/) (configuration
 in `.busted`) against the real Ace3 libraries and a small set of WoW API stubs
 in `tests/stubs/`. Debug prints are silenced during tests; set
-`WFR_TEST_DEBUG=1` to see them.
+`WFR_TEST_DEBUG=1` to see them (the compose service passes it through, e.g.
+`WFR_TEST_DEBUG=1 docker compose run --rm dev make tests` or
+`.scriptsdev.ps1 tests WFR_TEST_DEBUG=1`).
 
 Test coverage is a bit a lie ... it only shows coverage for the files included in the testsuite run,
 but we don't include `main.lua`, `options.lua` and the `gui/*.lua` files...
