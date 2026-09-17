@@ -2,7 +2,9 @@
 local WoWForeverRace = _G.WoWForeverRace
 
 -- WoW API
-local IsInRaid, GetNumGroupMembers = _G.IsInRaid, _G.GetNumGroupMembers
+local IsInRaid, IsInGroup, GetNumGroupMembers = _G.IsInRaid, _G.IsInGroup, _G.GetNumGroupMembers
+local LE_PARTY_CATEGORY_INSTANCE = _G.LE_PARTY_CATEGORY_INSTANCE
+local C_ChatInfo = _G.C_ChatInfo
 
 -- Libs
 local LibStub = _G.LibStub
@@ -17,7 +19,14 @@ for _, event in pairs(WoWForeverRace.Config.Network.Events) do
 end
 
 local function debugLogPayload(event, payload)
+    -- runs on every message before the consumers do, so it must neither cost
+    -- anything when debug is off nor throw on a malformed payload
+    if not (WoWForeverRace.DB and WoWForeverRace.DB.profile.options.debug) then return end
     if event == WoWForeverRace.Config.Network.Events.PlayerInfoBatch then
+        if type(payload) ~= "table" then
+            WoWForeverRace:DebugPrint("  malformed payload: " .. tostring(payload))
+            return
+        end
         local batchstr, isRebroadcast, classIndex = payload[1], payload[2], payload[3]
         local players = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(batchstr)
         WoWForeverRace:DebugPrint("  rebroadcast=" .. tostring(isRebroadcast) ..
@@ -135,9 +144,42 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
     end
 end
 
+-- Resolves the virtual "GROUP" channel to the addon channel that actually
+-- reaches the player's current group, or nil when not grouped.
+-- PARTY/RAID addon messages are silently dropped while in an instance group
+-- (dungeon finder, battleground); those must use INSTANCE_CHAT.
+function WoWForeverRaceNetwork:ResolveGroupChannel()
+    if IsInGroup and LE_PARTY_CATEGORY_INSTANCE and IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then
+        return "INSTANCE_CHAT"
+    elseif IsInRaid() then
+        return "RAID"
+    elseif GetNumGroupMembers() > 0 then
+        return "PARTY"
+    end
+    return nil
+end
+
 function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
     if prio == nil then
         prio = "BULK"
+    end
+
+    -- resolve the channel first so nothing is serialized, logged or counted
+    -- for a group message that has nowhere to go
+    if channel == "GROUP" then
+        channel = self:ResolveGroupChannel()
+        if channel == nil then
+            WoWForeverRace:DebugPrint("Dropped " .. event .. " -> GROUP (not grouped)")
+            return
+        end
+        target = nil
+    end
+
+    -- Modern clients (WoW Forever) reject addon messages while the chat messaging
+    -- lockdown is active; skip instead of queueing doomed sends.
+    if C_ChatInfo and C_ChatInfo.InChatMessagingLockdown and C_ChatInfo.InChatMessagingLockdown() then
+        WoWForeverRace:DebugPrint("Skip " .. event .. " -> " .. channel .. " (chat messaging lockdown)")
+        return
     end
 
     local payload = Serializer:Serialize({event, object})
@@ -149,15 +191,6 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
     WoWForeverRace:DebugPrint("Send " .. event .. " -> " .. channel)
     debugLogPayload(event, object)
     self:TrackMessage("send", event)
-
-    if channel == "GROUP" then
-        if IsInRaid() then
-            AceComm:SendCommMessage(WoWForeverRace.Config.Network.Prefix, encoded, "RAID", nil, prio)
-        elseif GetNumGroupMembers() > 0 then
-            AceComm:SendCommMessage(WoWForeverRace.Config.Network.Prefix, encoded, "PARTY", nil, prio)
-        end
-        return
-    end
 
     AceComm:SendCommMessage(
             WoWForeverRace.Config.Network.Prefix,

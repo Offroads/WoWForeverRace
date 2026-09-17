@@ -1,12 +1,13 @@
 # WoW Addon: WoWForeverRace
 
-A World of Warcraft Classic addon that keeps track of the top 50 players on your
+A World of Warcraft addon for WoW Forever that keeps track of the top 50 players on your
 faction-realm in the race to max level, overall and per class, and records who
 was first to reach every level. Data is gathered with `/who` scans and shared
 between addon users over the addon channel.
 
-Supports Classic Era, TBC and MoP Classic clients (the max level and playable
-classes are detected from the game build).
+Built for WoW Forever: the race goes to level 60 and Paladins and Shamans are
+tracked on both factions. Classic Era, TBC and MoP Classic clients still work
+(the max level and playable classes are detected from the game build).
 
 ## Releases
 For latest releases that you can just unzip into your `Interface\AddOns` folder,
@@ -43,8 +44,8 @@ step that links the checkout into your WoW `AddOns` folder:
 .\scripts\dev.ps1 libs        # once: download the Ace3 libraries into .\libs
 .\scripts\dev.ps1 check       # lint + tests
 .\scripts\dev.ps1 tests INCLUDES=scanner
-.\scripts\dev.ps1 deploy      # junction into "World of Warcraft\_classic_\Interface\AddOns"
-.\scripts\dev.ps1 deploy -Flavor era
+.\scripts\dev.ps1 deploy      # junction into "World of Warcraft\_classic_beta_\Interface\AddOns" (WoW Forever beta)
+.\scripts\dev.ps1 deploy -Flavor classic   # MoP Classic, -Flavor era for Classic Era
 .\scripts\dev.ps1 deploy -AddOnsPath "D:\Games\World of Warcraft\_classic_\Interface\AddOns"
 ```
 
