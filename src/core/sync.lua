@@ -5,18 +5,26 @@ local WoWForeverRace = _G.WoWForeverRace
 local C_Timer, IsInGuild, math = _G.C_Timer, _G.IsInGuild, _G.math
 local GetNumGroupMembers = _G.GetNumGroupMembers
 
-local function leaderboardClassIndexes(config)
+-- peerHashes: optional per-class hash table received from a peer (index i+1 =
+-- leaderboard[i]). Builds for other clients track other classes (Classic Era has
+-- no Horde Paladins, older builds treat WoW Forever that way), so when given,
+-- only the leaderboards that peer reported are included. Without this a class
+-- the peer does not track looks like a difference forever and is re-sent on
+-- every sync round.
+local function leaderboardClassIndexes(config, peerHashes)
     local indexes = {0}
     for _, classIndex in ipairs(config.MopClassIndexes) do
-        indexes[#indexes + 1] = classIndex
+        if type(peerHashes) ~= "table" or peerHashes[classIndex + 1] ~= nil then
+            indexes[#indexes + 1] = classIndex
+        end
     end
     return indexes
 end
 
 -- djb2 chain over all leaderboards - mirrors Tracker:ComputeFullHash without a cross-component dependency
-local function computeFullHash(db, config)
+local function computeFullHash(db, config, peerHashes)
     local hash = 5381
-    for _, classIndex in ipairs(leaderboardClassIndexes(config)) do
+    for _, classIndex in ipairs(leaderboardClassIndexes(config, peerHashes)) do
         local lb = db.factionrealm.leaderboard[classIndex]
         if lb then
             hash = ((hash * 33) + WoWForeverRace.Leaderboard.ComputeHash(lb)) % 2147483647
@@ -29,11 +37,11 @@ end
 -- Covers every classFilter the serializer transmits (0 = overall, 1..#Classes)
 -- and the configured level range; fields are ':'-separated
 -- so different records can't concatenate to the same entry string.
-local function computeFTLHash(db, config)
+local function computeFTLHash(db, config, peerHashes)
     local hash = 5381
     local ftl = db.factionrealm.firstToLevel
     if not ftl then return hash end
-    for _, classFilter in ipairs(leaderboardClassIndexes(config)) do
+    for _, classFilter in ipairs(leaderboardClassIndexes(config, peerHashes)) do
         local levels = ftl[classFilter]
         if levels then
             for level = 2, config.MaxLevel do
@@ -374,7 +382,7 @@ function WoWForeverRaceSync:OnNetStartSync(payload, sender)
         if type(payload[2]) == "table" then
             -- guild sync: payload[2] is per-class hashes - send every leaderboard that differs
             local perClassHashes = payload[2]
-            for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
+            for _, classIndex in ipairs(leaderboardClassIndexes(self.Config, perClassHashes)) do
                 local lb = self.DB.factionrealm.leaderboard[classIndex]
                 if lb and #lb.players > 0 then
                     local myHash = WoWForeverRace.Leaderboard.ComputeHash(lb)
@@ -386,7 +394,7 @@ function WoWForeverRaceSync:OnNetStartSync(payload, sender)
             -- payload[3] is the requester's FTL hash; only send FTL when it differs
             -- (older clients don't include it - send unconditionally for those)
             local guildFTLHash = payload[3]
-            if guildFTLHash == nil or guildFTLHash ~= computeFTLHash(self.DB, self.Config) then
+            if guildFTLHash == nil or guildFTLHash ~= computeFTLHash(self.DB, self.Config, perClassHashes) then
                 self:SyncFTL(sender)
             end
             -- payload[4] is the requester's history hash, only present on their
@@ -605,15 +613,17 @@ function WoWForeverRaceSync:OnNetBuddyPing(payload, sender)
     local senderFullHash = payload[1]
     local senderFTLHash = payload[3]
 
-    local leaderboardsDiffer = myFullHash ~= senderFullHash
-    local ftlDiffers = senderFTLHash == nil or senderFTLHash ~= myFTLHash
+    -- compare over the leaderboards the sender tracks, see leaderboardClassIndexes
+    local leaderboardsDiffer = computeFullHash(self.DB, self.Config, payload[2]) ~= senderFullHash
+    local ftlDiffers = senderFTLHash == nil
+            or senderFTLHash ~= computeFTLHash(self.DB, self.Config, payload[2])
 
     if not leaderboardsDiffer and not ftlDiffers then return end
 
     local diffClasses = {}
     if leaderboardsDiffer then
         local senderPerClassHashes = payload[2]
-        for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
+        for _, classIndex in ipairs(leaderboardClassIndexes(self.Config, senderPerClassHashes)) do
             local lb = self.DB.factionrealm.leaderboard[classIndex]
             if lb and #lb.players > 0 then
                 local myHash = myPerClassHashes[classIndex + 1]
@@ -646,17 +656,17 @@ function WoWForeverRaceSync:OnNetBuddyPong(payload, sender)
     local senderFullHash = payload[1]
     if not senderFullHash then return end
 
-    local myFullHash = computeFullHash(self.DB, self.Config)
-    local myFTLHash = computeFTLHash(self.DB, self.Config)
     local senderFTLHash = payload[3]
 
-    local leaderboardsDiffer = myFullHash ~= senderFullHash
-    local ftlDiffers = senderFTLHash == nil or senderFTLHash ~= myFTLHash
+    -- compare over the leaderboards the sender tracks, see leaderboardClassIndexes
+    local leaderboardsDiffer = computeFullHash(self.DB, self.Config, payload[2]) ~= senderFullHash
+    local ftlDiffers = senderFTLHash == nil
+            or senderFTLHash ~= computeFTLHash(self.DB, self.Config, payload[2])
 
     local diffClasses = {}
     if leaderboardsDiffer then
         local senderPerClassHashes = payload[2]
-        for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
+        for _, classIndex in ipairs(leaderboardClassIndexes(self.Config, senderPerClassHashes)) do
             local lb = self.DB.factionrealm.leaderboard[classIndex]
             if lb and #lb.players > 0 then
                 local myHash = WoWForeverRace.Leaderboard.ComputeHash(lb)

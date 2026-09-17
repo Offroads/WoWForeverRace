@@ -635,6 +635,47 @@ describe("Sync", function()
             assert.equals(1, count)
         end)
 
+        it("does not push a class the pinging peer does not track", function()
+            local SHAMANIDX = WoWForeverRace.Config.ClassIndexes.SHAMAN
+            db.factionrealm.leaderboard[SHAMANIDX].players = {
+                {name = "Totem", level = 40, classIndex = SHAMANIDX, dingedAt = time},
+            }
+            sync.isReady = true
+            local syncSpy = spy.on(sync, "Sync")
+
+            -- a Classic Era style Alliance peer: identical data, but no Shaman board.
+            -- Its full hash chains only the boards it tracks.
+            local peerHashes = {}
+            local peerFullHash = 5381
+            for _, classIndex in ipairs({0, 1, 2, 3, 4, 5, 8, 9, 11}) do
+                local hash = WoWForeverRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[classIndex])
+                peerHashes[classIndex + 1] = hash
+                peerFullHash = ((peerFullHash * 33) + hash) % 2147483647
+            end
+
+            sync:OnNetBuddyPing({peerFullHash, peerHashes, myFTLHash}, "Dude")
+
+            assert.spy(syncSpy).was_not_called()
+        end)
+
+        it("still pushes a class the pinging peer tracks but lacks", function()
+            local SHAMANIDX = WoWForeverRace.Config.ClassIndexes.SHAMAN
+            db.factionrealm.leaderboard[SHAMANIDX].players = {
+                {name = "Totem", level = 40, classIndex = SHAMANIDX, dingedAt = time},
+            }
+            sync.isReady = true
+            local syncSpy = spy.on(sync, "Sync")
+
+            local peerHashes = {}
+            for _, classIndex in ipairs({0, 1, 2, 3, 4, 5, 7, 8, 9, 11}) do
+                peerHashes[classIndex + 1] = 5381
+            end
+
+            sync:OnNetBuddyPing({myFullHash, peerHashes, myFTLHash}, "Dude")
+
+            assert.spy(syncSpy).was_called_with(match.is_ref(sync), "Dude", SHAMANIDX)
+        end)
+
         it("never adds ourselves as buddy", function()
             sync:AddBuddy("Nub")
             sync:AddBuddy("Nub-NubVille")
