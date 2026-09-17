@@ -203,11 +203,13 @@ describe("Scanner", function()
         assert.is_false(scanner.scanPending)
     end)
 
-    it("never registers WHO_LIST_UPDATE on a frame that was not listening", function()
+    it("never registers WHO_LIST_UPDATE on a who panel that was not listening", function()
+        _G.LFGWhoListFrame:UnregisterEvent("WHO_LIST_UPDATE")
+
         scanner:TriggerScan()
         scanner:OnWhoListUpdate()
 
-        assert.is_false(_G.FriendsFrame:IsEventRegistered("WHO_LIST_UPDATE"))
+        assert.is_false(_G.LFGWhoListFrame:IsEventRegistered("WHO_LIST_UPDATE"))
     end)
 
     it("does not take an empty result for its own after somebody else's /who", function()

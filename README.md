@@ -6,8 +6,7 @@ was first to reach every level. Data is gathered with `/who` scans and shared
 between addon users over the addon channel.
 
 Built for WoW Forever: the race goes to level 60 and Paladins and Shamans are
-tracked on both factions. Classic Era, TBC and MoP Classic clients still work
-(the max level and playable classes are detected from the game build).
+tracked on both factions. Other WoW clients are not supported.
 
 ## Releases
 For latest releases that you can just unzip into your `Interface\AddOns` folder,
@@ -45,8 +44,7 @@ step that links the checkout into your WoW `AddOns` folder:
 .\scripts\dev.ps1 check       # lint + tests
 .\scripts\dev.ps1 tests INCLUDES=scanner
 .\scripts\dev.ps1 deploy      # junction into "World of Warcraft\_classic_beta_\Interface\AddOns" (WoW Forever beta)
-.\scripts\dev.ps1 deploy -Flavor classic   # MoP Classic, -Flavor era for Classic Era
-.\scripts\dev.ps1 deploy -AddOnsPath "D:\Games\World of Warcraft\_classic_\Interface\AddOns"
+.\scripts\dev.ps1 deploy -AddOnsPath "D:\Games\World of Warcraft\_classic_beta_\Interface\AddOns"
 ```
 
 After `deploy`, edit files in the repo and `/reload` in game. The unpackaged

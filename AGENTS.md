@@ -4,7 +4,7 @@ Guidance for AI coding agents (Claude Code, Codex, Copilot, etc.) working in thi
 
 ## Project Overview
 
-A World of Warcraft addon written in Lua that tracks the top 50 players racing to max level on each faction-realm (overall and per class) and records the first player to reach every level. The primary target is **WoW Forever** (1.60.x client line, interface 16001, level 60, Paladin and Shaman on both factions); Classic Era, TBC and MoP Classic clients still work. Max level and playable classes are detected at runtime (`Config:DetectExpansion`, `WoWForeverRace:ApplyExpansionConfig`). Built on the **Ace3 addon framework** (AceAddon, AceDB, AceComm, AceConfig, AceGUI, AceConsole, AceSerializer) with LibDataBroker, LibDBIcon and LibCompress.
+A World of Warcraft addon written in Lua that tracks the top 50 players racing to max level on each faction-realm (overall and per class) and records the first player to reach every level. It supports **WoW Forever only** (1.60.x client line, interface 16001): level cap 60 and the 9 classic classes, Paladin and Shaman on both factions (`Config.MaxLevel`, `Config.MopClassIndexes`). There is no expansion detection and no support for other clients. Built on the **Ace3 addon framework** (AceAddon, AceDB, AceComm, AceConfig, AceGUI, AceConsole, AceSerializer) with LibDataBroker, LibDBIcon and LibCompress.
 
 ## Commands
 
@@ -22,13 +22,13 @@ docker compose run --rm dev make fetch-libs       # re-download external librari
 docker compose run --rm dev make release          # build a release zip into ./.release
 ```
 
-Windows: `.\scripts\dev.ps1 <build|lint|tests|check|libs|release|shell|deploy>` wraps the same commands; `deploy` junctions the checkout into a WoW `AddOns` folder (default `-Flavor forever`, the `_classic_beta_` install that serves the WoW Forever beta). macOS/Linux: `make docker-*` targets. With a native Lua 5.1 toolchain the plain `make lint tests` also works (`make setup-dev` installs the rocks).
+Windows: `.\scripts\dev.ps1 <build|lint|tests|check|libs|release|shell|deploy>` wraps the same commands; `deploy` junctions the checkout into a WoW `AddOns` folder (the `_classic_beta_` install that serves the WoW Forever beta, or `-AddOnsPath`). macOS/Linux: `make docker-*` targets. With a native Lua 5.1 toolchain the plain `make lint tests` also works (`make setup-dev` installs the rocks).
 
 CI (`.github/workflows/ci.yml`) runs lint + tests in the same image on every PR and on pushes to `main`. Tagging `v*` runs `.github/workflows/release.yml` (BigWigs packager, GitHub release).
 
 Coverage report: `luacov.report.out`. Files not exercised by tests (WoW API dependent): `main.lua`, `options.lua`, `gui/*.lua`, `dev.lua`, `updater.lua`.
 
-Test output silences the addon's debug prints; set `WFR_TEST_DEBUG=1` to see them. The stubs in `tests/stubs/` expose `Set*` helpers (`SetTime`, `SetWhoResults(results, total)`, `SetIsInGuild`, `SetGroupState(members, inRaid, inInstanceGroup)`, `SetTocVersion(tocVersion)`, `SetWhoPanelVisible(visible)`, `SetMaxPlayerLevel(level)`, `SetChatLockdown(lockedDown)`, `C_Timer.Advance`) to drive the world state; extend them rather than mocking inside individual tests. When the Ace3 libraries start using a new WoW global, stub it in `tests/stubs/misc.lua`; when addon code starts using a WoW API as a bare global, add it to `read_globals` in `.luacheckrc` (access through `_G.Name` needs no entry).
+Test output silences the addon's debug prints; set `WFR_TEST_DEBUG=1` to see them. The stubs in `tests/stubs/` expose `Set*` helpers (`SetTime`, `SetWhoResults(results, total)`, `SetIsInGuild`, `SetGroupState(members, inRaid, inInstanceGroup)`, `SetWhoPanelVisible(visible)`, `SetChatLockdown(lockedDown)`, `C_Timer.Advance`) to drive the world state; extend them rather than mocking inside individual tests. When the Ace3 libraries start using a new WoW global, stub it in `tests/stubs/misc.lua`; when addon code starts using a WoW API as a bare global, add it to `read_globals` in `.luacheckrc` (access through `_G.Name` needs no entry).
 
 ## Architecture
 
@@ -76,17 +76,17 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 
 ### WoW Forever client notes
 - The Forever client is built on the modern (retail, `mainline` family) UI and API with game type `camelot`; its FrameXML lives in the `forever` branch of `Gethe/wow-ui-source`. Check API questions against that branch, not against Classic Era
-- `Config:DetectExpansion` returns `FOREVER` for interface 16000-19999 (Classic Era stays on 1.13-1.15), and for any later interface whose `GetMaxPlayerLevel()` is 60; `ExpansionData.FOREVER` has no faction-only classes. `Config:ApplyExpansion(expansion, faction)` fills `MaxLevel` and `MopClassIndexes` (FOREVER at load, the running client from `main.lua`)
+- Class indexes are part of the wire and DB format (shared with TheClassicRace): `Config.Classes` keeps the gaps at 6, 10 and 12 for the classes that don't exist in WoW Forever - never renumber
 - The who list is `LFGWhoListFrame` (load-on-demand `Blizzard_GroupFinder_VanillaStyle`), not `FriendsFrame`; it opens the group finder on every `WHO_LIST_UPDATE`. `Scanner:SuppressWhoUi` / `RestoreWhoUi` unregister and restore the event on whichever who frames exist, looked up at scan time
 - `C_FriendList.GetNumWhoResults()` returns `(numWhos, totalNumWhos)`; `C_FriendList.SendWho` is restricted, so scans stay wired to hardware events
 - The chat messaging lockdown (`C_ChatInfo.InChatMessagingLockdown()`) covers encounters, PvP matches and whole dungeon/raid maps. `Network:SendObject` holds messages in an outbox (latest only for non-payload events, capped) and `FlushOutbox` sends them once the lockdown ended; `Sync:InitSync` postpones itself the same way
 - A pending scan is abandoned by a `C_Timer` after `SCAN_TIMEOUT` (`Scanner:AbandonScan`), so the who UI is handed back without a click, also when the race finished meanwhile. After a foreign `C_FriendList.SendWho` (hooked, `Scanner:OnSendWho`) an empty result is not attributed to the scan
 - Class scans use the localized class name (`LocalizedClassList`), quoted: `30-60 c-"Warrior"`; `Config.WhoClassFilter` is the English fallback
-- The TOC lists every supported client in one comma-separated `## Interface:` line
+- The TOC declares the WoW Forever interface only (`## Interface: 16001`); bump it with each client patch
 
 ### Key Conventions
 - Player identity format: `"Name-Realm"` (e.g. `"Nubone-NubVille"`)
-- Class indices: 1-12 (0 = unknown/all); valid playable classes are `Config.MopClassIndexes` (historical name, filled from `Config.ExpansionData` at startup) - validate remote class indexes with `Config:IsValidClassIndex`
+- Class indices: 1-12 (0 = unknown/all); valid playable classes are `Config.MopClassIndexes` (historical name: the 9 WoW Forever classes) - validate remote class indexes with `Config:IsValidClassIndex`
 - Leaderboard capped at 50 players per faction-realm
 - Race finish: the race is finished only when **every** class leaderboard in `Config.MopClassIndexes` is full at `Config.MaxLevel`. `Tracker:CheckRaceFinished` is the single authority - the scanner's `SCAN_FINISHED(endofrace)` signal is verified against the boards, never trusted directly
 - Remote data is untrusted: `Tracker:ProcessPlayerInfo` drops entries without a string name or with a level outside `1..Config.MaxLevel`, and only events listed in `Config.Network.Events` are accepted from the wire

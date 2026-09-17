@@ -12,7 +12,7 @@ local hooksecurefunc = _G.hooksecurefunc
 --[[
 Scanner listens passively to WHO_LIST_UPDATE events and publishes results via EventBus.
 
-SendWho() is a restricted function (WoW Forever, MoP Classic) and cannot be called from
+SendWho() is a restricted function in WoW Forever and cannot be called from
 timers or any non-hardware-event context. TriggerScan() is therefore wired to hardware events:
   - WorldFrame OnMouseDown (every in-world click), with a 15s cooldown
   - The minimap icon's OnClick
@@ -36,10 +36,9 @@ local WHO_RESULT_CAP = 50  -- WoW never returns more than this many /who rows
 local LEVEL_STEP     = 10  -- levels to shift the scan floor up/down
 local CLASS_COMPLETE_TTL = 900  -- seconds before a fully-scanned class is scanned again
 
--- Blizzard frames that open the who panel on WHO_LIST_UPDATE. WoW Forever moved the
--- who list into the load-on-demand group finder (LFGWhoListFrame); the other
--- clients still use FriendsFrame. Looked up by name at scan time.
-local WHO_UI_FRAMES = {"FriendsFrame", "LFGWhoListFrame"}
+-- Blizzard frames that open the who panel on WHO_LIST_UPDATE. In WoW Forever the who
+-- list lives in the load-on-demand group finder. Looked up by name at scan time.
+local WHO_UI_FRAMES = {"LFGWhoListFrame"}
 
 function WoWForeverRaceScanner.new(Core, DB, EventBus)
     local self = setmetatable({}, WoWForeverRaceScanner)

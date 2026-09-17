@@ -22,12 +22,8 @@
 
 .PARAMETER AddOnsPath
     Full path to the Interface\AddOns folder to deploy into. When omitted the
-    default Blizzard install location for the chosen -Flavor is used.
-
-.PARAMETER Flavor
-    Which WoW client to deploy to when -AddOnsPath is omitted:
-    forever (WoW Forever beta, _classic_beta_), classic (MoP Classic, _classic_),
-    era (Classic Era, _classic_era_).
+    default Blizzard install location of the WoW Forever beta (_classic_beta_)
+    is used.
 
 .PARAMETER Copy
     Copy the addon files instead of creating a junction to this checkout.
@@ -39,7 +35,7 @@
     .\scripts\dev.ps1 tests INCLUDES=scanner
 
 .EXAMPLE
-    .\scripts\dev.ps1 deploy -AddOnsPath "D:\Games\World of Warcraft\_classic_\Interface\AddOns"
+    .\scripts\dev.ps1 deploy -AddOnsPath "D:\Games\World of Warcraft\_classic_beta_\Interface\AddOns"
 #>
 [CmdletBinding()]
 param(
@@ -51,9 +47,6 @@ param(
     [string[]]$Rest = @(),
 
     [string]$AddOnsPath,
-
-    [ValidateSet("forever", "classic", "era")]
-    [string]$Flavor = "forever",
 
     [switch]$Copy
 )
@@ -78,12 +71,7 @@ function Invoke-Dev {
 
 function Get-DefaultAddOnsPath {
     # the WoW Forever beta is served through the wow_classic_beta product
-    $folder = switch ($Flavor) {
-        "era"     { "_classic_era_" }
-        "classic" { "_classic_" }
-        "forever" { "_classic_beta_" }
-        default   { throw "No install folder known for flavor '$Flavor'." }
-    }
+    $folder = "_classic_beta_"
     foreach ($root in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
         if ($root) {
             $candidate = Join-Path $root "World of Warcraft\$folder\Interface\AddOns"
@@ -92,7 +80,7 @@ function Get-DefaultAddOnsPath {
             }
         }
     }
-    throw "Could not find a '$folder' WoW install, pass -Flavor <forever|classic|era> or -AddOnsPath explicitly."
+    throw "Could not find a '$folder' WoW install, pass -AddOnsPath explicitly."
 }
 
 function Invoke-Deploy {

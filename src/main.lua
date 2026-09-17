@@ -34,7 +34,6 @@ WoWForeverRace = LibStub("AceAddon-3.0"):NewAddon("WoWForeverRace", "AceConsole-
 function WoWForeverRace:OnInitialize()
     self.Config = WoWForeverRace.Config
     self.Colors = WoWForeverRace.Colors
-    self:ApplyExpansionConfig()
     self.DB = LibStub("AceDB-3.0"):New("WoWForeverRace_DB", WoWForeverRace.DefaultDB, true)
 
     -- determine who we are
@@ -179,8 +178,4 @@ function WoWForeverRace:slashwfr(input)
     else
         self.StatusFrame:Show()
     end
-end
-
-function WoWForeverRace:ApplyExpansionConfig()
-    self.Config:ApplyExpansion(nil, UnitFactionGroup("player"))
 end
