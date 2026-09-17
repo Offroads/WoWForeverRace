@@ -81,7 +81,8 @@ function Get-DefaultAddOnsPath {
     $folder = switch ($Flavor) {
         "era"     { "_classic_era_" }
         "classic" { "_classic_" }
-        default   { "_classic_beta_" }
+        "forever" { "_classic_beta_" }
+        default   { throw "No install folder known for flavor '$Flavor'." }
     }
     foreach ($root in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
         if ($root) {
@@ -91,7 +92,7 @@ function Get-DefaultAddOnsPath {
             }
         }
     }
-    throw "Could not find a '$folder' WoW install, pass -AddOnsPath explicitly."
+    throw "Could not find a '$folder' WoW install, pass -Flavor <forever|classic|era> or -AddOnsPath explicitly."
 }
 
 function Invoke-Deploy {

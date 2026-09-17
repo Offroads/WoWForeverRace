@@ -182,33 +182,5 @@ function WoWForeverRace:slashwfr(input)
 end
 
 function WoWForeverRace:ApplyExpansionConfig()
-    local expansion = self.Config:DetectExpansion()
-    local data = self.Config.ExpansionData[expansion]
-    if not data then return end
-
-    self.Config.MaxLevel = data.maxLevel
-    self.Config.MopClassIndexes = data.validClassIndexes
-
-    if data.hordeOnly or data.allianceOnly then
-        local faction = UnitFactionGroup("player")
-        local filtered = {}
-        local hordeOnly = {}
-        local allianceOnly = {}
-        if data.hordeOnly then
-            for _, idx in ipairs(data.hordeOnly) do hordeOnly[idx] = true end
-        end
-        if data.allianceOnly then
-            for _, idx in ipairs(data.allianceOnly) do allianceOnly[idx] = true end
-        end
-        for _, idx in ipairs(data.validClassIndexes) do
-            if faction == "Horde" and allianceOnly[idx] then
-                -- skip Alliance-only class
-            elseif faction == "Alliance" and hordeOnly[idx] then
-                -- skip Horde-only class
-            else
-                filtered[#filtered + 1] = idx
-            end
-        end
-        self.Config.MopClassIndexes = filtered
-    end
+    self.Config:ApplyExpansion(nil, UnitFactionGroup("player"))
 end

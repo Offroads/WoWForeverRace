@@ -62,6 +62,22 @@ describe("Sync", function()
         _G.SetIsInGuild(nil)
     end)
 
+    it("waits with the login sync until a chat messaging lockdown has ended", function()
+        local lockedDown = true
+        network.IsLockedDown = function() return lockedDown end
+        local networkSpy = spy.on(network, "SendObject")
+
+        sync:InitSync()
+        AdvanceClock(WoWForeverRace.Config.RetrySyncWait)
+        assert.spy(networkSpy).was_not_called()
+
+        lockedDown = false
+        AdvanceClock(WoWForeverRace.Config.RetrySyncWait)
+
+        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.RequestSync,
+                {11, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "YELL")
+    end)
+
     it("can request sync, marks ready when no partner", function()
         local networkSpy = spy.on(network, "SendObject")
 

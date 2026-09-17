@@ -4,8 +4,8 @@
 
 -- stubs
 require("stubs.misc")
-require("stubs.player")
 require("stubs.createframe")
+require("stubs.player")
 require("stubs.chatinfo")
 
 -- libs loaded with dofile() because dots in the names ...

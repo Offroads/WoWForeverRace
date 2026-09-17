@@ -4,7 +4,6 @@
 local whoResults = {}
 local whoTotal = nil
 local whoQuery = nil
-local whoPanelVisible = false
 
 _G.C_FriendList = {
     -- returns (numWhos, totalCount) like the real API
@@ -33,20 +32,21 @@ end
 _G.ResetWhoQuery = function()
     whoQuery = nil
 end
-_G.FriendsFrame = {
-    RegisterEvent = function() end,
-    UnregisterEvent = function() end,
-}
--- WoW Forever who panel (load-on-demand group finder)
-_G.LFGWhoListFrame = {
-    RegisterEvent = function() end,
-    UnregisterEvent = function() end,
-    IsEventRegistered = function() return true end,
-    IsVisible = function() return whoPanelVisible == true end,
-}
+-- The Blizzard who panels are real frame stubs. Default world is WoW Forever:
+-- the who list lives in LFGWhoListFrame (listening, not on screen) and
+-- FriendsFrame exists but does not listen for WHO_LIST_UPDATE.
+_G.FriendsFrame = _G.CreateFrame("Frame")
+_G.FriendsFrame:Hide()
+_G.LFGWhoListFrame = _G.CreateFrame("Frame")
+_G.LFGWhoListFrame:Hide()
+_G.LFGWhoListFrame:RegisterEvent("WHO_LIST_UPDATE")
 -- see SetWhoPanelVisible(visible): is the who panel on screen
 _G.SetWhoPanelVisible = function(visible)
-    whoPanelVisible = visible or false
+    if visible then
+        _G.LFGWhoListFrame:Show()
+    else
+        _G.LFGWhoListFrame:Hide()
+    end
 end
 _G.GetRealmName = function()
     return "NubVille"
@@ -73,6 +73,19 @@ local defaultTocVersion = 16001
 local tocVersion = defaultTocVersion
 _G.GetBuildInfo = function()
     return "1.60.1", "69893", "Sep 16 2026", tocVersion
+end
+
+-- level cap reported by the client, see SetMaxPlayerLevel(level)
+local defaultMaxPlayerLevel = 60
+local maxPlayerLevel = defaultMaxPlayerLevel
+_G.GetMaxPlayerLevel = function()
+    return maxPlayerLevel
+end
+_G.SetMaxPlayerLevel = function(level)
+    if level == nil then
+        level = defaultMaxPlayerLevel
+    end
+    maxPlayerLevel = level
 end
 
 _G.SetTocVersion = function(version)
