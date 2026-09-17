@@ -11,6 +11,10 @@ describe("Scanner", function()
         SetTime(time)
         SetWhoResults({})
         ResetWhoQuery()
+        _G.C_Timer.Reset()
+        -- a test may end with a scan still pending, i.e. the who panel silenced
+        _G.LFGWhoListFrame:RegisterEvent("WHO_LIST_UPDATE")
+        SetWhoPanelVisible(false)
         db = LibStub("AceDB-3.0"):New("WoWForeverRace_DB", WoWForeverRace.DefaultDB, true)
         db:ResetDB()
         core = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
@@ -65,7 +69,7 @@ describe("Scanner", function()
         scanner.classScanFloor[1] = 2
 
         scanner:TriggerScan()
-        assert.equals("2-60 c-Warrior", GetWhoQuery())
+        assert.equals("2-60 c-\"Warrior\"", GetWhoQuery())
 
         -- 50 rows shown and the server says there are exactly 50 matches
         local rows = {}
@@ -96,7 +100,7 @@ describe("Scanner", function()
         scanner.classScanFloor[1] = 2
 
         scanner:TriggerScan()
-        assert.equals("2-60 c-Warrior", GetWhoQuery())
+        assert.equals("2-60 c-\"Warrior\"", GetWhoQuery())
 
         scanner:OnWhoListUpdate()
         SetTime(time + 16)
@@ -104,7 +108,7 @@ describe("Scanner", function()
 
         -- Warrior is resting, so the rotation moves on to Paladin,
         -- which starts at its own adaptive floor (maxLevel - 20 - LEVEL_STEP)
-        assert.equals("30-60 c-Paladin", GetWhoQuery())
+        assert.equals("30-60 c-\"Paladin\"", GetWhoQuery())
     end)
 
     it("re-scans a completed class after the rest period", function()
@@ -114,7 +118,7 @@ describe("Scanner", function()
         scanner.classScanFloor[1] = 2
 
         scanner:TriggerScan()
-        assert.equals("2-60 c-Warrior", GetWhoQuery())
+        assert.equals("2-60 c-\"Warrior\"", GetWhoQuery())
         scanner:OnWhoListUpdate()
 
         -- /who only sees online players, so the class must not be retired forever
@@ -122,7 +126,7 @@ describe("Scanner", function()
         SetTime(time + 901)
         scanner:TriggerScan()
 
-        assert.equals("2-60 c-Warrior", GetWhoQuery())
+        assert.equals("2-60 c-\"Warrior\"", GetWhoQuery())
     end)
 
     it("abandons a pending scan when the /who response is lost", function()
@@ -146,7 +150,7 @@ describe("Scanner", function()
         }
 
         scanner:TriggerScan()
-        assert.equals("30-60 c-Warrior", GetWhoQuery())
+        assert.equals("30-60 c-\"Warrior\"", GetWhoQuery())
 
         -- a manual "/who Orgrimmar" style result: wrong class, level below range
         local eventBusSpy = spy.on(eventbus, "PublishEvent")
@@ -167,27 +171,78 @@ describe("Scanner", function()
                 {{name = "Warr", level = 45, class = "WARRIOR"}})
     end)
 
-    it("restores FriendsFrame when the race finishes mid-scan", function()
+    it("restores the who panel when the race finishes mid-scan", function()
         scanner:TriggerScan()
         db.factionrealm.finished = true
-        local registerSpy = spy.on(_G.FriendsFrame, "RegisterEvent")
+        assert.is_false(_G.LFGWhoListFrame:IsEventRegistered("WHO_LIST_UPDATE"))
 
         scanner:OnWhoListUpdate()
 
-        assert.spy(registerSpy).was_called_with(match.is_ref(_G.FriendsFrame), "WHO_LIST_UPDATE")
+        assert.is_true(_G.LFGWhoListFrame:IsEventRegistered("WHO_LIST_UPDATE"))
         assert.is_false(scanner.scanPending)
     end)
 
-    it("keeps the WoW Forever who panel from popping up during a scan", function()
-        local unregisterSpy = spy.on(_G.LFGWhoListFrame, "UnregisterEvent")
-        local registerSpy = spy.on(_G.LFGWhoListFrame, "RegisterEvent")
+    it("restores the who panel when the race finishes and the reply is lost", function()
+        scanner:TriggerScan()
+        db.factionrealm.finished = true
+
+        SetTime(time + 61)
+        scanner:TriggerScan()
+
+        assert.is_true(_G.LFGWhoListFrame:IsEventRegistered("WHO_LIST_UPDATE"))
+        assert.is_false(scanner.scanPending)
+    end)
+
+    it("restores the who panel after the timeout without waiting for a click", function()
+        scanner:TriggerScan()
+        assert.is_false(_G.LFGWhoListFrame:IsEventRegistered("WHO_LIST_UPDATE"))
+
+        _G.C_Timer.Advance(61)
+
+        assert.is_true(_G.LFGWhoListFrame:IsEventRegistered("WHO_LIST_UPDATE"))
+        assert.is_false(scanner.scanPending)
+    end)
+
+    it("never registers WHO_LIST_UPDATE on a frame that was not listening", function()
+        scanner:TriggerScan()
+        scanner:OnWhoListUpdate()
+
+        assert.is_false(_G.FriendsFrame:IsEventRegistered("WHO_LIST_UPDATE"))
+    end)
+
+    it("does not take an empty result for its own after somebody else's /who", function()
+        db.factionrealm.leaderboard[0].players = {
+            {name = "Seed", level = 60, classIndex = 1, dingedAt = time},
+        }
+        scanner.classScanFloor[1] = 2
+        scanner:TriggerScan()
+
+        -- the player types "/who Nonexistentname" while our scan is pending
+        scanner:OnSendWho()
+        scanner:OnWhoListUpdate()
+
+        assert.is_true(scanner.scanPending)
+        assert.is_nil(scanner.classScanComplete[1])
+    end)
+
+    it("uses the localized class name in class scans", function()
+        db.factionrealm.leaderboard[0].players = {
+            {name = "Seed", level = 60, classIndex = 1, dingedAt = time},
+        }
+        _G.LocalizedClassList = function() return {WARRIOR = "Krieger"} end
 
         scanner:TriggerScan()
-        assert.spy(unregisterSpy).was_called_with(match.is_ref(_G.LFGWhoListFrame), "WHO_LIST_UPDATE")
-        assert.spy(registerSpy).called_at_most(0)
+        _G.LocalizedClassList = nil
+
+        assert.equals('30-60 c-"Krieger"', GetWhoQuery())
+    end)
+
+    it("keeps the WoW Forever who panel from popping up during a scan", function()
+        scanner:TriggerScan()
+        assert.is_false(_G.LFGWhoListFrame:IsEventRegistered("WHO_LIST_UPDATE"))
 
         scanner:OnWhoListUpdate()
-        assert.spy(registerSpy).was_called_with(match.is_ref(_G.LFGWhoListFrame), "WHO_LIST_UPDATE")
+        assert.is_true(_G.LFGWhoListFrame:IsEventRegistered("WHO_LIST_UPDATE"))
     end)
 
     it("hands short /who results back to chat unless the who panel is on screen", function()

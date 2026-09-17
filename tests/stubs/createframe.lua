@@ -29,6 +29,11 @@ function Frame:IsShown()
     return self.shown
 end
 
+-- no parent chain in the stub: visible means shown
+function Frame:IsVisible()
+    return self.shown
+end
+
 function Frame:SetScript(handler, callback)
     self.scripts[handler] = callback
 end

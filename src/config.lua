@@ -30,8 +30,8 @@ local WoWForeverRaceConfig = {
     Trace = false,
     --@end-debug@
 
-    -- defaults target WoW Forever, overwritten at startup by ApplyExpansionConfig
-    MaxLevel = 60,
+    -- MaxLevel and MopClassIndexes are filled from ExpansionData, see ApplyExpansion
+    MaxLevel = nil,
     MaxLeaderboardSize = 50,
 
     -- OfferSync throttle time window
@@ -59,9 +59,8 @@ local WoWForeverRaceConfig = {
         "DEMONHUNTER",
     },
 
-    -- Class indexes playable on the running client (name is historical), filled
-    -- from ExpansionData at startup. Default: the 9 WoW Forever classes
-    MopClassIndexes = {1, 2, 3, 4, 5, 7, 8, 9, 11},
+    -- Class indexes playable on the running client (name is historical)
+    MopClassIndexes = nil,
 
     -- English class names used in /who query filters (c-ClassName)
     WhoClassFilter = {
@@ -190,11 +189,17 @@ end
 
 function WoWForeverRaceConfig:DetectExpansion()
     local _, _, _, tocVersion = GetBuildInfo()
-    -- WoW Forever is the 1.60+ client line, Classic Era stays on 1.13-1.15
-    if tocVersion >= 16000 and tocVersion < 20000 then
+    -- WoW Forever is the 1.60+ client line, Classic Era stays on 1.13-1.15.
+    -- Should Forever outgrow the 1.x numbering: no other client past 1.60 caps at 60.
+    local GetMaxPlayerLevel = _G.GetMaxPlayerLevel
+    if tocVersion >= 16000 and GetMaxPlayerLevel and GetMaxPlayerLevel() == 60 then
         return "FOREVER"
-    elseif tocVersion < 20000 then
+    end
+
+    if tocVersion < 16000 then
         return "CLASSIC"
+    elseif tocVersion < 20000 then
+        return "FOREVER"
     elseif tocVersion < 30000 then
         return "TBC"
     elseif tocVersion < 40000 then
@@ -209,3 +214,27 @@ function WoWForeverRaceConfig:DetectExpansion()
         return "LEGION"
     end
 end
+
+-- Sets MaxLevel and the playable classes for an expansion (default: the running
+-- client) and the player's faction ("Horde" / "Alliance", for faction-only classes).
+function WoWForeverRaceConfig:ApplyExpansion(expansion, faction)
+    local data = self.ExpansionData[expansion or self:DetectExpansion()]
+    if not data then return end
+
+    local skip = {}
+    for _, idx in ipairs(faction == "Horde" and data.allianceOnly or {}) do skip[idx] = true end
+    for _, idx in ipairs(faction == "Alliance" and data.hordeOnly or {}) do skip[idx] = true end
+
+    local classIndexes = {}
+    for _, idx in ipairs(data.validClassIndexes) do
+        if not skip[idx] then
+            classIndexes[#classIndexes + 1] = idx
+        end
+    end
+
+    self.MaxLevel = data.maxLevel
+    self.MopClassIndexes = classIndexes
+end
+
+-- until main.lua applies the running client: the primary target
+WoWForeverRaceConfig:ApplyExpansion("FOREVER")

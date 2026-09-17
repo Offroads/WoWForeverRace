@@ -159,6 +159,14 @@ function WoWForeverRaceSync:InitSync()
         return
     end
 
+    -- Logged in (or reloaded) inside a chat messaging lockdown: nobody can answer
+    -- yet, so run the once-per-login sync when the lockdown has ended.
+    if self.Network.IsLockedDown and self.Network:IsLockedDown() then
+        local _self = self
+        C_Timer.After(self.Config.RetrySyncWait, function() _self:InitSync() end)
+        return
+    end
+
     -- include our leaderboard, FTL and history hashes so partners can skip offering when already in sync
     local globalHash = WoWForeverRace.Leaderboard.ComputeHash(self.DB.factionrealm.leaderboard[0])
     local classHash = WoWForeverRace.Leaderboard.ComputeHash(

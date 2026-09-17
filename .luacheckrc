@@ -40,7 +40,7 @@ files["tests"] = {
     std = "+busted",
     globals = {"WoWForeverRace"},
     read_globals = {
-        "SetTime", "SetWhoResults", "GetWhoQuery", "ResetWhoQuery", "SetTocVersion", "SetWhoPanelVisible",
+        "SetTime", "SetWhoResults", "GetWhoQuery", "ResetWhoQuery", "SetTocVersion", "SetWhoPanelVisible", "SetMaxPlayerLevel", "SetChatLockdown",
         "SetIsInGuild", "SetGroupState",
     },
 }

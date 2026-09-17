@@ -6,6 +6,8 @@ local C_FriendList = _G.C_FriendList
 local CreateFrame = _G.CreateFrame
 local WorldFrame = _G.WorldFrame
 local GetTime = _G.GetTime
+local C_Timer = _G.C_Timer
+local hooksecurefunc = _G.hooksecurefunc
 
 --[[
 Scanner listens passively to WHO_LIST_UPDATE events and publishes results via EventBus.
@@ -73,6 +75,13 @@ function WoWForeverRaceScanner.new(Core, DB, EventBus)
         end)
     end
 
+    -- Notice /who queries that are not ours (the player, other addons), see OnSendWho.
+    if hooksecurefunc and C_FriendList and C_FriendList.SendWho then
+        hooksecurefunc(C_FriendList, "SendWho", function()
+            _self:OnSendWho()
+        end)
+    end
+
     return self
 end
 
@@ -90,18 +99,43 @@ function WoWForeverRaceScanner:ResetState()
     self:RestoreWhoUi()
 end
 
+-- Gives up on the pending scan (lost reply) and hands the who UI back.
+function WoWForeverRaceScanner:AbandonScan()
+    self.scanPending = false
+    self.pendingScanMin = nil
+    self:RestoreWhoUi()
+end
+
+-- Called for every C_FriendList.SendWho, ours included. An empty result can't be
+-- told apart from the empty result of somebody else's query, so once a foreign
+-- /who was sent while our scan is pending, empty results are no longer trusted.
+function WoWForeverRaceScanner:OnSendWho()
+    if self.sendingWho then return end
+    if self.scanPending then
+        self.foreignWhoSeen = true
+    end
+end
+
+-- The class part of a /who query. The server matches the localized class name,
+-- the English names in Config.WhoClassFilter are the fallback.
+function WoWForeverRaceScanner:ClassWhoFilter(className)
+    local localized = _G.LocalizedClassList and _G.LocalizedClassList(false)
+            or _G.LOCALIZED_CLASS_NAMES_MALE
+    local name = localized and localized[className] or WoWForeverRace.Config.WhoClassFilter[className]
+    if not name then return nil end
+    return (_G.WHO_TAG_CLASS or "c-") .. '"' .. name .. '"'
+end
+
 -- Stops the Blizzard who panel from popping up for the response to our scan.
 function WoWForeverRaceScanner:SuppressWhoUi()
     self.suppressedWhoFrames = {}
     for _, frameName in ipairs(WHO_UI_FRAMES) do
         local frame = _G[frameName]
-        if frame and frame.UnregisterEvent then
-            -- only touch frames that are listening, so RestoreWhoUi never
-            -- registers the event on a frame that did not have it
-            if not frame.IsEventRegistered or frame:IsEventRegistered("WHO_LIST_UPDATE") then
-                frame:UnregisterEvent("WHO_LIST_UPDATE")
-                table.insert(self.suppressedWhoFrames, frame)
-            end
+        -- only touch frames that are listening, so RestoreWhoUi never
+        -- registers the event on a frame that did not have it
+        if frame and frame:IsEventRegistered("WHO_LIST_UPDATE") then
+            frame:UnregisterEvent("WHO_LIST_UPDATE")
+            table.insert(self.suppressedWhoFrames, frame)
         end
     end
     if C_FriendList.SetWhoToUi then C_FriendList.SetWhoToUi(true) end
@@ -114,13 +148,13 @@ function WoWForeverRaceScanner:RestoreWhoUi()
     local whoPanelShown = false
     for _, frame in ipairs(self.suppressedWhoFrames) do
         frame:RegisterEvent("WHO_LIST_UPDATE")
-        if frame.IsVisible and frame:IsVisible() then whoPanelShown = true end
+        if frame:IsVisible() then whoPanelShown = true end
     end
     self.suppressedWhoFrames = nil
 
     -- IsVisible, not IsShown: the who list is a tab child that stays "shown" after
-    -- its parent panel closes. The who panel keeps whoToUi on while it is open; otherwise hand short
-    -- manual /who results back to the chat frame
+    -- its parent panel closes. The who panel keeps whoToUi on while it is open;
+    -- otherwise hand short manual /who results back to the chat frame
     if not whoPanelShown and C_FriendList.SetWhoToUi then
         C_FriendList.SetWhoToUi(false)
     end
@@ -175,8 +209,13 @@ function WoWForeverRaceScanner:OnWhoListUpdate()
         end
     end
 
+    -- an empty result after somebody else's /who may well be theirs
+    if numShown == 0 and self.foreignWhoSeen then
+        matchesQuery = false
+    end
+
     -- Not our scan's response: leave the scan pending, the real response
-    -- (or the SCAN_TIMEOUT in TriggerScan) will resolve it.
+    -- (or the SCAN_TIMEOUT) will resolve it.
     if not matchesQuery then return end
 
     self.scanPending = false
@@ -224,18 +263,18 @@ end
 -- MUST be called from a hardware event context (mouse click, key press).
 -- Safe to call frequently; enforces a 15s cooldown internally.
 function WoWForeverRaceScanner:TriggerScan()
-    if self.DB.factionrealm.finished then return end
-
     local now = GetTime()
 
+    -- before the finished check: a scan that was pending when the race finished
+    -- must still hand the who UI back
     if self.scanPending then
         if now - self.lastScanTime < SCAN_TIMEOUT then return end
         -- The server silently dropped the /who response; abandon the pending
         -- scan so a lost reply can't disable scanning for the whole session.
-        self.scanPending = false
-        self.pendingScanMin = nil
-        self:RestoreWhoUi()
+        self:AbandonScan()
     end
+
+    if self.DB.factionrealm.finished then return end
 
     if now - self.lastScanTime < SCAN_COOLDOWN then return end
     self.lastScanTime = now
@@ -270,7 +309,7 @@ function WoWForeverRaceScanner:TriggerScan()
         local classIndex = validIdx[slot]
         local classLb    = self.DB.factionrealm.leaderboard[classIndex]
         local className  = WoWForeverRace.Config.Classes[classIndex]
-        local filter     = WoWForeverRace.Config.WhoClassFilter[className]
+        local filter     = self:ClassWhoFilter(className)
         local completeAt = self.classScanComplete[classIndex]
         local restingComplete = completeAt ~= nil and now - completeAt < CLASS_COMPLETE_TTL
         local isDone = classLb and (
@@ -302,7 +341,7 @@ function WoWForeverRaceScanner:TriggerScan()
                 if scanMin >= maxLevel then scanMin = maxLevel - 1 end
             end
 
-            query = tostring(scanMin) .. "-" .. tostring(scanMax) .. " c-" .. filter
+            query = tostring(scanMin) .. "-" .. tostring(scanMax) .. " " .. filter
             break
         end
     end end -- end class scan loop + if not query guard
@@ -331,6 +370,19 @@ function WoWForeverRaceScanner:TriggerScan()
         self:SuppressWhoUi()
         self.pendingScanMin = tonumber(string.match(query, "^(%d+)-"))
         self.scanPending = true
+        self.foreignWhoSeen = false
+        self.sendingWho = true
         C_FriendList.SendWho(query)
+        self.sendingWho = false
+
+        -- Restoring the who UI needs no hardware event, so a lost reply is not
+        -- left waiting for the player's next world click.
+        self.scanToken = (self.scanToken or 0) + 1
+        local token, _self = self.scanToken, self
+        C_Timer.After(SCAN_TIMEOUT, function()
+            if _self.scanPending and _self.scanToken == token then
+                _self:AbandonScan()
+            end
+        end)
     end
 end

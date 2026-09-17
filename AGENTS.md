@@ -28,7 +28,7 @@ CI (`.github/workflows/ci.yml`) runs lint + tests in the same image on every PR 
 
 Coverage report: `luacov.report.out`. Files not exercised by tests (WoW API dependent): `main.lua`, `options.lua`, `gui/*.lua`, `dev.lua`, `updater.lua`.
 
-Test output silences the addon's debug prints; set `WFR_TEST_DEBUG=1` to see them. The stubs in `tests/stubs/` expose `Set*` helpers (`SetTime`, `SetWhoResults(results, total)`, `SetIsInGuild`, `SetGroupState(members, inRaid, inInstanceGroup)`, `SetTocVersion(tocVersion)`, `SetWhoPanelVisible(visible)`, `C_Timer.Advance`) to drive the world state; extend them rather than mocking inside individual tests. When the Ace3 libraries start using a new WoW global, stub it in `tests/stubs/misc.lua`; when addon code starts using a WoW API as a bare global, add it to `read_globals` in `.luacheckrc` (access through `_G.Name` needs no entry).
+Test output silences the addon's debug prints; set `WFR_TEST_DEBUG=1` to see them. The stubs in `tests/stubs/` expose `Set*` helpers (`SetTime`, `SetWhoResults(results, total)`, `SetIsInGuild`, `SetGroupState(members, inRaid, inInstanceGroup)`, `SetTocVersion(tocVersion)`, `SetWhoPanelVisible(visible)`, `SetMaxPlayerLevel(level)`, `SetChatLockdown(lockedDown)`, `C_Timer.Advance`) to drive the world state; extend them rather than mocking inside individual tests. When the Ace3 libraries start using a new WoW global, stub it in `tests/stubs/misc.lua`; when addon code starts using a WoW API as a bare global, add it to `read_globals` in `.luacheckrc` (access through `_G.Name` needs no entry).
 
 ## Architecture
 
@@ -76,10 +76,12 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 
 ### WoW Forever client notes
 - The Forever client is built on the modern (retail, `mainline` family) UI and API with game type `camelot`; its FrameXML lives in the `forever` branch of `Gethe/wow-ui-source`. Check API questions against that branch, not against Classic Era
-- `Config:DetectExpansion` returns `FOREVER` for interface 16000-19999 (Classic Era stays on 1.13-1.15); `ExpansionData.FOREVER` has no faction-only classes
+- `Config:DetectExpansion` returns `FOREVER` for interface 16000-19999 (Classic Era stays on 1.13-1.15), and for any later interface whose `GetMaxPlayerLevel()` is 60; `ExpansionData.FOREVER` has no faction-only classes. `Config:ApplyExpansion(expansion, faction)` fills `MaxLevel` and `MopClassIndexes` (FOREVER at load, the running client from `main.lua`)
 - The who list is `LFGWhoListFrame` (load-on-demand `Blizzard_GroupFinder_VanillaStyle`), not `FriendsFrame`; it opens the group finder on every `WHO_LIST_UPDATE`. `Scanner:SuppressWhoUi` / `RestoreWhoUi` unregister and restore the event on whichever who frames exist, looked up at scan time
 - `C_FriendList.GetNumWhoResults()` returns `(numWhos, totalNumWhos)`; `C_FriendList.SendWho` is restricted, so scans stay wired to hardware events
-- `Network:SendObject` skips sends while `C_ChatInfo.InChatMessagingLockdown()` is true
+- The chat messaging lockdown (`C_ChatInfo.InChatMessagingLockdown()`) covers encounters, PvP matches and whole dungeon/raid maps. `Network:SendObject` holds messages in an outbox (latest only for non-payload events, capped) and `FlushOutbox` sends them once the lockdown ended; `Sync:InitSync` postpones itself the same way
+- A pending scan is abandoned by a `C_Timer` after `SCAN_TIMEOUT` (`Scanner:AbandonScan`), so the who UI is handed back without a click, also when the race finished meanwhile. After a foreign `C_FriendList.SendWho` (hooked, `Scanner:OnSendWho`) an empty result is not attributed to the scan
+- Class scans use the localized class name (`LocalizedClassList`), quoted: `30-60 c-"Warrior"`; `Config.WhoClassFilter` is the English fallback
 - The TOC lists every supported client in one comma-separated `## Interface:` line
 
 ### Key Conventions

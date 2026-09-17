@@ -87,6 +87,46 @@ describe("Network", function()
         WoWForeverRace.DB = nil
     end)
 
+    describe("chat messaging lockdown", function()
+        local network, commSpy
+
+        before_each(function()
+            _G.C_Timer.Reset()
+            local core = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
+            network = WoWForeverRace.Network(core, WoWForeverRace.EventBus())
+            commSpy = spy.on(AceComm, "SendCommMessage")
+        end)
+
+        after_each(function()
+            SetChatLockdown(false)
+            commSpy:revert()
+        end)
+
+        it("holds messages back and sends them when the lockdown ends", function()
+            SetChatLockdown(true)
+            network:SendObject(NetworkEvents.PlayerInfoBatch, {"a", false, 0}, "GUILD")
+            network:SendObject(NetworkEvents.PlayerInfoBatch, {"b", false, 0}, "GUILD")
+            _G.C_Timer.Advance(6)
+            assert.spy(commSpy).was_not_called()
+
+            SetChatLockdown(false)
+            _G.C_Timer.Advance(6)
+
+            assert.spy(commSpy).was_called(2)
+        end)
+
+        it("keeps only the latest of a repeated non-payload message", function()
+            SetChatLockdown(true)
+            network:SendObject(NetworkEvents.BuddyPing, {1}, "WHISPER", "Dude")
+            network:SendObject(NetworkEvents.BuddyPing, {2}, "WHISPER", "Dude")
+
+            SetChatLockdown(false)
+            _G.C_Timer.Advance(6)
+
+            assert.spy(commSpy).was_called(1)
+        end)
+    end)
+
     it("does not publish local events received over the wire", function()
         local core = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
         local eventbus = WoWForeverRace.EventBus()

@@ -4,7 +4,10 @@ local WoWForeverRace = _G.WoWForeverRace
 -- WoW API
 local IsInRaid, IsInGroup, GetNumGroupMembers = _G.IsInRaid, _G.IsInGroup, _G.GetNumGroupMembers
 local LE_PARTY_CATEGORY_INSTANCE = _G.LE_PARTY_CATEGORY_INSTANCE
-local C_ChatInfo = _G.C_ChatInfo
+local C_ChatInfo, C_Timer = _G.C_ChatInfo, _G.C_Timer
+
+local OUTBOX_MAX = 100          -- messages held back during a chat messaging lockdown
+local OUTBOX_RETRY_INTERVAL = 5 -- seconds between checks whether the lockdown has ended
 
 -- Libs
 local LibStub = _G.LibStub
@@ -159,9 +162,71 @@ function WoWForeverRaceNetwork:ResolveGroupChannel()
     return nil
 end
 
+function WoWForeverRaceNetwork:IsLockedDown()
+    return C_ChatInfo ~= nil and C_ChatInfo.InChatMessagingLockdown ~= nil
+            and C_ChatInfo.InChatMessagingLockdown() == true
+end
+
+-- Payload events are kept in full, every other event only matters in its latest
+-- version (beacons, pings, sync negotiation), so a long lockdown can't pile them up.
+local function outboxKey(event, channel, target)
+    local events = WoWForeverRace.Config.Network.Events
+    if event == events.PlayerInfoBatch or event == events.SyncPayload
+            or event == events.FTLSync or event == events.PlayerHistorySync then
+        return nil
+    end
+    return event .. "/" .. tostring(channel) .. "/" .. tostring(target)
+end
+
+function WoWForeverRaceNetwork:HoldMessage(event, object, channel, target, prio)
+    WoWForeverRace:DebugPrint("Hold " .. event .. " -> " .. tostring(channel) .. " (chat messaging lockdown)")
+    self.outbox = self.outbox or {}
+
+    local key = outboxKey(event, channel, target)
+    if key ~= nil then
+        for i, held in ipairs(self.outbox) do
+            if held.key == key then
+                table.remove(self.outbox, i)
+                break
+            end
+        end
+    end
+    table.insert(self.outbox, {key = key, args = {event, object, channel, target, prio}})
+    while #self.outbox > OUTBOX_MAX do
+        table.remove(self.outbox, 1)
+    end
+
+    if not self.outboxTicker then
+        local _self = self
+        self.outboxTicker = C_Timer.NewTicker(OUTBOX_RETRY_INTERVAL, function() _self:FlushOutbox() end)
+    end
+end
+
+function WoWForeverRaceNetwork:FlushOutbox()
+    if self:IsLockedDown() then return end
+
+    if self.outboxTicker then
+        self.outboxTicker:Cancel()
+        self.outboxTicker = nil
+    end
+    local outbox = self.outbox or {}
+    self.outbox = {}
+    for _, held in ipairs(outbox) do
+        self:SendObject(held.args[1], held.args[2], held.args[3], held.args[4], held.args[5])
+    end
+end
+
 function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
     if prio == nil then
         prio = "BULK"
+    end
+
+    -- Modern clients (WoW Forever) reject addon messages while the chat messaging
+    -- lockdown is active (it covers whole dungeons and raids); hold them back
+    -- with their original arguments and send once the lockdown has ended.
+    if self:IsLockedDown() then
+        self:HoldMessage(event, object, channel, target, prio)
+        return
     end
 
     -- resolve the channel first so nothing is serialized, logged or counted
@@ -173,13 +238,6 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
             return
         end
         target = nil
-    end
-
-    -- Modern clients (WoW Forever) reject addon messages while the chat messaging
-    -- lockdown is active; skip instead of queueing doomed sends.
-    if C_ChatInfo and C_ChatInfo.InChatMessagingLockdown and C_ChatInfo.InChatMessagingLockdown() then
-        WoWForeverRace:DebugPrint("Skip " .. event .. " -> " .. channel .. " (chat messaging lockdown)")
-        return
     end
 
     local payload = Serializer:Serialize({event, object})
