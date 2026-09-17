@@ -34,6 +34,13 @@ _G.FriendsFrame = {
     RegisterEvent = function() end,
     UnregisterEvent = function() end,
 }
+-- WoW Forever who panel (load-on-demand group finder)
+_G.LFGWhoListFrame = {
+    RegisterEvent = function() end,
+    UnregisterEvent = function() end,
+    IsEventRegistered = function() return true end,
+    IsShown = function() return false end,
+}
 _G.GetRealmName = function()
     return "NubVille"
 end
@@ -54,8 +61,18 @@ _G.UnitFactionGroup = function()
     return "Alliance"
 end
 
+-- WoW Forever by default, see SetTocVersion(tocVersion)
+local defaultTocVersion = 16001
+local tocVersion = defaultTocVersion
 _G.GetBuildInfo = function()
-    return "5.5.3", "12345", "Jan 1 2026", 50503
+    return "1.60.1", "69893", "Sep 16 2026", tocVersion
+end
+
+_G.SetTocVersion = function(version)
+    if version == nil then
+        version = defaultTocVersion
+    end
+    tocVersion = version
 end
 
 local defaultIsInGuild = true

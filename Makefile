@@ -117,7 +117,7 @@ fetch-libs: download-bw-release
 # -- release --
 # build release using bw-release.sh
 # depending on $(RELEASEARGS) it will or will not upload (see above)
-# -S builds one zip for every game version listed in the TOC (Vanilla, TBC, Mists)
+# -S builds one zip for every game version listed in the TOC (Forever, Vanilla, TBC, Mists)
 #
 release: download-bw-release
 	rm -rf ./.release

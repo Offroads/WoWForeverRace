@@ -3,6 +3,7 @@ local WoWForeverRace = _G.WoWForeverRace
 
 -- WoW API
 local IsInRaid, GetNumGroupMembers = _G.IsInRaid, _G.GetNumGroupMembers
+local C_ChatInfo = _G.C_ChatInfo
 
 -- Libs
 local LibStub = _G.LibStub
@@ -138,6 +139,13 @@ end
 function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
     if prio == nil then
         prio = "BULK"
+    end
+
+    -- Modern clients (WoW Forever) reject addon messages while the chat messaging
+    -- lockdown is active; skip instead of queueing doomed sends.
+    if C_ChatInfo and C_ChatInfo.InChatMessagingLockdown and C_ChatInfo.InChatMessagingLockdown() then
+        WoWForeverRace:DebugPrint("Skip " .. event .. " -> " .. channel .. " (chat messaging lockdown)")
+        return
     end
 
     local payload = Serializer:Serialize({event, object})

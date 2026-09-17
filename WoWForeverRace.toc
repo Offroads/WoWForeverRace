@@ -1,11 +1,9 @@
-## Interface: 50503
-## Interface-Vanilla: 11503
-## Interface-TBC: 20505
-## Interface-Mists: 50503
+## Interface: 16001, 11509, 20506, 50504
 ## Title: WoWForeverRace
 ## Author: Offroad
 ## Version: @project-version@
 ## Notes: Keep track of the top 50 players in the race to max level.
+## IconTexture: Interface\ICONS\Ability_Mount_JungleTiger
 ## DefaultState: Enabled
 ## LoadOnDemand: 0
 ## SavedVariables: WoWForeverRace_DB
