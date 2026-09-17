@@ -117,11 +117,14 @@ fetch-libs: download-bw-release
 # -- release --
 # build release using bw-release.sh
 # depending on $(RELEASEARGS) it will or will not upload (see above)
-# -S builds one zip for every game version listed in the TOC (Vanilla, TBC, Mists)
+# one zip for every client: the TOC lists them all in a single "## Interface:" line,
+# so there is nothing for the packager's -S (split TOC) flag to do.
+# NOTE: the packager does not know the WoW Forever interface (16xxx) yet and labels
+# it "retail" in release.json; add CurseForge/Wago ids only once that is fixed upstream.
 #
 release: download-bw-release
 	rm -rf ./.release
-	./bw-release.sh -u -l -S $(RELEASEARGS)
+	./bw-release.sh -u -l $(RELEASEARGS)
 
 #
 # -- docker-* --

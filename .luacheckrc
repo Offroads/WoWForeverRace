@@ -51,7 +51,7 @@ files["tests"] = {
     },
     globals = {"WoWForeverRace"},
     read_globals = {
-        "SetTime", "SetWhoResults", "GetWhoQuery", "ResetWhoQuery",
+        "SetTime", "SetWhoResults", "GetWhoQuery", "ResetWhoQuery", "SetTocVersion", "SetWhoPanelVisible",
         "SetIsInGuild", "SetRealZoneText", "SetNumGroupMembers", "SetGroupState",
         "GetRaidRosterInfo", "GetRealZoneText", "GetLocale", "GetCurrentRegion", "UnitRace",
         "SendChatMessage", "SendAddonMessage", "BNSendGameData", "C_BattleNet", "Enum",

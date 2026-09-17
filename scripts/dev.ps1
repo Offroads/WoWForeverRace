@@ -26,7 +26,8 @@
 
 .PARAMETER Flavor
     Which WoW client to deploy to when -AddOnsPath is omitted:
-    classic (MoP Classic, _classic_), era (Classic Era, _classic_era_).
+    forever (WoW Forever beta, _classic_beta_), classic (MoP Classic, _classic_),
+    era (Classic Era, _classic_era_).
 
 .PARAMETER Copy
     Copy the addon files instead of creating a junction to this checkout.
@@ -51,8 +52,8 @@ param(
 
     [string]$AddOnsPath,
 
-    [ValidateSet("classic", "era")]
-    [string]$Flavor = "classic",
+    [ValidateSet("forever", "classic", "era")]
+    [string]$Flavor = "forever",
 
     [switch]$Copy
 )
@@ -76,7 +77,12 @@ function Invoke-Dev {
 }
 
 function Get-DefaultAddOnsPath {
-    $folder = if ($Flavor -eq "era") { "_classic_era_" } else { "_classic_" }
+    # the WoW Forever beta is served through the wow_classic_beta product
+    $folder = switch ($Flavor) {
+        "era"     { "_classic_era_" }
+        "classic" { "_classic_" }
+        default   { "_classic_beta_" }
+    }
     $candidates = @(
         (Join-Path ${env:ProgramFiles(x86)} "World of Warcraft\$folder\Interface\AddOns"),
         (Join-Path $env:ProgramFiles "World of Warcraft\$folder\Interface\AddOns")
