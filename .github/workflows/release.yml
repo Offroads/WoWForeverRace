@@ -27,7 +27,7 @@ jobs:
       - name: Install subversion
         run: sudo apt-get update && sudo apt-get install -y subversion
 
-      # One zip for every client, the TOC lists them all in one Interface line.
+      # One zip for the WoW Forever client, the only interface in the TOC.
       # The packager labels the WoW Forever interface (16xxx) as retail in
       # release.json until it learns that client, so no -p/-a upload ids here.
       - name: Package with BigWigs packager

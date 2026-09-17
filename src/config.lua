@@ -10,13 +10,10 @@ local WoWForeverRaceColors = {
     HUNTER      = "|cFFABD473",
     ROGUE        = "|cFFFFF569",
     PRIEST        = "|cFFFFFFFF",
-    DEATHKNIGHT = "|cFFC41F3B",
     SHAMAN        = "|cFF0070DE",
     MAGE        = "|cFF69CCF0",
     WARLOCK        = "|cFF9482C9",
-    MONK        = "|cFF00FF96",
     DRUID       = "|cFFFF7D0A",
-    DEMONHUNTER = "|cFFEDA55F",
 }
 WoWForeverRace.Colors = WoWForeverRaceColors
 
@@ -30,8 +27,8 @@ local WoWForeverRaceConfig = {
     Trace = false,
     --@end-debug@
 
-    -- MaxLevel and MopClassIndexes are filled from ExpansionData, see ApplyExpansion
-    MaxLevel = nil,
+    -- WoW Forever level cap
+    MaxLevel = 60,
     MaxLeaderboardSize = 50,
 
     -- OfferSync throttle time window
@@ -44,23 +41,24 @@ local WoWForeverRaceConfig = {
     AceConfig = "WoWForeverRace",
     LDB = "WoWForeverRace",
 
+    -- The 9 WoW Forever classes. The indexes are part of the wire and DB format
+    -- (shared with TheClassicRace), so the gaps of the classes that don't exist
+    -- here (6, 10, 12) stay: never renumber.
     Classes = {
-        "WARRIOR",
-        "PALADIN",
-        "HUNTER",
-        "ROGUE",
-        "PRIEST",
-        "DEATHKNIGHT",
-        "SHAMAN",
-        "MAGE",
-        "WARLOCK",
-        "MONK",
-        "DRUID",
-        "DEMONHUNTER",
+        [1] = "WARRIOR",
+        [2] = "PALADIN",
+        [3] = "HUNTER",
+        [4] = "ROGUE",
+        [5] = "PRIEST",
+        [7] = "SHAMAN",
+        [8] = "MAGE",
+        [9] = "WARLOCK",
+        [11] = "DRUID",
     },
 
-    -- Class indexes playable on the running client (name is historical)
-    MopClassIndexes = nil,
+    -- Indexes of the playable classes, Paladin and Shaman on both factions
+    -- (name is historical)
+    MopClassIndexes = {1, 2, 3, 4, 5, 7, 8, 9, 11},
 
     -- English class names used in /who query filters (c-ClassName)
     WhoClassFilter = {
@@ -69,13 +67,10 @@ local WoWForeverRaceConfig = {
         HUNTER      = "Hunter",
         ROGUE       = "Rogue",
         PRIEST      = "Priest",
-        DEATHKNIGHT = "Death Knight",
         SHAMAN      = "Shaman",
         MAGE        = "Mage",
         WARLOCK     = "Warlock",
-        MONK        = "Monk",
         DRUID       = "Druid",
-        DEMONHUNTER = nil,
     },
 
     -- ClassIndexes is inverse of Classes
@@ -86,13 +81,10 @@ local WoWForeverRaceConfig = {
         HUNTER = 3,
         ROGUE = 4,
         PRIEST = 5,
-        DEATHKNIGHT = 6,
         SHAMAN = 7,
         MAGE = 8,
         WARLOCK = 9,
-        MONK = 10,
         DRUID = 11,
-        DEMONHUNTER = 12,
     },
 
     PrettyClassNames = {
@@ -101,25 +93,10 @@ local WoWForeverRaceConfig = {
         HUNTER = "Hunter",
         ROGUE = "Rogue",
         PRIEST = "Priest",
-        DEATHKNIGHT = "DK",
         SHAMAN = "Shaman",
         MAGE = "Mage",
         WARLOCK = "Warlock",
-        MONK = "Monk",
         DRUID = "Druid",
-        DEMONHUNTER = "Poo",
-    },
-
-    ExpansionData = {
-        -- WoW Forever: level 60, Paladin and Shaman playable by both factions
-        FOREVER = { maxLevel = 60,  validClassIndexes = {1,2,3,4,5,7,8,9,11} },
-        CLASSIC = { maxLevel = 60,  validClassIndexes = {1,2,3,4,5,7,8,9,11}, hordeOnly = {7}, allianceOnly = {2} },
-        TBC     = { maxLevel = 70,  validClassIndexes = {1,2,3,4,5,7,8,9,11} },
-        WRATH   = { maxLevel = 80,  validClassIndexes = {1,2,3,4,5,6,7,8,9,11} },
-        CATA    = { maxLevel = 85,  validClassIndexes = {1,2,3,4,5,6,7,8,9,11} },
-        MOP     = { maxLevel = 90,  validClassIndexes = {1,2,3,4,5,6,7,8,9,10,11} },
-        WOD     = { maxLevel = 100, validClassIndexes = {1,2,3,4,5,6,7,8,9,10,11} },
-        LEGION  = { maxLevel = 110, validClassIndexes = {1,2,3,4,5,6,7,8,9,10,11,12} },
     },
 
     BroadcastInterval = 60,
@@ -186,55 +163,3 @@ function WoWForeverRaceConfig:IsValidClassIndex(classIndex)
 
     return false
 end
-
-function WoWForeverRaceConfig:DetectExpansion()
-    local _, _, _, tocVersion = GetBuildInfo()
-    -- WoW Forever is the 1.60+ client line, Classic Era stays on 1.13-1.15.
-    -- Should Forever outgrow the 1.x numbering: no other client past 1.60 caps at 60.
-    local GetMaxPlayerLevel = _G.GetMaxPlayerLevel
-    if tocVersion >= 16000 and GetMaxPlayerLevel and GetMaxPlayerLevel() == 60 then
-        return "FOREVER"
-    end
-
-    if tocVersion < 16000 then
-        return "CLASSIC"
-    elseif tocVersion < 20000 then
-        return "FOREVER"
-    elseif tocVersion < 30000 then
-        return "TBC"
-    elseif tocVersion < 40000 then
-        return "WRATH"
-    elseif tocVersion < 50000 then
-        return "CATA"
-    elseif tocVersion < 60000 then
-        return "MOP"
-    elseif tocVersion < 70000 then
-        return "WOD"
-    else
-        return "LEGION"
-    end
-end
-
--- Sets MaxLevel and the playable classes for an expansion (default: the running
--- client) and the player's faction ("Horde" / "Alliance", for faction-only classes).
-function WoWForeverRaceConfig:ApplyExpansion(expansion, faction)
-    local data = self.ExpansionData[expansion or self:DetectExpansion()]
-    if not data then return end
-
-    local skip = {}
-    for _, idx in ipairs(faction == "Horde" and data.allianceOnly or {}) do skip[idx] = true end
-    for _, idx in ipairs(faction == "Alliance" and data.hordeOnly or {}) do skip[idx] = true end
-
-    local classIndexes = {}
-    for _, idx in ipairs(data.validClassIndexes) do
-        if not skip[idx] then
-            classIndexes[#classIndexes + 1] = idx
-        end
-    end
-
-    self.MaxLevel = data.maxLevel
-    self.MopClassIndexes = classIndexes
-end
-
--- until main.lua applies the running client: the primary target
-WoWForeverRaceConfig:ApplyExpansion("FOREVER")

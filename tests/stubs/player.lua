@@ -32,11 +32,8 @@ end
 _G.ResetWhoQuery = function()
     whoQuery = nil
 end
--- The Blizzard who panels are real frame stubs. Default world is WoW Forever:
--- the who list lives in LFGWhoListFrame (listening, not on screen) and
--- FriendsFrame exists but does not listen for WHO_LIST_UPDATE.
-_G.FriendsFrame = _G.CreateFrame("Frame")
-_G.FriendsFrame:Hide()
+-- The Blizzard who panel is a real frame stub: WoW Forever keeps the who list in
+-- LFGWhoListFrame (listening for WHO_LIST_UPDATE, not on screen by default).
 _G.LFGWhoListFrame = _G.CreateFrame("Frame")
 _G.LFGWhoListFrame:Hide()
 _G.LFGWhoListFrame:RegisterEvent("WHO_LIST_UPDATE")
@@ -68,31 +65,8 @@ _G.UnitFactionGroup = function()
     return "Alliance"
 end
 
--- WoW Forever by default, see SetTocVersion(tocVersion)
-local defaultTocVersion = 16001
-local tocVersion = defaultTocVersion
 _G.GetBuildInfo = function()
-    return "1.60.1", "69893", "Sep 16 2026", tocVersion
-end
-
--- level cap reported by the client, see SetMaxPlayerLevel(level)
-local defaultMaxPlayerLevel = 60
-local maxPlayerLevel = defaultMaxPlayerLevel
-_G.GetMaxPlayerLevel = function()
-    return maxPlayerLevel
-end
-_G.SetMaxPlayerLevel = function(level)
-    if level == nil then
-        level = defaultMaxPlayerLevel
-    end
-    maxPlayerLevel = level
-end
-
-_G.SetTocVersion = function(version)
-    if version == nil then
-        version = defaultTocVersion
-    end
-    tocVersion = version
+    return "1.60.1", "69893", "Sep 16 2026", 16001
 end
 
 local defaultIsInGuild = true

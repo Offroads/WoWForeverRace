@@ -1,4 +1,4 @@
-## Interface: 16001, 11509, 20506, 50504
+## Interface: 16001
 ## Title: WoWForeverRace
 ## Author: Offroad
 ## Version: @project-version@

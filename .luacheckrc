@@ -26,7 +26,7 @@ read_globals = {
     -- libraries
     "LibStub",
     -- WoW API used as bare globals by the addon
-    "CreateFrame", "GetBuildInfo", "GetServerTime", "UnitFactionGroup", "UnitFullName",
+    "CreateFrame", "GetServerTime", "UnitFactionGroup", "UnitFullName",
     "geterrorhandler", "unpack",
 }
 
@@ -40,7 +40,7 @@ files["tests"] = {
     std = "+busted",
     globals = {"WoWForeverRace"},
     read_globals = {
-        "SetTime", "SetWhoResults", "GetWhoQuery", "ResetWhoQuery", "SetTocVersion", "SetWhoPanelVisible", "SetMaxPlayerLevel", "SetChatLockdown",
+        "SetTime", "SetWhoResults", "GetWhoQuery", "ResetWhoQuery", "SetWhoPanelVisible", "SetChatLockdown",
         "SetIsInGuild", "SetGroupState",
     },
 }
