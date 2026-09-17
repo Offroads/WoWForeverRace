@@ -97,7 +97,7 @@ function WoWForeverRace:RegisterOptions()
                     debugMode = {
                         order = 33,
                         name = "Debug Mode",
-                        desc = "Print debug output to chat and show the TCR Buddies window",
+                        desc = "Print debug output to chat and show the debug window (message stats, buddies)",
                         descStyle = "inline",
                         width = "full",
                         type = "toggle",
@@ -124,18 +124,18 @@ function WoWForeverRace:RegisterOptions()
         }
     }
 
-    AceConfig:RegisterOptionsTable(WoWForeverRace.Config.AceConfig, configOptions, {"tcropts"})
+    AceConfig:RegisterOptionsTable(WoWForeverRace.Config.AceConfig, configOptions, {"wfropts"})
     AceConfigDialog:AddToBlizOptions(WoWForeverRace.Config.AceConfig, WoWForeverRace.Config.AceConfig)
 
     local ldb = LibDataBroker:NewDataObject(WoWForeverRace.Config.LDB, {
         type = "data source",
-        text = "The Classic Race",
+        text = WoWForeverRace.Config.Name,
         icon = "Interface\\ICONS\\Ability_Mount_JungleTiger",
         OnClick = function(_, ...) _self:MinimapIconClick(...) end
     })
     LibDBIcon:Register(WoWForeverRace.Config.LDB, ldb, self.DB.profile.options.minimap)
 
-    local hint = WHITE .. "The Classic Race\n" ..
+    local hint = WHITE .. WoWForeverRace.Config.Name .. "\n" ..
                  BROWN .. "Click|r to show the leaderboard. " ..
                  BROWN .. "Right-Click|r to open options dialog."
     function ldb.OnTooltipShow(tt)
