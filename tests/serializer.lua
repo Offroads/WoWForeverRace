@@ -244,6 +244,19 @@ describe("Serializer", function()
         end)
     end)
 
+    describe("malformed input", function()
+        it("returns an empty result for anything that isn't a string", function()
+            for _, bad in ipairs({42, true, {}, {"x"}}) do
+                assert.same({}, DeserPInfoBatch(bad))
+                assert.same({}, DeserFTLBatch(bad))
+                assert.same({}, WoWForeverRace.Serializer.DeserializePlayerHistoryBatch(bad))
+            end
+            assert.same({}, DeserPInfoBatch(nil))
+            assert.same({}, DeserFTLBatch(nil))
+            assert.same({}, WoWForeverRace.Serializer.DeserializePlayerHistoryBatch(nil))
+        end)
+    end)
+
     describe("PlayerInfoBatch", function()
         it("serializes and deserializes", function()
             local nub1 = {name = "Nubone", level = 5, dingedAt = time + 10, classIndex = 11}

@@ -18,7 +18,14 @@ for _, event in pairs(WoWForeverRace.Config.Network.Events) do
 end
 
 local function debugLogPayload(event, payload)
+    -- runs on every message before the consumers do, so it must neither cost
+    -- anything when debug is off nor throw on a malformed payload
+    if not (WoWForeverRace.DB and WoWForeverRace.DB.profile.options.debug) then return end
     if event == WoWForeverRace.Config.Network.Events.PlayerInfoBatch then
+        if type(payload) ~= "table" then
+            WoWForeverRace:DebugPrint("  malformed payload: " .. tostring(payload))
+            return
+        end
         local batchstr, isRebroadcast, classIndex = payload[1], payload[2], payload[3]
         local players = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(batchstr)
         WoWForeverRace:DebugPrint("  rebroadcast=" .. tostring(isRebroadcast) ..

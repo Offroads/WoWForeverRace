@@ -71,7 +71,8 @@ function WoWForeverRaceSerializer.SerializePlayerInfoBatch(playerInfoBatch)
 end
 
 function WoWForeverRaceSerializer.DeserializePlayerInfoBatch(str)
-    if str == "" then return {} end
+    -- wire data is untrusted: anything that isn't a string is a malformed message
+    if type(str) ~= "string" or str == "" then return {} end
 
     local dingedAtOffset = tonumber(string.sub(str, 1, 10))
     if dingedAtOffset == nil then return {} end
@@ -189,7 +190,7 @@ end
 -- Deserializes a single playerHistory chunk produced by SerializePlayerHistoryChunks.
 -- Returns {[name] = {classIndex = ci, levels = {[level] = dingedAt}}}.
 function WoWForeverRaceSerializer.DeserializePlayerHistoryBatch(str)
-    if str == "" then return {} end
+    if type(str) ~= "string" or str == "" then return {} end
 
     local offset = tonumber(string.sub(str, 1, 10))
     if offset == nil then return {} end
@@ -226,7 +227,7 @@ end
 -- Deserializes a firstToLevel batch string produced by SerializeFTLBatch.
 -- When duplicate (classFilter, level) entries appear, keeps the one with the earlier dingedAt.
 function WoWForeverRaceSerializer.DeserializeFTLBatch(str)
-    if str == "" then return {} end
+    if type(str) ~= "string" or str == "" then return {} end
     local offset = tonumber(string.sub(str, 1, 10))
     if offset == nil then return {} end
     str = string.sub(str, 12)
