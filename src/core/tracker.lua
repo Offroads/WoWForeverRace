@@ -296,8 +296,10 @@ function WoWForeverRaceTracker:ComputeNeedSet(requesterClassHashes)
     for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
         local lb = self.DB.factionrealm.leaderboard[classIndex]
         local myHash = lb and WoWForeverRace.Leaderboard.ComputeHash(lb) or 0
-        local theirHash = requesterClassHashes[classIndex + 1] or 0
-        if myHash ~= theirHash then
+        -- nil: the requester's build does not track this class (other client or
+        -- older build), it would discard the leaderboard anyway
+        local theirHash = requesterClassHashes[classIndex + 1]
+        if theirHash ~= nil and myHash ~= theirHash then
             needSet[classIndex] = true
         end
     end

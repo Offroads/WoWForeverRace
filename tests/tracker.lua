@@ -686,4 +686,31 @@ describe("Tracker", function()
             assert.equals("Racer", db.factionrealm.firstToLevel[0][10].name)
         end)
     end)
+
+    describe("ComputeNeedSet", function()
+        it("skips classes the requester's build does not track", function()
+            tracker:ProcessPlayerInfo(playerInfo("Pally", 30, PALADINIDX))
+
+            -- requester reports every board except Paladin (index + 1), all empty
+            local requesterHashes = {}
+            for _, classIndex in ipairs({0, 1, 3, 4, 5, 7, 8, 9, 11}) do
+                requesterHashes[classIndex + 1] = 5381
+            end
+            local needSet = tracker:ComputeNeedSet(requesterHashes)
+
+            assert.is_true(needSet[0])
+            assert.is_nil(needSet[PALADINIDX])
+        end)
+
+        it("includes a class the requester tracks with a different hash", function()
+            tracker:ProcessPlayerInfo(playerInfo("Pally", 30, PALADINIDX))
+
+            local requesterHashes = {}
+            for _, classIndex in ipairs({0, 1, 2, 3, 4, 5, 7, 8, 9, 11}) do
+                requesterHashes[classIndex + 1] = 5381
+            end
+
+            assert.is_true(tracker:ComputeNeedSet(requesterHashes)[PALADINIDX])
+        end)
+    end)
 end)
