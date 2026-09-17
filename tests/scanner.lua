@@ -6,6 +6,8 @@ describe("Scanner", function()
     local eventbus
     local scanner
     local time = 1000000000
+    -- an already recorded probe without rows: class scans start right away, at the bottom
+    local NO_PROBE = {levels = {}, classCount = {}}
 
     before_each(function()
         SetTime(time)
@@ -27,7 +29,7 @@ describe("Scanner", function()
 
         scanner:TriggerScan()
 
-        assert.equals("50-60", GetWhoQuery())
+        assert.equals("2-60", GetWhoQuery())
     end)
     it("ignores WHO_LIST_UPDATE events that do not belong to a scan", function()
         local eventBusSpy = spy.on(eventbus, "PublishEvent")
@@ -37,35 +39,80 @@ describe("Scanner", function()
         assert.spy(eventBusSpy).called_at_most(0)
     end)
 
-    it("widens an empty global scan instead of repeating the same query", function()
+    it("repeats the unfiltered probe while the leaderboard is empty", function()
         scanner:TriggerScan()
-        assert.equals("50-60", GetWhoQuery())
+        assert.equals("2-60", GetWhoQuery())
 
         scanner:OnWhoListUpdate()
         SetTime(time + 16)
         scanner:TriggerScan()
 
-        assert.equals("40-60", GetWhoQuery())
+        assert.equals("2-60", GetWhoQuery())
     end)
 
-    it("treats a result the server truncated as incomplete", function()
-        scanner:TriggerScan()
-        assert.equals("50-60", GetWhoQuery())
+    it("probes all classes once before the class scans", function()
+        db.factionrealm.leaderboard[0].players = {
+            {name = "Seed", level = 7, classIndex = 1, dingedAt = time},
+        }
 
-        -- one row shown, but the server reports many more matches: the range
-        -- is too wide, so the floor moves up instead of widening further
-        SetWhoResults({{fullName = "Top", level = 60, filename = "MAGE"}}, 120)
+        scanner:TriggerScan()
+        assert.equals("2-60", GetWhoQuery())
+
+        SetWhoResults({{fullName = "Mage", level = 3, filename = "MAGE"}}, 120)
         scanner:OnWhoListUpdate()
         SetTime(time + 16)
         scanner:TriggerScan()
 
-        assert.equals("59-60", GetWhoQuery())
+        assert.equals("2-60 c-\"Warrior\"", GetWhoQuery())
+    end)
+
+    it("starts a crowded class where the probe expects it to fit under the cap", function()
+        db.factionrealm.leaderboard[0].players = {
+            {name = "Seed", level = 7, classIndex = 1, dingedAt = time},
+        }
+        db.factionrealm.leaderboard[0].highestLevel = 7
+
+        -- 50 of 400 players: 25 warriors (so about 200 online), 25 mages,
+        -- and a quarter of the sample at level 4 or higher
+        local rows = {}
+        for i = 1, 50 do
+            rows[i] = {
+                fullName = "Player" .. i,
+                level    = i <= 4 and 6 or (i <= 12 and 4 or 2),
+                filename = i % 2 == 0 and "WARRIOR" or "MAGE",
+            }
+        end
+        scanner:TriggerScan()
+        SetWhoResults(rows, 400)
+        scanner:OnWhoListUpdate()
+        SetTime(time + 16)
+        scanner:TriggerScan()
+
+        -- 50 of ~200 warriors fit: the top quarter of the sample starts at level 4
+        assert.equals("4-60 c-\"Warrior\"", GetWhoQuery())
+    end)
+
+    it("rests every class when the probe saw everybody online", function()
+        db.factionrealm.leaderboard[0].players = {
+            {name = "Seed", level = 7, classIndex = 1, dingedAt = time},
+        }
+        db.factionrealm.leaderboard[0].highestLevel = 7
+
+        scanner:TriggerScan()
+        SetWhoResults({{fullName = "Warr", level = 5, filename = "WARRIOR"}}, 1)
+        scanner:OnWhoListUpdate()
+        SetTime(time + 16)
+        scanner:TriggerScan()
+
+        -- no class scan: straight to the global top range
+        assert.equals("7-60", GetWhoQuery())
     end)
 
     it("treats a result with exactly the cap as complete when the server agrees", function()
         db.factionrealm.leaderboard[0].players = {
             {name = "Seed", level = 60, classIndex = 1, dingedAt = time},
         }
+        scanner.probe = NO_PROBE
         scanner.classScanFloor[1] = 2
 
         scanner:TriggerScan()
@@ -83,20 +130,22 @@ describe("Scanner", function()
 
     it("falls back to the row cap when the server total is unknown", function()
         scanner:TriggerScan()
-        assert.equals("50-60", GetWhoQuery())
+        assert.equals("2-60", GetWhoQuery())
 
         local rows = {}
         for i = 1, 50 do rows[i] = {fullName = "Top" .. i, level = 60, filename = "MAGE"} end
         SetWhoResults(rows, false)
         scanner:OnWhoListUpdate()
 
-        assert.is_true(scanner.globalResultFull)
+        -- not complete: the classes are not rested
+        assert.is_nil(scanner.classScanComplete[1])
     end)
 
     it("marks a low-population class complete at the lower bound", function()
         db.factionrealm.leaderboard[0].players = {
             {name = "Seed", level = 60, classIndex = 1, dingedAt = time},
         }
+        scanner.probe = NO_PROBE
         scanner.classScanFloor[1] = 2
 
         scanner:TriggerScan()
@@ -106,15 +155,68 @@ describe("Scanner", function()
         SetTime(time + 16)
         scanner:TriggerScan()
 
-        -- Warrior is resting, so the rotation moves on to Paladin,
-        -- which starts at its own adaptive floor (maxLevel - 20 - LEVEL_STEP)
-        assert.equals("30-60 c-\"Paladin\"", GetWhoQuery())
+        -- Warrior is resting, so the rotation moves on to Paladin
+        assert.equals("2-60 c-\"Paladin\"", GetWhoQuery())
+    end)
+
+    it("bisects the class floor between the bottom and the highest level seen", function()
+        db.factionrealm.leaderboard[0].players = {
+            {name = "Seed", level = 7, classIndex = 1, dingedAt = time},
+        }
+        scanner.probe = NO_PROBE
+        db.factionrealm.leaderboard[0].highestLevel = 7
+
+        local function warriors(count, level)
+            local rows = {}
+            for i = 1, count do rows[i] = {fullName = "Warr" .. i, level = level, filename = "WARRIOR"} end
+            return rows
+        end
+        local now = time
+        local function nextWarriorScan(rows, total)
+            SetWhoResults(rows, total)
+            scanner:OnWhoListUpdate()
+            now = now + 16
+            SetTime(now)
+            scanner.nextScanClassIdx = 1
+            scanner:TriggerScan()
+            return GetWhoQuery()
+        end
+
+        scanner:TriggerScan()
+        assert.equals("2-60 c-\"Warrior\"", GetWhoQuery())
+
+        -- over the cap: halfway up to the highest level seen
+        assert.equals("5-60 c-\"Warrior\"", nextWarriorScan(warriors(50, 5), 300))
+        -- fits: halfway back down, staying above the floor that overflowed
+        assert.equals("4-60 c-\"Warrior\"", nextWarriorScan(warriors(3, 6), 3))
+        assert.equals("3-60 c-\"Warrior\"", nextWarriorScan(warriors(20, 4), 20))
+        -- overflows again: back to the floor known to fit, and stay there
+        assert.equals("4-60 c-\"Warrior\"", nextWarriorScan(warriors(50, 3), 80))
+        assert.equals("4-60 c-\"Warrior\"", nextWarriorScan(warriors(20, 4), 20))
+    end)
+
+    it("repeats the class floor when the /who response was lost", function()
+        db.factionrealm.leaderboard[0].players = {
+            {name = "Seed", level = 60, classIndex = 1, dingedAt = time},
+        }
+        scanner.probe = NO_PROBE
+        scanner.classScanFloor[1] = 30
+        scanner.lastResultFull[1] = true
+
+        scanner:TriggerScan()
+        assert.equals("31-60 c-\"Warrior\"", GetWhoQuery())
+
+        scanner.nextScanClassIdx = 1
+        SetTime(time + 61)
+        scanner:TriggerScan()
+        assert.equals("31-60 c-\"Warrior\"", GetWhoQuery())
     end)
 
     it("re-scans a completed class after the rest period", function()
         db.factionrealm.leaderboard[0].players = {
             {name = "Seed", level = 60, classIndex = 1, dingedAt = time},
         }
+        scanner.probe = NO_PROBE
         scanner.classScanFloor[1] = 2
 
         scanner:TriggerScan()
@@ -131,28 +233,29 @@ describe("Scanner", function()
 
     it("abandons a pending scan when the /who response is lost", function()
         scanner:TriggerScan()
-        assert.equals("50-60", GetWhoQuery())
+        assert.equals("2-60", GetWhoQuery())
 
         -- no WHO_LIST_UPDATE arrives; within the timeout scanning stays blocked
         SetTime(time + 16)
         scanner:TriggerScan()
-        assert.equals("50-60", GetWhoQuery())
+        assert.equals("2-60", GetWhoQuery())
 
         -- past the timeout the pending scan is abandoned and scanning resumes
         SetTime(time + 61)
         scanner:TriggerScan()
-        assert.equals("40-60", GetWhoQuery())
+        assert.equals("2-60", GetWhoQuery())
     end)
 
     it("does not attribute a manual /who to a pending class scan", function()
         db.factionrealm.leaderboard[0].players = {
             {name = "Seed", level = 60, classIndex = 1, dingedAt = time},
         }
+        scanner.probe = NO_PROBE
 
         scanner:TriggerScan()
-        assert.equals("30-60 c-\"Warrior\"", GetWhoQuery())
+        assert.equals("2-60 c-\"Warrior\"", GetWhoQuery())
 
-        -- a manual "/who Orgrimmar" style result: wrong class, level below range
+        -- a manual "/who Orgrimmar" style result: wrong class
         local eventBusSpy = spy.on(eventbus, "PublishEvent")
         SetWhoResults({{fullName = "Lowbie", level = 20, filename = "MAGE"}})
         scanner:OnWhoListUpdate()
@@ -216,6 +319,7 @@ describe("Scanner", function()
         db.factionrealm.leaderboard[0].players = {
             {name = "Seed", level = 60, classIndex = 1, dingedAt = time},
         }
+        scanner.probe = NO_PROBE
         scanner.classScanFloor[1] = 2
         scanner:TriggerScan()
 
@@ -231,12 +335,13 @@ describe("Scanner", function()
         db.factionrealm.leaderboard[0].players = {
             {name = "Seed", level = 60, classIndex = 1, dingedAt = time},
         }
+        scanner.probe = NO_PROBE
         _G.LocalizedClassList = function() return {WARRIOR = "Krieger"} end
 
         scanner:TriggerScan()
         _G.LocalizedClassList = nil
 
-        assert.equals('30-60 c-"Krieger"', GetWhoQuery())
+        assert.equals('2-60 c-"Krieger"', GetWhoQuery())
     end)
 
     it("keeps the WoW Forever who panel from popping up during a scan", function()
