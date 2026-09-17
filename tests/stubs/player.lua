@@ -4,10 +4,13 @@
 local whoResults = {}
 local whoTotal = nil
 local whoQuery = nil
+local whoPanelVisible = false
 
 _G.C_FriendList = {
     -- returns (numWhos, totalCount) like the real API
+    -- total: nil = same as the row count, false = the client reports no total
     GetNumWhoResults = function()
+        if whoTotal == false then return #whoResults end
         return #whoResults, whoTotal or #whoResults
     end,
     GetWhoInfo = function(index)
@@ -39,8 +42,12 @@ _G.LFGWhoListFrame = {
     RegisterEvent = function() end,
     UnregisterEvent = function() end,
     IsEventRegistered = function() return true end,
-    IsShown = function() return false end,
+    IsVisible = function() return whoPanelVisible == true end,
 }
+-- see SetWhoPanelVisible(visible): is the who panel on screen
+_G.SetWhoPanelVisible = function(visible)
+    whoPanelVisible = visible or false
+end
 _G.GetRealmName = function()
     return "NubVille"
 end

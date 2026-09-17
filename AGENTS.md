@@ -28,7 +28,7 @@ CI (`.github/workflows/ci.yml`) runs lint + tests in the same image on every pus
 
 Coverage report: `luacov.report.out`. Files not exercised by tests (WoW API dependent): `main.lua`, `options.lua`, `gui/*.lua`, `dev.lua`, `updater.lua`.
 
-Test output silences the addon's debug prints; set `WFR_TEST_DEBUG=1` to see them. The stubs in `tests/stubs/` expose `Set*` helpers (`SetTime`, `SetWhoResults(results, total)`, `SetIsInGuild`, `SetGroupState(members, inRaid, inInstanceGroup)`, `SetTocVersion(tocVersion)`, `C_Timer.Advance`) to drive the world state; extend them rather than mocking inside individual tests. When the Ace3 libraries start using a new WoW global, add it to `tests/stubs/misc.lua` and to `read_globals` in `.luacheckrc`.
+Test output silences the addon's debug prints; set `WFR_TEST_DEBUG=1` to see them. The stubs in `tests/stubs/` expose `Set*` helpers (`SetTime`, `SetWhoResults(results, total)`, `SetIsInGuild`, `SetGroupState(members, inRaid, inInstanceGroup)`, `SetTocVersion(tocVersion)`, `SetWhoPanelVisible(visible)`, `C_Timer.Advance`) to drive the world state; extend them rather than mocking inside individual tests. When the Ace3 libraries start using a new WoW global, add it to `tests/stubs/misc.lua` and to `read_globals` in `.luacheckrc`.
 
 ## Architecture
 

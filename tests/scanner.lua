@@ -44,6 +44,51 @@ describe("Scanner", function()
         assert.equals("40-60", GetWhoQuery())
     end)
 
+    it("treats a result the server truncated as incomplete", function()
+        scanner:TriggerScan()
+        assert.equals("50-60", GetWhoQuery())
+
+        -- one row shown, but the server reports many more matches: the range
+        -- is too wide, so the floor moves up instead of widening further
+        SetWhoResults({{fullName = "Top", level = 60, filename = "MAGE"}}, 120)
+        scanner:OnWhoListUpdate()
+        SetTime(time + 16)
+        scanner:TriggerScan()
+
+        assert.equals("59-60", GetWhoQuery())
+    end)
+
+    it("treats a result with exactly the cap as complete when the server agrees", function()
+        db.factionrealm.leaderboard[0].players = {
+            {name = "Seed", level = 60, classIndex = 1, dingedAt = time},
+        }
+        scanner.classScanFloor[1] = 2
+
+        scanner:TriggerScan()
+        assert.equals("2-60 c-Warrior", GetWhoQuery())
+
+        -- 50 rows shown and the server says there are exactly 50 matches
+        local rows = {}
+        for i = 1, 50 do rows[i] = {fullName = "Warr" .. i, level = 60, filename = "WARRIOR"} end
+        SetWhoResults(rows, 50)
+        scanner:OnWhoListUpdate()
+
+        assert.is_false(scanner.lastResultFull[1])
+        assert.is_not_nil(scanner.classScanComplete[1])
+    end)
+
+    it("falls back to the row cap when the server total is unknown", function()
+        scanner:TriggerScan()
+        assert.equals("50-60", GetWhoQuery())
+
+        local rows = {}
+        for i = 1, 50 do rows[i] = {fullName = "Top" .. i, level = 60, filename = "MAGE"} end
+        SetWhoResults(rows, false)
+        scanner:OnWhoListUpdate()
+
+        assert.is_true(scanner.globalResultFull)
+    end)
+
     it("marks a low-population class complete at the lower bound", function()
         db.factionrealm.leaderboard[0].players = {
             {name = "Seed", level = 60, classIndex = 1, dingedAt = time},
@@ -119,7 +164,7 @@ describe("Scanner", function()
         assert.is_false(scanner.scanPending)
         assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus),
                 WoWForeverRace.Config.Events.SlashWhoResult,
-                {{name = "Warr", level = 45, class = "WARRIOR"}}, 1)
+                {{name = "Warr", level = 45, class = "WARRIOR"}})
     end)
 
     it("restores FriendsFrame when the race finishes mid-scan", function()
@@ -145,20 +190,21 @@ describe("Scanner", function()
         assert.spy(registerSpy).was_called_with(match.is_ref(_G.LFGWhoListFrame), "WHO_LIST_UPDATE")
     end)
 
-    it("does not mark a class complete when the server has more matches than shown", function()
-        db.factionrealm.leaderboard[0].players = {
-            {name = "Seed", level = 60, classIndex = 1, dingedAt = time},
-        }
-        scanner.classScanFloor[1] = 2
+    it("hands short /who results back to chat unless the who panel is on screen", function()
+        local whoToUiSpy = spy.on(_G.C_FriendList, "SetWhoToUi")
 
         scanner:TriggerScan()
-        assert.equals("2-60 c-Warrior", GetWhoQuery())
-
-        SetWhoResults({{fullName = "Warr", level = 45, filename = "WARRIOR"}}, 120)
         scanner:OnWhoListUpdate()
+        assert.spy(whoToUiSpy).was_called_with(false)
 
-        assert.is_nil(scanner.classScanComplete[1])
-        assert.is_true(scanner.lastResultFull[1])
+        whoToUiSpy:clear()
+        SetWhoPanelVisible(true)
+        SetTime(time + 16)
+        scanner:TriggerScan()
+        scanner:OnWhoListUpdate()
+        SetWhoPanelVisible(false)
+
+        assert.spy(whoToUiSpy).was_not_called_with(false)
     end)
 
     it("does not publish players from another realm", function()
