@@ -250,7 +250,7 @@ function WoWForeverRaceScanner:OnWhoListUpdate()
             self.classScanComplete[self.lastScanClassIndex] = GetTime()
         end
     elseif self.probePending then
-        self:RecordProbe(batch, total, resultComplete)
+        self:RecordProbe(batch, total)
     end
     self.probePending = false
     self.pendingScanMin = nil
@@ -266,7 +266,7 @@ end
 
 -- Keeps the unfiltered probe scan as a sample of who is online: the server's match
 -- count plus the levels and classes of the rows it sent, see ProbeFloor.
-function WoWForeverRaceScanner:RecordProbe(batch, total, resultComplete)
+function WoWForeverRaceScanner:RecordProbe(batch, total)
     local probe = {total = total, levels = {}, classCount = {}}
     for _, player in ipairs(batch) do
         table.insert(probe.levels, player.level)
@@ -276,14 +276,6 @@ function WoWForeverRaceScanner:RecordProbe(batch, total, resultComplete)
     end
     table.sort(probe.levels, function(a, b) return a > b end)
     self.probe = probe
-
-    -- everybody online fit in one result, no class has anything to add for now
-    if resultComplete then
-        local now = GetTime()
-        for _, classIndex in ipairs(WoWForeverRace.Config.MopClassIndexes) do
-            self.classScanComplete[classIndex] = now
-        end
-    end
 end
 
 -- Estimates from the probe sample where a class scan has to start to fit under the

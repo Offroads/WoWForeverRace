@@ -92,7 +92,7 @@ describe("Scanner", function()
         assert.equals("4-60 c-\"Warrior\"", GetWhoQuery())
     end)
 
-    it("rests every class when the probe saw everybody online", function()
+    it("still scans the classes when the probe saw everybody online", function()
         db.factionrealm.leaderboard[0].players = {
             {name = "Seed", level = 7, classIndex = 1, dingedAt = time},
         }
@@ -104,8 +104,7 @@ describe("Scanner", function()
         SetTime(time + 16)
         scanner:TriggerScan()
 
-        -- no class scan: straight to the global top range
-        assert.equals("7-60", GetWhoQuery())
+        assert.equals("2-60 c-\"Warrior\"", GetWhoQuery())
     end)
 
     it("treats a result with exactly the cap as complete when the server agrees", function()
@@ -137,8 +136,8 @@ describe("Scanner", function()
         SetWhoResults(rows, false)
         scanner:OnWhoListUpdate()
 
-        -- not complete: the classes are not rested
-        assert.is_nil(scanner.classScanComplete[1])
+        -- no match count, no estimate: the class scans start at the bottom
+        assert.is_nil(scanner:ProbeFloor("MAGE"))
     end)
 
     it("marks a low-population class complete at the lower bound", function()
