@@ -10,8 +10,8 @@ local GetTime = _G.GetTime
 --[[
 Scanner listens passively to WHO_LIST_UPDATE events and publishes results via EventBus.
 
-SendWho() is a protected function in MoP Classic and cannot be called from timers or
-any non-hardware-event context. TriggerScan() is therefore wired to hardware events:
+SendWho() is a restricted function (WoW Forever, MoP Classic) and cannot be called from
+timers or any non-hardware-event context. TriggerScan() is therefore wired to hardware events:
   - WorldFrame OnMouseDown (every in-world click), with a 15s cooldown
   - The minimap icon's OnClick
 
@@ -30,9 +30,14 @@ setmetatable(WoWForeverRaceScanner, {
 
 local SCAN_COOLDOWN  = 15  -- seconds between automatic scans
 local SCAN_TIMEOUT   = 60  -- seconds before an unanswered /who is abandoned
-local WHO_RESULT_CAP = 49  -- WoW caps /who results at this count
+local WHO_RESULT_CAP = 50  -- WoW never returns more than this many /who rows
 local LEVEL_STEP     = 10  -- levels to shift the scan floor up/down
 local CLASS_COMPLETE_TTL = 900  -- seconds before a fully-scanned class is scanned again
+
+-- Blizzard frames that open the who panel on WHO_LIST_UPDATE. WoW Forever moved the
+-- who list into the load-on-demand group finder (LFGWhoListFrame); the other
+-- clients still use FriendsFrame. Looked up by name at scan time.
+local WHO_UI_FRAMES = {"FriendsFrame", "LFGWhoListFrame"}
 
 function WoWForeverRaceScanner.new(Core, DB, EventBus)
     local self = setmetatable({}, WoWForeverRaceScanner)
@@ -71,11 +76,6 @@ function WoWForeverRaceScanner.new(Core, DB, EventBus)
     return self
 end
 
--- Kept for the component lifecycle in main.lua: scans are driven by hardware
--- events (see TriggerScan), so there is no ticker to start.
-function WoWForeverRaceScanner:InitTicker()
-end
-
 function WoWForeverRaceScanner:ResetState()
     self.lastScanTime = -SCAN_COOLDOWN
     self.nextScanClassIdx = 1
@@ -87,13 +87,52 @@ function WoWForeverRaceScanner:ResetState()
     self.globalResultFull = nil
     self.scanPending = false
     self.pendingScanMin = nil
+    self:RestoreWhoUi()
+end
+
+-- Stops the Blizzard who panel from popping up for the response to our scan.
+function WoWForeverRaceScanner:SuppressWhoUi()
+    self.suppressedWhoFrames = {}
+    for _, frameName in ipairs(WHO_UI_FRAMES) do
+        local frame = _G[frameName]
+        if frame and frame.UnregisterEvent then
+            -- only touch frames that are listening, so RestoreWhoUi never
+            -- registers the event on a frame that did not have it
+            if not frame.IsEventRegistered or frame:IsEventRegistered("WHO_LIST_UPDATE") then
+                frame:UnregisterEvent("WHO_LIST_UPDATE")
+                table.insert(self.suppressedWhoFrames, frame)
+            end
+        end
+    end
+    if C_FriendList.SetWhoToUi then C_FriendList.SetWhoToUi(true) end
+end
+
+-- Restores the Blizzard who panel so manual /who works normally again.
+function WoWForeverRaceScanner:RestoreWhoUi()
+    if not self.suppressedWhoFrames then return end
+
+    local whoPanelShown = false
+    for _, frame in ipairs(self.suppressedWhoFrames) do
+        frame:RegisterEvent("WHO_LIST_UPDATE")
+        if frame.IsVisible and frame:IsVisible() then whoPanelShown = true end
+    end
+    self.suppressedWhoFrames = nil
+
+    -- IsVisible, not IsShown: the who list is a tab child that stays "shown" after
+    -- its parent panel closes. The who panel keeps whoToUi on while it is open; otherwise hand short
+    -- manual /who results back to the chat frame
+    if not whoPanelShown and C_FriendList.SetWhoToUi then
+        C_FriendList.SetWhoToUi(false)
+    end
 end
 
 function WoWForeverRaceScanner:OnWhoListUpdate()
     if not self.scanPending then return end
 
-    local total, numShown = C_FriendList.GetNumWhoResults()
-    numShown = numShown or total or 0
+    -- GetNumWhoResults() returns (numWhos, totalCount): the number of rows the
+    -- client received (capped at WHO_RESULT_CAP) and the server-side match count
+    local numShown, total = C_FriendList.GetNumWhoResults()
+    numShown = numShown or 0
 
     -- Collect the rows first: a manual /who fired while our scan is pending
     -- also raises WHO_LIST_UPDATE, and must not be misattributed to the scan.
@@ -142,17 +181,22 @@ function WoWForeverRaceScanner:OnWhoListUpdate()
 
     self.scanPending = false
 
-    -- Restore FriendsFrame so manual /who works normally again.
     -- Must happen before any early return, or manual /who stays broken.
-    local ff = _G.FriendsFrame
-    if ff then ff:RegisterEvent("WHO_LIST_UPDATE") end
+    self:RestoreWhoUi()
 
     if self.DB.factionrealm.finished then
         self.pendingScanMin = nil
         return
     end
 
-    local resultComplete = numShown < WHO_RESULT_CAP
+    -- the result is complete when the server had no more matches than it sent us;
+    -- the row cap is only a fallback for clients that don't report the total
+    local resultComplete
+    if total ~= nil then
+        resultComplete = total <= numShown
+    else
+        resultComplete = numShown < WHO_RESULT_CAP
+    end
 
     if self.lastScanClassIndex then
         self.lastResultFull[self.lastScanClassIndex] = not resultComplete
@@ -172,7 +216,7 @@ function WoWForeverRaceScanner:OnWhoListUpdate()
         table.sort(batch, function(a, b) return a.level > b.level end)
     end
 
-    self.EventBus:PublishEvent(WoWForeverRace.Config.Events.SlashWhoResult, batch, self.lastScanClassIndex)
+    self.EventBus:PublishEvent(WoWForeverRace.Config.Events.SlashWhoResult, batch)
 end
 
 -- TriggerScan sends a /who query for the next class leaderboard that isn't full.
@@ -190,8 +234,7 @@ function WoWForeverRaceScanner:TriggerScan()
         -- scan so a lost reply can't disable scanning for the whole session.
         self.scanPending = false
         self.pendingScanMin = nil
-        local ff = _G.FriendsFrame
-        if ff then ff:RegisterEvent("WHO_LIST_UPDATE") end
+        self:RestoreWhoUi()
     end
 
     if now - self.lastScanTime < SCAN_COOLDOWN then return end
@@ -285,9 +328,7 @@ function WoWForeverRaceScanner:TriggerScan()
     WoWForeverRace:DebugPrint("Scanning /who " .. query)
 
     if C_FriendList and C_FriendList.SendWho then
-        local ff = _G.FriendsFrame
-        if ff then ff:UnregisterEvent("WHO_LIST_UPDATE") end
-        if C_FriendList.SetWhoToUi then C_FriendList.SetWhoToUi(true) end
+        self:SuppressWhoUi()
         self.pendingScanMin = tonumber(string.match(query, "^(%d+)-"))
         self.scanPending = true
         C_FriendList.SendWho(query)

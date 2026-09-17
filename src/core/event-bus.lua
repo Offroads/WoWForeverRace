@@ -27,9 +27,16 @@ end
 
 function WoWForeverRaceEventBus:PublishEvent(event, ...)
     WoWForeverRace:TracePrint("Event published: " .. event)
-    if (self.Listeners[event] ~= nil) then
-        for key in pairs(self.Listeners[event]) do
-            self.Listeners[event][key].Callback(self.Listeners[event][key].Object, ...)
+    local listeners = self.Listeners[event]
+    if listeners == nil then return end
+
+    for _, listener in ipairs(listeners) do
+        -- one failing listener must neither silence the listeners after it nor
+        -- abort the publisher (the rest of a /who batch, a network message);
+        -- the error is handed to WoW's script error handler instead
+        local ok, err = pcall(listener.Callback, listener.Object, ...)
+        if not ok then
+            geterrorhandler()(err)
         end
     end
 end

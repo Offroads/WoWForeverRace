@@ -4,6 +4,7 @@ local WoWForeverRace = _G.WoWForeverRace
 -- WoW API
 local IsInRaid, IsInGroup, GetNumGroupMembers = _G.IsInRaid, _G.IsInGroup, _G.GetNumGroupMembers
 local LE_PARTY_CATEGORY_INSTANCE = _G.LE_PARTY_CATEGORY_INSTANCE
+local C_ChatInfo = _G.C_ChatInfo
 
 -- Libs
 local LibStub = _G.LibStub
@@ -18,7 +19,14 @@ for _, event in pairs(WoWForeverRace.Config.Network.Events) do
 end
 
 local function debugLogPayload(event, payload)
+    -- runs on every message before the consumers do, so it must neither cost
+    -- anything when debug is off nor throw on a malformed payload
+    if not (WoWForeverRace.DB and WoWForeverRace.DB.profile.options.debug) then return end
     if event == WoWForeverRace.Config.Network.Events.PlayerInfoBatch then
+        if type(payload) ~= "table" then
+            WoWForeverRace:DebugPrint("  malformed payload: " .. tostring(payload))
+            return
+        end
         local batchstr, isRebroadcast, classIndex = payload[1], payload[2], payload[3]
         local players = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(batchstr)
         WoWForeverRace:DebugPrint("  rebroadcast=" .. tostring(isRebroadcast) ..
@@ -165,6 +173,13 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
             return
         end
         target = nil
+    end
+
+    -- Modern clients (WoW Forever) reject addon messages while the chat messaging
+    -- lockdown is active; skip instead of queueing doomed sends.
+    if C_ChatInfo and C_ChatInfo.InChatMessagingLockdown and C_ChatInfo.InChatMessagingLockdown() then
+        WoWForeverRace:DebugPrint("Skip " .. event .. " -> " .. channel .. " (chat messaging lockdown)")
+        return
     end
 
     local payload = Serializer:Serialize({event, object})

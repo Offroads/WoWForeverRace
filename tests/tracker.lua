@@ -87,22 +87,22 @@ describe("Tracker", function()
             local pInfo
 
             pInfo = playerInfo("Nubone", 5, DRUIDIDX)
-            tracker:ProcessPlayerInfoBatch({ pInfo, }, false)
+            tracker:ProcessPlayerInfoBatch({ pInfo, })
             assert.spy(lbSpies[0]).was_called_with(match.is_ref(tracker.lbGlobal), pInfo)
             assert.spy(lbSpies[DRUIDIDX]).was_called_with(match.is_ref(tracker.lbPerClass[DRUIDIDX]), pInfo)
 
             pInfo = playerInfo("Nub2", 5, WARRIORIDX)
-            tracker:ProcessPlayerInfoBatch({ pInfo, }, false)
+            tracker:ProcessPlayerInfoBatch({ pInfo, })
             assert.spy(lbSpies[0]).was_called_with(match.is_ref(tracker.lbGlobal), pInfo)
             assert.spy(lbSpies[WARRIORIDX]).was_called_with(match.is_ref(tracker.lbPerClass[WARRIORIDX]), pInfo)
 
             pInfo = playerInfo("Nubthree", 5, PALADINIDX)
-            tracker:ProcessPlayerInfoBatch({ pInfo, }, false)
+            tracker:ProcessPlayerInfoBatch({ pInfo, })
             assert.spy(lbSpies[0]).was_called_with(match.is_ref(tracker.lbGlobal), pInfo)
             assert.spy(lbSpies[PALADINIDX]).was_called_with(match.is_ref(tracker.lbPerClass[PALADINIDX]), pInfo)
 
             pInfo = playerInfo("Nubfour", 5, PRIESTIDX)
-            tracker:ProcessPlayerInfoBatch({ pInfo, }, false)
+            tracker:ProcessPlayerInfoBatch({ pInfo, })
             assert.spy(lbSpies[0]).was_called_with(match.is_ref(tracker.lbGlobal), pInfo)
             assert.spy(lbSpies[PRIESTIDX]).was_called_with(match.is_ref(tracker.lbPerClass[PRIESTIDX]), pInfo)
         end)
@@ -128,23 +128,23 @@ describe("Tracker", function()
         it("should broadcast internal event", function()
             local eventBusSpy = spy.on(eventbus, "PublishEvent")
 
-            tracker:ProcessPlayerInfoBatch({ playerInfo("Nubone", 5), }, false)
+            tracker:ProcessPlayerInfoBatch({ playerInfo("Nubone", 5), })
             assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.Ding,
                     match.is_table(), 1, 1)
 
-            tracker:ProcessPlayerInfoBatch({ playerInfo("Nubone", 6), }, false)
+            tracker:ProcessPlayerInfoBatch({ playerInfo("Nubone", 6), })
             assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.Ding,
                     match.is_table(), 1, 1)
 
-            tracker:ProcessPlayerInfoBatch({ playerInfo("Nub2", 7), }, false)
+            tracker:ProcessPlayerInfoBatch({ playerInfo("Nub2", 7), })
             assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.Ding,
                     match.is_table(), 1, 1)
 
             eventBusSpy:clear()
-            tracker:ProcessPlayerInfoBatch({ playerInfo("Nubone", 6), }, false)
+            tracker:ProcessPlayerInfoBatch({ playerInfo("Nubone", 6), })
             assert.spy(eventBusSpy).was_not_called()
 
-            tracker:ProcessPlayerInfoBatch({ playerInfo("Nubone", 7), }, false)
+            tracker:ProcessPlayerInfoBatch({ playerInfo("Nubone", 7), })
             assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.Ding,
                     match.is_table(), 2, 2)
         end)
@@ -154,7 +154,7 @@ describe("Tracker", function()
 
             tracker:OnNetPlayerInfoBatch({
                 WoWForeverRace.Serializer.SerializePlayerInfoBatch({
-                    {name = "Nubone", level = 7, classIndex = 11, dingedAt = 100},
+                    {name = "Nubone", level = 7, classIndex = 11, dingedAt = 1000000100},
                 }),
                 false
             })
@@ -166,7 +166,7 @@ describe("Tracker", function()
 
             tracker:OnNetPlayerInfoBatch({
                 WoWForeverRace.Serializer.SerializePlayerInfoBatch({
-                    {name = "Nubone", level = 7, classIndex = DRUIDIDX, dingedAt = 100},
+                    {name = "Nubone", level = 7, classIndex = DRUIDIDX, dingedAt = 1000000100},
                 }), false, DRUIDIDX
             })
 
@@ -179,12 +179,69 @@ describe("Tracker", function()
         it("handles unknown classIndex (0) in a batch without error", function()
             tracker:OnNetPlayerInfoBatch({
                 WoWForeverRace.Serializer.SerializePlayerInfoBatch({
-                    {name = "Nubone", level = 7, classIndex = 0, dingedAt = 100},
+                    {name = "Nubone", level = 7, classIndex = 0, dingedAt = 1000000100},
                 }), false, 0
             })
 
             assert.equals(1, #db.factionrealm.leaderboard[0].players)
             assert.equals(0, db.factionrealm.leaderboard[0].players[1].classIndex)
+        end)
+
+        it("ignores player info without a name", function()
+            local eventBusSpy = spy.on(eventbus, "PublishEvent")
+
+            tracker:ProcessPlayerInfo({level = 7, classIndex = DRUIDIDX})
+            tracker:ProcessPlayerInfo({name = "", level = 7, classIndex = DRUIDIDX})
+
+            assert.equals(0, #db.factionrealm.leaderboard[0].players)
+            assert.is_nil(next(db.factionrealm.playerHistory))
+            assert.spy(eventBusSpy).was_not_called()
+        end)
+
+        it("ignores player info with an invalid level", function()
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 0))
+            tracker:ProcessPlayerInfo(playerInfo("Nubtwo", "7"))
+            tracker:ProcessPlayerInfo(playerInfo("Nubthree", config.MaxLevel + 1))
+
+            assert.equals(0, #db.factionrealm.leaderboard[0].players)
+        end)
+
+        it("ignores player info with a non-integer level", function()
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 42.5))
+
+            assert.equals(0, #db.factionrealm.leaderboard[0].players)
+        end)
+
+        it("ignores player info with a forged or corrupt dingedAt", function()
+            local eventBusSpy = spy.on(eventbus, "PublishEvent")
+
+            tracker:ProcessPlayerInfo(playerInfo("Zero", 60, DRUIDIDX, 0))
+            tracker:ProcessPlayerInfo(playerInfo("Negative", 60, DRUIDIDX, -5))
+            tracker:ProcessPlayerInfo(playerInfo("Ancient", 60, DRUIDIDX, 1))
+            tracker:ProcessPlayerInfo(playerInfo("Future", 60, DRUIDIDX, time + 3600))
+            tracker:ProcessPlayerInfo(playerInfo("Infinite", 60, DRUIDIDX, math.huge))
+            tracker:ProcessPlayerInfo({name = "Text", level = 60, classIndex = DRUIDIDX, dingedAt = "soon"})
+
+            assert.equals(0, #db.factionrealm.leaderboard[0].players)
+            assert.is_nil(db.factionrealm.raceStartedAt)
+            assert.is_nil(db.factionrealm.firstToLevel[0])
+            assert.spy(eventBusSpy).was_not_called()
+        end)
+
+        it("accepts a dingedAt slightly ahead of our clock", function()
+            tracker:ProcessPlayerInfo(playerInfo("Ahead", 60, DRUIDIDX, time + 60))
+
+            assert.equals(1, #db.factionrealm.leaderboard[0].players)
+        end)
+
+        it("ignores malformed network batches", function()
+            assert.has_no.errors(function()
+                tracker:OnNetPlayerInfoBatch("not a table")
+                tracker:OnNetPlayerInfoBatch({})
+                tracker:OnNetPlayerInfoBatch({42})
+                tracker:OnNetPlayerInfoBatch({{}})
+            end)
+            assert.equals(0, #db.factionrealm.leaderboard[0].players)
         end)
 
         it("should broadcast to network OnSlashWhoResult", function()
@@ -395,7 +452,7 @@ describe("Tracker", function()
             local nub5 = playerInfo("Nubfive", 5, PRIESTIDX, time - 100)
             tracker:OnSyncResult({
                 nub3, nub4, nub5,
-            }, false)
+            })
 
             assert.spy(lbSpies[0]).was_called_with(match.is_ref(tracker.lbGlobal), nub3)
             assert.spy(lbSpies[DRUIDIDX]).was_called_with(match.is_ref(tracker.lbPerClass[DRUIDIDX]), nub3)

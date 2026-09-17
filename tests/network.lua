@@ -63,6 +63,30 @@ describe("Network", function()
         end)
     end)
 
+    it("drops malformed payloads without raising a receive error", function()
+        local core = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
+        local eventbus = WoWForeverRace.EventBus()
+        local network = WoWForeverRace.Network(core, eventbus)
+        local db = LibStub("AceDB-3.0"):New("WoWForeverRace_DB", WoWForeverRace.DefaultDB, true)
+        db:ResetDB()
+        db.profile.options.debug = true
+        WoWForeverRace.DB = db
+        local printStub = stub(WoWForeverRace, "PPrint")
+        local debugStub = stub(WoWForeverRace, "DebugPrint")
+
+        for _, payload in ipairs({42, "junk", {}, {42}}) do
+            local serialized = Serializer:Serialize({NetworkEvents.PlayerInfoBatch, payload})
+            local message = EncodeTable:Encode(LibCompress:CompressHuffman(serialized))
+            network:HandleAddonMessage(WoWForeverRace.Config.Network.Prefix, message,
+                    "WHISPER", "Dude-NubVille")
+        end
+
+        assert.stub(printStub).was_not_called()
+        printStub:revert()
+        debugStub:revert()
+        WoWForeverRace.DB = nil
+    end)
+
     it("does not publish local events received over the wire", function()
         local core = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
         local eventbus = WoWForeverRace.EventBus()

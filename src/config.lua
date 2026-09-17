@@ -25,13 +25,13 @@ local WoWForeverRaceConfig = {
     Version = "@project-version@",
     Debug = false,
     Trace = false,
-    LibWhoDebug = false,
     --@debug@
     Debug = true,
     Trace = false,
     --@end-debug@
 
-    MaxLevel = 90,
+    -- defaults target WoW Forever, overwritten at startup by ApplyExpansionConfig
+    MaxLevel = 60,
     MaxLeaderboardSize = 50,
 
     -- OfferSync throttle time window
@@ -39,7 +39,9 @@ local WoWForeverRaceConfig = {
     RetrySyncWait = 30,
     OfferSyncThrottle = 30,
 
-    AceConfig = "The Classic Race",
+    -- display name used by every window title, the minimap tooltip and the LDB text
+    Name = "WoWForeverRace",
+    AceConfig = "WoWForeverRace",
     LDB = "WoWForeverRace",
 
     Classes = {
@@ -57,8 +59,9 @@ local WoWForeverRaceConfig = {
         "DEMONHUNTER",
     },
 
-    -- Class indexes valid in MoP Classic (DemonHunter = 12 doesn't exist)
-    MopClassIndexes = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+    -- Class indexes playable on the running client (name is historical), filled
+    -- from ExpansionData at startup. Default: the 9 WoW Forever classes
+    MopClassIndexes = {1, 2, 3, 4, 5, 7, 8, 9, 11},
 
     -- English class names used in /who query filters (c-ClassName)
     WhoClassFilter = {
@@ -109,6 +112,8 @@ local WoWForeverRaceConfig = {
     },
 
     ExpansionData = {
+        -- WoW Forever: level 60, Paladin and Shaman playable by both factions
+        FOREVER = { maxLevel = 60,  validClassIndexes = {1,2,3,4,5,7,8,9,11} },
         CLASSIC = { maxLevel = 60,  validClassIndexes = {1,2,3,4,5,7,8,9,11}, hordeOnly = {7}, allianceOnly = {2} },
         TBC     = { maxLevel = 70,  validClassIndexes = {1,2,3,4,5,7,8,9,11} },
         WRATH   = { maxLevel = 80,  validClassIndexes = {1,2,3,4,5,6,7,8,9,11} },
@@ -185,7 +190,10 @@ end
 
 function WoWForeverRaceConfig:DetectExpansion()
     local _, _, _, tocVersion = GetBuildInfo()
-    if tocVersion < 20000 then
+    -- WoW Forever is the 1.60+ client line, Classic Era stays on 1.13-1.15
+    if tocVersion >= 16000 and tocVersion < 20000 then
+        return "FOREVER"
+    elseif tocVersion < 20000 then
         return "CLASSIC"
     elseif tocVersion < 30000 then
         return "TBC"
