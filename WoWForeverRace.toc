@@ -3,7 +3,7 @@
 ## Author: Offroad
 ## Version: @project-version@
 ## Notes: Keep track of the top 50 players in the race to max level.
-## IconTexture: Interface\ICONS\Ability_Mount_JungleTiger
+## IconTexture: Interface\AddOns\WoWForeverRace\media\icon
 ## DefaultState: Enabled
 ## LoadOnDemand: 0
 ## SavedVariables: WoWForeverRace_DB
