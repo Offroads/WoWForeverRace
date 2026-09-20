@@ -90,6 +90,10 @@ _G.GetCurrentRegion = function()
     return 3 -- EU, from ("US", "KR", "EU", "TW", "CN")
 end
 
+_G.GetCurrentRegionName = function()
+    return "EU"
+end
+
 _G.UnitFullName = function(target)
     -- @TODO: returns name-server for cross realm, should make a test for this
     if target == "player" then
