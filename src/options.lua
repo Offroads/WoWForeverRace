@@ -130,7 +130,7 @@ function WoWForeverRace:RegisterOptions()
     local ldb = LibDataBroker:NewDataObject(WoWForeverRace.Config.LDB, {
         type = "data source",
         text = WoWForeverRace.Config.Name,
-        icon = "Interface\\ICONS\\Ability_Mount_JungleTiger",
+        icon = "Interface\\AddOns\\WoWForeverRace\\media\\icon",
         OnClick = function(_, ...) _self:MinimapIconClick(...) end
     })
     LibDBIcon:Register(WoWForeverRace.Config.LDB, ldb, self.DB.profile.options.minimap)

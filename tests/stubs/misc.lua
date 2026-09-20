@@ -32,6 +32,16 @@ _G.SendAddonMessage = function() end
 _G.BNSendGameData = function() end
 _G.C_BattleNet = {}
 
+-- realm rulesets: on WoW Forever clients AceDB keys the realm by ruleset
+-- ("Hardcore", "RP", "PvP", else "PvE") instead of by GetRealmName()
+_G.Enum = _G.Enum or {}
+_G.Enum.GameRule = { HardcoreRuleset = 1, RPRuleset = 2, PvPRuleset = 3 }
+_G.C_GameRules = {
+    IsGameRuleActive = function()     -- AceDB
+        return false
+    end,
+}
+
 -- Mockable clock: GetTime() (uptime) and GetServerTime() (epoch) both return
 -- the same controllable value; SetTime() moves it.
 local time = 1000000000
