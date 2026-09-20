@@ -18,6 +18,8 @@ ignore:
     - *luacov*
     - *.rockspec
     - *.sh
+    - *.svg
+    - *.png
     - Makefile
     - Dockerfile
     - docker-compose.yml

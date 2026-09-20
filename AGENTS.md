@@ -117,6 +117,7 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 | `src/core/sync.lua` | Login / guild / buddy / group sync negotiation |
 | `src/core/serializer.lua` | Network encoding/decoding |
 | `src/dev.lua` | Dev-only slash commands (unpackaged checkout only) |
+| `media/icon.tga` | In-game icon, 64x64 (TOC `IconTexture`, minimap button); `icon.svg` is its source, `logo.svg` / `logo.png` the full logo. Only the TGA is packaged |
 | `tests/testbase.lua` | Test bootstrap: stubs, libs, addon sources |
 | `tests/stubs/` | WoW API stubs with `Set*` helpers |
 | `.busted` | busted config (roots, patterns, `quick` run without coverage) |

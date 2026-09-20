@@ -110,7 +110,7 @@ function Invoke-Deploy {
 
     if ($Copy) {
         New-Item -ItemType Directory -Path $destination | Out-Null
-        foreach ($entry in @("$AddonName.toc", "libs.xml", "src", "libs")) {
+        foreach ($entry in @("$AddonName.toc", "libs.xml", "src", "libs", "media")) {
             Copy-Item (Join-Path $RepoRoot $entry) -Destination $destination -Recurse
         }
         Write-Host "Copied addon to $destination"

@@ -128,3 +128,13 @@ that broad integration coverage would be expensive to maintain.
 For this reason we try to avoid too much logic in these places!
 
 See [AGENTS.md](AGENTS.md) for the architecture overview and conventions.
+
+## Credits and license
+WoWForeverRace is based on [TheClassicRace](https://github.com/rubensayshi/TheClassicRace)
+by Ruben de Vries, and still speaks its addon-channel protocol. Both are released
+under the [MIT License](LICENSE.md).
+
+The release zip bundles the third-party libraries listed in `.pkgmeta` (Ace3,
+CallbackHandler, LibStub, LibDataBroker, LibDBIcon, LibCompress). They are not
+covered by this license and keep their own, e.g. Ace3 is BSD-style, LibStub is
+public domain and LibCompress is GPL v2.
