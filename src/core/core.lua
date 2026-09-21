@@ -2,7 +2,7 @@
 local WoWForeverRace = _G.WoWForeverRace
 
 -- WoW API
-local GetServerTime, UnitClass = _G.GetServerTime, _G.UnitClass
+local GetServerTime, UnitClass, UnitFactionGroup = _G.GetServerTime, _G.UnitClass, _G.UnitFactionGroup
 
 ---@class WoWForeverRaceCore
 ---@field Config WoWForeverRaceConfig
@@ -73,6 +73,13 @@ end
 function WoWForeverRaceCore:MyClass()
     local _, className, _ = UnitClass("player")
     return self:ClassIndex(className), className
+end
+
+-- The English faction tag ("Horde" / "Alliance"), the same value AceDB scopes the
+-- factionrealm data by; never the localized second return.
+function WoWForeverRaceCore:MyFaction()
+    local faction = UnitFactionGroup("player")
+    return faction
 end
 
 function WoWForeverRaceCore:ClassIndex(className)

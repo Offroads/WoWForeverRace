@@ -11,6 +11,18 @@ describe("Core", function()
 
     after_each(function()
         SetTime(1000000000)
+        SetFaction(nil)
+    end)
+
+    describe("MyFaction", function()
+        it("returns the player's faction", function()
+            assert.equals("Alliance", core:MyFaction())
+        end)
+
+        it("follows the faction of the character that is logged in", function()
+            SetFaction("Horde")
+            assert.equals("Horde", core:MyFaction())
+        end)
     end)
 
     describe("PredatesLaunch", function()

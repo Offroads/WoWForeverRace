@@ -126,12 +126,20 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
             return
         end
 
-        local event, payload = object[1], object[2]
+        local event, payload, faction = object[1], object[2], object[3]
 
         -- Local EventBus events are not part of the addon-wire protocol. Without
         -- this guard, another addon client could invoke local state transitions.
         if type(event) ~= "string" or not NetworkEvents[event] then
             WoWForeverRace:DebugPrint("Ignored unknown network event: " .. tostring(event))
+            return
+        end
+
+        -- The race is per faction and nothing else on the wire tells the factions
+        -- apart, so only messages tagged with our own faction are accepted. An
+        -- untagged message comes from an older client, whose faction is unknown.
+        if type(faction) ~= "string" or faction ~= self.Core:MyFaction() then
+            WoWForeverRace:DebugPrint("Ignored " .. event .. " from another or unknown faction: " .. tostring(faction))
             return
         end
 
@@ -241,7 +249,9 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
         target = nil
     end
 
-    local payload = Serializer:Serialize({event, object})
+    -- the third element locks the data to our faction, see HandleAddonMessage;
+    -- older clients only read the first two
+    local payload = Serializer:Serialize({event, object, self.Core:MyFaction()})
     local compressed = LibCompress:CompressHuffman(payload)
     local encoded = EncodeTable:Encode(compressed)
 
