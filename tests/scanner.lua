@@ -31,6 +31,50 @@ describe("Scanner", function()
 
         assert.equals("2-60", GetWhoQuery())
     end)
+    it("waits for the cooldown between two scans", function()
+        scanner:TriggerScan()
+        scanner:OnWhoListUpdate()
+        ResetWhoQuery()
+
+        SetTime(time + 4)
+        scanner:TriggerScan()
+        assert.is_nil(GetWhoQuery())
+
+        SetTime(time + 5)
+        scanner:TriggerScan()
+        assert.equals("2-60", GetWhoQuery())
+    end)
+
+    it("scans less often once a /who reply was lost", function()
+        scanner:TriggerScan()
+        -- no reply: the timeout gives up on the scan
+        SetTime(time + 60)
+        _G.C_Timer.Advance(60)
+        assert.is_false(scanner.scanPending)
+
+        scanner:TriggerScan()
+        scanner:OnWhoListUpdate()
+        ResetWhoQuery()
+
+        SetTime(time + 60 + 9)
+        scanner:TriggerScan()
+        assert.is_nil(GetWhoQuery())
+
+        SetTime(time + 60 + 10)
+        scanner:TriggerScan()
+        assert.equals("2-60", GetWhoQuery())
+    end)
+
+    it("keeps the scan rate when the reply was lost to somebody else's /who", function()
+        scanner:TriggerScan()
+        scanner:OnSendWho()
+        SetTime(time + 60)
+        _G.C_Timer.Advance(60)
+
+        assert.is_false(scanner.scanPending)
+        assert.equals(5, scanner.scanCooldown)
+    end)
+
     it("ignores WHO_LIST_UPDATE events that do not belong to a scan", function()
         local eventBusSpy = spy.on(eventbus, "PublishEvent")
 

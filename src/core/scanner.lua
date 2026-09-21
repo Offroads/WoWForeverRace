@@ -14,7 +14,7 @@ Scanner listens passively to WHO_LIST_UPDATE events and publishes results via Ev
 
 SendWho() is a restricted function in WoW Forever and cannot be called from
 timers or any non-hardware-event context. TriggerScan() is therefore wired to hardware events:
-  - WorldFrame OnMouseDown (every in-world click), with a 15s cooldown
+  - WorldFrame OnMouseDown (every in-world click), with a cooldown (SCAN_COOLDOWN)
   - The minimap icon's OnClick
 
 This mirrors the CensusPlusClassic approach: piggyback on the player's existing
@@ -30,7 +30,8 @@ setmetatable(WoWForeverRaceScanner, {
     end,
 })
 
-local SCAN_COOLDOWN  = 15  -- seconds between automatic scans
+local SCAN_COOLDOWN  = 5   -- seconds between automatic scans, doubled whenever a reply is lost
+local SCAN_COOLDOWN_MAX = 30
 local SCAN_TIMEOUT   = 60  -- seconds before an unanswered /who is abandoned
 local WHO_RESULT_CAP = 50  -- WoW never returns more than this many /who rows
 local CLASS_COMPLETE_TTL = 900  -- seconds before a fully-scanned class or race is scanned again
@@ -46,7 +47,8 @@ function WoWForeverRaceScanner.new(Core, DB, EventBus)
     self.Core = Core
     self.DB = DB
     self.EventBus = EventBus
-    self.lastScanTime = -SCAN_COOLDOWN
+    self.lastScanTime = -SCAN_COOLDOWN_MAX
+    self.scanCooldown = SCAN_COOLDOWN
     -- The filtered scans cycle through slots: the classes and the races of our
     -- faction (ScanSlots), classes first. The per-class state below is keyed by
     -- the slot's leaderboard index, so it serves the race slots as well.
@@ -93,7 +95,8 @@ function WoWForeverRaceScanner.new(Core, DB, EventBus)
 end
 
 function WoWForeverRaceScanner:ResetState()
-    self.lastScanTime = -SCAN_COOLDOWN
+    self.lastScanTime = -SCAN_COOLDOWN_MAX
+    self.scanCooldown = SCAN_COOLDOWN
     self.nextScanClassIdx = 1
     self.nextScanRaceIdx = 1
     self.classScansSinceRace = 0
@@ -113,6 +116,13 @@ end
 
 -- Gives up on the pending scan (lost reply) and hands the who UI back.
 function WoWForeverRaceScanner:AbandonScan()
+    -- The server answers /who only so often and drops what comes in faster. There is
+    -- no API for that limit, so a lost reply slows the scans down for the session
+    -- (unless somebody else's /who explains the loss).
+    if self.scanPending and not self.foreignWhoSeen then
+        self.scanCooldown = math.min(self.scanCooldown * 2, SCAN_COOLDOWN_MAX)
+        WoWForeverRace:DebugPrint("Lost a /who reply, scanning every " .. self.scanCooldown .. "s from now on")
+    end
     self.scanPending = false
     self.pendingScanMin = nil
     self:RestoreWhoUi()
@@ -439,7 +449,7 @@ end
 -- TriggerScan sends a /who query for the next class or race leaderboard that isn't final.
 -- Once all of them are it falls back to a global level scan.
 -- MUST be called from a hardware event context (mouse click, key press).
--- Safe to call frequently; enforces a 15s cooldown internally.
+-- Safe to call frequently; enforces a cooldown internally.
 function WoWForeverRaceScanner:TriggerScan()
     local now = GetTime()
 
@@ -454,7 +464,7 @@ function WoWForeverRaceScanner:TriggerScan()
 
     if self.DB.factionrealm.finished then return end
 
-    if now - self.lastScanTime < SCAN_COOLDOWN then return end
+    if now - self.lastScanTime < self.scanCooldown then return end
     self.lastScanTime = now
 
     local maxLevel   = WoWForeverRace.Config.MaxLevel
