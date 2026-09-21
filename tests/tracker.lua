@@ -367,6 +367,148 @@ describe("Tracker", function()
         end)
     end)
 
+    describe("Realm launch", function()
+        local launchAt = time - 1000
+
+        before_each(function()
+            -- the launch has passed; shadow the real (future) Config value
+            core.Config = setmetatable({RealmLaunchAt = launchAt}, {__index = WoWForeverRace.Config})
+        end)
+
+        it("ignores player info from before the launch", function()
+            tracker:ProcessPlayerInfo(playerInfo("Beta", 10, DRUIDIDX, launchAt - 1))
+            tracker:ProcessPlayerInfo(playerInfo("Live", 5, DRUIDIDX, launchAt))
+
+            assert.equals(1, #db.factionrealm.leaderboard[0].players)
+            assert.equals("Live", db.factionrealm.leaderboard[0].players[1].name)
+            assert.is_nil(db.factionrealm.playerHistory["Beta"])
+            assert.equals(launchAt, db.factionrealm.raceStartedAt)
+        end)
+
+        it("OnFTLSyncResult ignores records and realmOpenedAt from before the launch", function()
+            tracker:OnFTLSyncResult({
+                [0] = {
+                    [10] = {name = "Beta", classIndex = WARRIORIDX, dingedAt = launchAt - 1},
+                    [9] = {name = "Live", classIndex = WARRIORIDX, dingedAt = launchAt + 1},
+                },
+            }, launchAt - 500)
+
+            assert.is_nil(db.factionrealm.firstToLevel[0][10])
+            assert.equals("Live", db.factionrealm.firstToLevel[0][9].name)
+            assert.is_nil(db.factionrealm.realmOpenedAt)
+            assert.equals(launchAt + 1, db.factionrealm.raceStartedAt)
+        end)
+
+        it("OnPHSyncResult ignores levels from before the launch", function()
+            tracker:OnPHSyncResult({
+                ["Remote"] = {classIndex = WARRIORIDX, levels = {[5] = launchAt - 1, [6] = launchAt + 1}},
+            })
+
+            assert.is_nil(db.factionrealm.playerHistory["Remote"].levels[5])
+            assert.equals(launchAt + 1, db.factionrealm.playerHistory["Remote"].levels[6])
+        end)
+
+        describe("PurgePreLaunchData", function()
+            local launched
+
+            before_each(function()
+                -- collect beta data while the launch is still ahead, then let it pass
+                launched = core.Config
+                core.Config = setmetatable({RealmLaunchAt = time + 1000}, {__index = WoWForeverRace.Config})
+                db.factionrealm.realmOpenedAt = launchAt - 5000
+                db.factionrealm.buddies["BetaBuddy"] = {lastSeen = launchAt - 10}
+                db.factionrealm.buddies["LiveBuddy"] = {lastSeen = launchAt + 10}
+                db.profile.options.networking = false
+                tracker:ProcessPlayerInfo(playerInfo("Beta", 10, DRUIDIDX, launchAt - 100))
+                tracker:ProcessPlayerInfo(playerInfo("Both", 4, WARRIORIDX, launchAt - 50))
+                tracker:ProcessPlayerInfo(playerInfo("Both", 5, WARRIORIDX, launchAt + 50))
+                tracker:ProcessPlayerInfo(playerInfo("Live", 3, DRUIDIDX, launchAt + 10))
+            end)
+
+            it("does nothing while the launch is still ahead", function()
+                tracker:PurgePreLaunchData()
+
+                assert.equals(3, #db.factionrealm.leaderboard[0].players)
+                assert.equals(launchAt - 5000, db.factionrealm.realmOpenedAt)
+            end)
+
+            it("drops only the race data from before the launch", function()
+                db.factionrealm.finished = true
+                core.Config = launched
+                tracker:PurgePreLaunchData()
+
+                local players = db.factionrealm.leaderboard[0].players
+                assert.equals(2, #players)
+                assert.equals("Both", players[1].name)
+                assert.equals("Live", players[2].name)
+                assert.equals(5, db.factionrealm.leaderboard[0].highestLevel)
+                assert.equals(2, db.factionrealm.leaderboard[0].minLevel)
+                assert.equals(1, #db.factionrealm.leaderboard[DRUIDIDX].players)
+
+                assert.is_nil(db.factionrealm.firstToLevel[0][10])
+                assert.is_nil(db.factionrealm.firstToLevel[0][4])
+                assert.equals("Both", db.factionrealm.firstToLevel[0][5].name)
+                assert.is_nil(db.factionrealm.playerHistory["Beta"])
+                assert.is_nil(db.factionrealm.playerHistory["Both"].levels[4])
+                assert.equals(launchAt + 50, db.factionrealm.playerHistory["Both"].levels[5])
+
+                assert.equals(launchAt + 10, db.factionrealm.raceStartedAt)
+                assert.equals(launchAt, db.factionrealm.realmOpenedAt)
+                assert.is_false(db.factionrealm.finished)
+
+                assert.is_nil(db.factionrealm.buddies["BetaBuddy"])
+                assert.is_not_nil(db.factionrealm.buddies["LiveBuddy"])
+
+                -- settings stay
+                assert.is_false(db.profile.options.networking)
+            end)
+
+            it("runs from the discovery beacon when the launch passes mid-session", function()
+                core.Config = launched
+                tracker:SendDiscoveryBeacon()
+
+                assert.equals(2, #db.factionrealm.leaderboard[0].players)
+            end)
+
+            it("runs before a ding is processed, so a beta record cannot hold its slot", function()
+                core.Config = launched
+                tracker:ProcessPlayerInfo(playerInfo("First", 10, WARRIORIDX, launchAt + 60))
+
+                assert.equals("First", db.factionrealm.firstToLevel[0][10].name)
+            end)
+
+            it("runs before a sync result is merged, so a beta record cannot hold its slot", function()
+                core.Config = launched
+                tracker:OnFTLSyncResult({
+                    [0] = {[10] = {name = "First", classIndex = WARRIORIDX, dingedAt = launchAt + 60}},
+                })
+                assert.equals("First", db.factionrealm.firstToLevel[0][10].name)
+            end)
+
+            it("runs before a history chunk is merged, so a beta level cannot hold its slot", function()
+                core.Config = launched
+                tracker:OnPHSyncResult({
+                    ["Both"] = {classIndex = WARRIORIDX, levels = {[4] = launchAt + 20}},
+                })
+                assert.equals(launchAt + 20, db.factionrealm.playerHistory["Both"].levels[4])
+            end)
+
+            it("runs at login", function()
+                core.Config = launched
+                WoWForeverRace.Tracker(config, core, db, eventbus, network)
+
+                assert.equals(2, #db.factionrealm.leaderboard[0].players)
+            end)
+        end)
+
+        it("accepts data from before the launch while the launch is still ahead", function()
+            core.Config = setmetatable({RealmLaunchAt = time + 1000}, {__index = WoWForeverRace.Config})
+            tracker:ProcessPlayerInfo(playerInfo("Beta", 10, DRUIDIDX, time - 500))
+
+            assert.equals("Beta", db.factionrealm.leaderboard[0].players[1].name)
+        end)
+    end)
+
     describe("RaceFinished", function()
         -- fills the class leaderboards with max-level players, optionally
         -- leaving some class boards one player short

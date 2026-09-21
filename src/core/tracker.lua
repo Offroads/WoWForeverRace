@@ -50,8 +50,11 @@ function WoWForeverRaceTracker.new(Config, Core, DB, EventBus, Network)
     self.pendingDings = {}
     self.dingPushPending = false
 
+    self.launchPurged = false      -- true once PurgePreLaunchData ran after the realm launch
+
     self:ReinitLeaderboards()
     self:NormalizeDB()
+    self:PurgePreLaunchData()
 
     -- subscribe to network events
     EventBus:RegisterCallback(self.Config.Network.Events.PlayerInfoBatch, self, self.OnNetPlayerInfoBatch)
@@ -103,6 +106,87 @@ function WoWForeverRaceTracker:NormalizeDB()
     end
 
     self:PrunePlayerHistory()
+end
+
+-- The released race starts from fresh leaderboards: once the realm launch has passed, drops the
+-- race data collected before it (beta) and the buddies met before it from this faction-realm.
+-- Settings and whatever was collected since the launch stay. Runs once per session, at login or when the launch passes.
+function WoWForeverRaceTracker:PurgePreLaunchData()
+    if self.launchPurged or not self.Core:HasLaunched() then
+        return
+    end
+    self.launchPurged = true
+
+    local db = self.DB.factionrealm
+    local purged = false
+
+    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
+        local lb = db.leaderboard[classIndex]
+        if lb then
+            local highestLevel = 1
+            local removed = false
+            for i = #lb.players, 1, -1 do
+                if self.Core:PredatesLaunch(lb.players[i].dingedAt) then
+                    table.remove(lb.players, i)
+                    removed = true
+                else
+                    highestLevel = math.max(highestLevel, lb.players[i].level)
+                end
+            end
+            if removed then
+                -- no longer full, so every level counts again
+                lb.minLevel = 2
+                lb.highestLevel = highestLevel
+                purged = true
+            end
+        end
+    end
+
+    local raceStartedAt = nil
+    for classFilter, levels in pairs(db.firstToLevel or {}) do
+        for level, record in pairs(levels) do
+            if self.Core:PredatesLaunch(record.dingedAt) then
+                levels[level] = nil
+                purged = true
+            elseif classFilter == 0 and (raceStartedAt == nil or record.dingedAt < raceStartedAt) then
+                raceStartedAt = record.dingedAt
+            end
+        end
+    end
+
+    for name, hist in pairs(db.playerHistory or {}) do
+        for level, dingedAt in pairs(hist.levels or {}) do
+            if self.Core:PredatesLaunch(dingedAt) then
+                hist.levels[level] = nil
+                purged = true
+            end
+        end
+        if hist.levels == nil or next(hist.levels) == nil then
+            db.playerHistory[name] = nil
+        end
+    end
+
+    -- beta characters don't exist on the released realm, so neither do the buddies met there
+    for name, buddy in pairs(db.buddies or {}) do
+        if buddy.lastSeen == nil or self.Core:PredatesLaunch(buddy.lastSeen) then
+            db.buddies[name] = nil
+        end
+    end
+
+    if self.Core:PredatesLaunch(db.raceStartedAt) then
+        db.raceStartedAt = raceStartedAt
+    end
+    if self.Core:PredatesLaunch(db.realmOpenedAt) then
+        db.realmOpenedAt = self.Core:LaunchTime()
+        purged = true
+    end
+
+    if purged then
+        WoWForeverRace:DebugPrint("Dropped race data from before the realm launch")
+        -- a race finished on the beta says nothing about the released one
+        db.finished = false
+        self.EventBus:PublishEvent(self.Config.Events.RefreshGUI)
+    end
 end
 
 -- A leaderboard is final when it's full and its lowest member has reached max
@@ -383,6 +467,8 @@ end
 -- 5-second window for others to request our data.
 -- Guild sync is handled separately by Sync:InitGuildTicker().
 function WoWForeverRaceTracker:SendDiscoveryBeacon()
+    -- the ticker doubles as the clock that notices the realm launch passing mid-session
+    self:PurgePreLaunchData()
     if self.DB.factionrealm.finished then return end
     if not self.DB.profile.options.networking then return end
     if #self.DB.factionrealm.leaderboard[0].players == 0 then return end
@@ -485,6 +571,10 @@ end
 ProcessPlayerInfo updates the leaderboard and triggers notifications accordingly
 ]]--
 function WoWForeverRaceTracker:ProcessPlayerInfo(playerInfo)
+    -- beta records must not hold a slot against the first dings after the launch
+    -- (same in OnPHSyncResult and OnFTLSyncResult)
+    self:PurgePreLaunchData()
+
     -- don't process more player info when we know the race has finished
     if self.DB.factionrealm.finished then
         return
@@ -500,6 +590,10 @@ function WoWForeverRaceTracker:ProcessPlayerInfo(playerInfo)
     if type(playerInfo.dingedAt) ~= "number" or playerInfo.dingedAt ~= playerInfo.dingedAt
             or playerInfo.dingedAt < MIN_DINGED_AT or playerInfo.dingedAt > now + MAX_CLOCK_SKEW then
         WoWForeverRace:DebugPrint("Ignored player info with invalid dingedAt: " .. tostring(playerInfo.dingedAt))
+        return
+    end
+    if self.Core:PredatesLaunch(playerInfo.dingedAt) then
+        WoWForeverRace:DebugPrint("Ignored player info from before the realm launch: " .. tostring(playerInfo.dingedAt))
         return
     end
     -- keep timestamps integral: the wire format truncates to whole seconds, so a
@@ -633,6 +727,7 @@ end
 -- monotonic, so repeated exchanges converge instead of ping-ponging.
 -- batch = {[name] = {classIndex = ci, levels = {[level] = dingedAt}}}
 function WoWForeverRaceTracker:OnPHSyncResult(batch)
+    self:PurgePreLaunchData()
     local playerHistory = self.DB.factionrealm.playerHistory
 
     for name, remote in pairs(batch) do
@@ -649,7 +744,7 @@ function WoWForeverRaceTracker:OnPHSyncResult(batch)
 
             for level, dingedAt in pairs(remote.levels) do
                 if type(level) == "number" and level >= 2 and level <= self.Config.MaxLevel
-                        and type(dingedAt) == "number" then
+                        and type(dingedAt) == "number" and not self.Core:PredatesLaunch(dingedAt) then
                     if hist.levels[level] == nil or dingedAt < hist.levels[level] then
                         hist.levels[level] = math.floor(dingedAt)
                     end
@@ -660,11 +755,14 @@ function WoWForeverRaceTracker:OnPHSyncResult(batch)
 end
 
 -- Merges received firstToLevel data from a sync partner, keeping the earliest record per slot.
--- Also merges realmOpenedAt, keeping the earliest (closest to actual realm launch).
+-- Also merges realmOpenedAt, keeping the earliest (closest to actual realm launch); once the
+-- launch has passed, a value from before it is ignored.
 function WoWForeverRaceTracker:OnFTLSyncResult(ftldb, remoteRealmOpenedAt)
+    self:PurgePreLaunchData()
     local db = self.DB.factionrealm
 
-    if remoteRealmOpenedAt and (db.realmOpenedAt == nil or remoteRealmOpenedAt < db.realmOpenedAt) then
+    if remoteRealmOpenedAt and not self.Core:PredatesLaunch(remoteRealmOpenedAt)
+            and (db.realmOpenedAt == nil or remoteRealmOpenedAt < db.realmOpenedAt) then
         db.realmOpenedAt = remoteRealmOpenedAt
     end
 
@@ -676,7 +774,8 @@ function WoWForeverRaceTracker:OnFTLSyncResult(ftldb, remoteRealmOpenedAt)
             for level, record in pairs(levels) do
                 -- only merge records that fit the wire format; remote data is untrusted
                 if type(level) == "number" and level >= 2 and level <= self.Config.MaxLevel
-                        and record.name ~= nil and record.dingedAt ~= nil then
+                        and record.name ~= nil and record.dingedAt ~= nil
+                        and not self.Core:PredatesLaunch(record.dingedAt) then
                     local merged = mergeFTLRecord(db.firstToLevel[classFilter], level,
                             record.name, record.classIndex, record.dingedAt)
                     if merged and (db.raceStartedAt == nil or record.dingedAt < db.raceStartedAt) then

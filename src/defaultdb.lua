@@ -33,7 +33,8 @@ local WoWForeverRaceDefaultDB = {
             },
         },
         -- Pioneers: first player to reach each level
-        -- realmOpenedAt: GetServerTime() recorded on first-ever DB init for this realm; synced to keep earliest
+        -- realmOpenedAt: GetServerTime() recorded on first-ever DB init for this realm; synced to keep earliest.
+        -- Once the realm launch has passed, a value from before it is raised to the launch and not accepted on sync
         realmOpenedAt = nil,
         -- raceStartedAt: earliest dingedAt ever seen; fallback reference when realmOpenedAt is nil
         raceStartedAt = nil,

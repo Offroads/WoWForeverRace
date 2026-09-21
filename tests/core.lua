@@ -13,6 +13,31 @@ describe("Core", function()
         SetTime(1000000000)
     end)
 
+    describe("PredatesLaunch", function()
+        it("is false for everything while the launch is still ahead", function()
+            SetTime(1999)
+            assert.is_false(core:PredatesLaunch(1500))
+        end)
+
+        it("is true only for timestamps before the launch once it has passed", function()
+            SetTime(3000)
+            assert.is_true(core:PredatesLaunch(1999))
+            assert.is_false(core:PredatesLaunch(2000))
+            assert.is_false(core:PredatesLaunch(nil))
+        end)
+
+        it("is false when no launch is configured", function()
+            SetTime(3000)
+            config = setmetatable({}, {__index = function(_, key)
+                if key == "RealmLaunchAt" then return nil end
+                return WoWForeverRace.Config[key]
+            end})
+            core = WoWForeverRace.Core(config, "Nub", "NubVille")
+            assert.is_false(core:HasLaunched())
+            assert.is_false(core:PredatesLaunch(1999))
+        end)
+    end)
+
     describe("RaceStartTime", function()
         it("uses the fallback before the realm launch", function()
             SetTime(1999)
