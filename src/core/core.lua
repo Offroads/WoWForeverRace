@@ -105,10 +105,11 @@ function WoWForeverRaceCore:Now()
 end
 
 -- Reference time the race is measured from: the official realm launch once it has passed,
--- else (before launch, e.g. on the beta) the given inferred fallback.
-function WoWForeverRaceCore:RaceStartTime(fallback)
+-- else (before launch, e.g. on the beta) the given inferred fallback. A ding from before the
+-- launch (beta leftovers) keeps the fallback, so it never ends up with a negative time.
+function WoWForeverRaceCore:RaceStartTime(fallback, dingedAt)
     local launchAt = self.Config.RealmLaunchAt
-    if launchAt ~= nil and self:Now() >= launchAt then
+    if launchAt ~= nil and self:Now() >= launchAt and (dingedAt == nil or dingedAt >= launchAt) then
         return launchAt
     end
     return fallback

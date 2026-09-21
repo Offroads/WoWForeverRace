@@ -22,8 +22,17 @@ describe("Core", function()
 
         it("uses the realm launch once it has passed", function()
             SetTime(2000)
-            assert.equals(2000, core:RaceStartTime(1500))
             assert.equals(2000, core:RaceStartTime(nil))
+            SetTime(3000)
+            assert.equals(2000, core:RaceStartTime(1500))
+            assert.equals(2000, core:RaceStartTime(1500, 2000))
+            assert.equals(2000, core:RaceStartTime(1500, 2500))
+        end)
+
+        it("keeps the fallback for a ding from before the realm launch", function()
+            SetTime(3000)
+            assert.equals(1500, core:RaceStartTime(1500, 1999))
+            assert.is_nil(core:RaceStartTime(nil, 1999))
         end)
 
         it("uses the fallback when no launch is configured", function()
