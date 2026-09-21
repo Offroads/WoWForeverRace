@@ -81,7 +81,9 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 - `C_FriendList.GetNumWhoResults()` returns `(numWhos, totalNumWhos)`; `C_FriendList.SendWho` is restricted, so scans stay wired to hardware events
 - The chat messaging lockdown (`C_ChatInfo.InChatMessagingLockdown()`) covers encounters, PvP matches and whole dungeon/raid maps. `Network:SendObject` holds messages in an outbox (latest only for non-payload events, capped) and `FlushOutbox` sends them once the lockdown ended; `Sync:InitSync` postpones itself the same way
 - A pending scan is abandoned by a `C_Timer` after `SCAN_TIMEOUT` (`Scanner:AbandonScan`), so the who UI is handed back without a click, also when the race finished meanwhile. After a foreign `C_FriendList.SendWho` (hooked, `Scanner:OnSendWho`) an empty result is not attributed to the scan
-- Class scans use the localized class name (`LocalizedClassList`), quoted: `30-60 c-"Warrior"`; `Config.WhoClassFilter` is the English fallback
+- Class scans use the localized class name (`LocalizedClassList`), quoted: `2-60 c-"Warrior"`; `Config.WhoClassFilter` is the English fallback
+- The session's first scan is an unfiltered probe (`2-60`, repeated while the leaderboard is empty). `Scanner:RecordProbe` keeps its match count, levels and classes, from which `Scanner:ProbeFloor` estimates per class where a scan fits under the row cap
+- The class scan floor (`Scanner:NextClassFloor`) starts at the probe's estimate, else at the bottom (2, or the board's `minLevel` once it is full), and bisects towards the lowest floor whose result still fits under the 50 row cap, bounded above by the highest level seen. Floors known to overflow / fit are remembered for `FLOOR_BOUND_TTL`. Player names contain a space (`"First Surname"`), never a `-`
 - The TOC declares the WoW Forever interface only (`## Interface: 16001`); bump it with each client patch
 
 ### Key Conventions
