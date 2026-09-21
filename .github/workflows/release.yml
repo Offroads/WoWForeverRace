@@ -3,9 +3,16 @@ name: Release
 # Tag a commit (e.g. `git tag v1.0.0 && git push --tags`) to build the addon zip
 # with the BigWigs packager and attach it to a GitHub release. The tag name
 # becomes the addon version (@project-version@ in the TOC and config.lua).
+# Tags containing "alpha" or "beta" are published as that release type.
 #
-# Uploads to CurseForge / Wago / WoWInterface only happen when the matching
-# secret is configured in the repository settings.
+# The packager (v2.6.0 and later) knows the WoW Forever client: interface 16xxx
+# gives game type "forever" (flavor "forever" in release.json, zip suffix
+# -forever, game version 1.60.x on CurseForge and Wago).
+#
+# Uploads to CurseForge / Wago need both the project id in the TOC
+# (X-Curse-Project-ID / X-Wago-ID) and the matching secret in the repository
+# settings. WoWInterface has no WoW Forever game type, the packager fails the
+# run when asked to upload there, so it gets no token.
 on:
   push:
     tags:
@@ -28,12 +35,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y subversion
 
       # One zip for the WoW Forever client, the only interface in the TOC.
-      # The packager labels the WoW Forever interface (16xxx) as retail in
-      # release.json until it learns that client, so no -p/-a upload ids here.
       - name: Package with BigWigs packager
         uses: BigWigsMods/packager@v2
         env:
           GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
           CF_API_KEY: ${{ secrets.CF_API_KEY }}
           WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}
-          WOWI_API_TOKEN: ${{ secrets.WOWI_API_TOKEN }}

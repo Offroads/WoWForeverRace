@@ -24,7 +24,7 @@ docker compose run --rm dev make release          # build a release zip into ./.
 
 Windows: `.\scripts\dev.ps1 <build|lint|tests|check|libs|release|shell|deploy>` wraps the same commands; `deploy` junctions the checkout into a WoW `AddOns` folder (the `_classic_beta_` install that serves the WoW Forever beta, or `-AddOnsPath`). macOS/Linux: `make docker-*` targets. With a native Lua 5.1 toolchain the plain `make lint tests` also works (`make setup-dev` installs the rocks).
 
-CI (`.github/workflows/ci.yml`) runs lint + tests in the same image on every PR and on pushes to `main`. Tagging `v*` runs `.github/workflows/release.yml` (BigWigs packager, GitHub release).
+CI (`.github/workflows/ci.yml`) runs lint + tests in the same image on every PR and on pushes to `main`. Tagging `v*` runs `.github/workflows/release.yml`: the BigWigs packager (v2.6.0+ maps interface 16xxx to game type `forever`) builds the zip, creates the GitHub release and uploads to CurseForge (`X-Curse-Project-ID` in the TOC, `CF_API_KEY` secret). No WoWInterface upload: it has no WoW Forever game type and the packager fails the run.
 
 Coverage report: `luacov.report.out`. Files not exercised by tests (WoW API dependent): `main.lua`, `options.lua`, `gui/*.lua`, `dev.lua`, `updater.lua`.
 

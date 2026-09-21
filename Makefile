@@ -89,10 +89,11 @@ reflex-tests:
 
 #
 # -- download-bw-release --
-# fetch the release.sh script from bigwigs
+# fetch the release.sh script from bigwigs; a cached copy from before the packager
+# learned the WoW Forever client (v2.6.0) is replaced
 #
 download-bw-release:
-	test -f bw-release.sh \
+	grep -q forever bw-release.sh 2>/dev/null \
 	|| curl -sSL -o bw-release.sh https://raw.githubusercontent.com/BigWigsMods/packager/master/release.sh \
 	&& chmod +x bw-release.sh
 
@@ -118,8 +119,7 @@ fetch-libs: download-bw-release
 # build release using bw-release.sh
 # depending on $(RELEASEARGS) it will or will not upload (see above)
 # one zip for the WoW Forever client, the only interface in the TOC.
-# NOTE: the packager does not know the WoW Forever interface (16xxx) yet and labels
-# it "retail" in release.json; add CurseForge/Wago ids only once that is fixed upstream.
+# the packager maps the WoW Forever interface (16xxx) to game type "forever".
 #
 release: download-bw-release
 	rm -rf ./.release
