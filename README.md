@@ -111,9 +111,15 @@ The other stuff is well covered and we <3 mocks.
 Pushing a `v*` tag runs the `Release` GitHub Actions workflow, which packages
 the addon with the [BigWigs packager](https://github.com/BigWigsMods/packager)
 and attaches the zip to a GitHub release. The tag name becomes the addon
-version. Uploads to CurseForge / Wago / WoWInterface happen only when the
-matching API token secret is configured. `make release` builds the same zip
-locally into `.release/`.
+version, and a tag containing `alpha` or `beta` is published as that release
+type. The packager detects the WoW Forever client from the TOC interface
+(16xxx) and labels the zip `-forever`.
+
+The release is also uploaded to [CurseForge](https://www.curseforge.com/wow/addons/thewowforeverrace)
+(`X-Curse-Project-ID` in the TOC plus the `CF_API_KEY` repository secret). Wago
+works the same way once `X-Wago-ID` and a `WAGO_API_TOKEN` secret exist.
+WoWInterface has no WoW Forever game type, so there is no upload there.
+`make release` builds the same zip locally into `.release/`.
 
 ## Structure
 We're trying to avoid using globals as much as possible, so all components are bound to our addon global `WoWForeverRace`
