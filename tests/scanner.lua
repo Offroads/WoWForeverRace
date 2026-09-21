@@ -226,6 +226,47 @@ describe("Scanner", function()
         assert.equals("4-60 c-\"Warrior\"", nextWarriorScan(warriors(20, 4), 20))
     end)
 
+    it("starts a class at the highest level known for it and takes in one more level per visit", function()
+        db.factionrealm.leaderboard[0].players = {
+            {name = "Seed", level = 20, classIndex = 1, dingedAt = time},
+        }
+        db.factionrealm.leaderboard[0].highestLevel = 20
+        db.factionrealm.leaderboard[1].players = {
+            {name = "Seed", level = 20, classIndex = 1, dingedAt = time},
+        }
+        db.factionrealm.leaderboard[1].highestLevel = 20
+        scanner.probe = NO_PROBE
+
+        local function warriors(count, level)
+            local rows = {}
+            for i = 1, count do rows[i] = {fullName = "Warr" .. i, level = level, filename = "WARRIOR"} end
+            return rows
+        end
+        local now = time
+        local function nextWarriorScan(rows)
+            SetWhoResults(rows)
+            scanner:OnWhoListUpdate()
+            now = now + 16
+            SetTime(now)
+            scanner.nextScanClassIdx = 1
+            scanner:TriggerScan()
+            return GetWhoQuery()
+        end
+
+        scanner:TriggerScan()
+        assert.equals("20-60 c-\"Warrior\"", GetWhoQuery())
+
+        -- room left: one level lower on every visit
+        assert.equals("19-60 c-\"Warrior\"", nextWarriorScan(warriors(5, 20)))
+        assert.equals("18-60 c-\"Warrior\"", nextWarriorScan(warriors(30, 19)))
+        -- full: back to the floor that fit, and stay there
+        assert.equals("19-60 c-\"Warrior\"", nextWarriorScan(warriors(50, 18)))
+        assert.equals("19-60 c-\"Warrior\"", nextWarriorScan(warriors(40, 19)))
+        -- the players outgrew that floor: the next level up, not halfway to the top
+        db.factionrealm.leaderboard[0].highestLevel = 40
+        assert.equals("20-60 c-\"Warrior\"", nextWarriorScan(warriors(50, 19)))
+    end)
+
     it("repeats the class floor when the /who response was lost", function()
         db.factionrealm.leaderboard[0].players = {
             {name = "Seed", level = 60, classIndex = 1, dingedAt = time},

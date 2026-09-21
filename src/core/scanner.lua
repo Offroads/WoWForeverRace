@@ -372,9 +372,11 @@ function WoWForeverRaceScanner:ProbeFloor(className, raceIndex)
     return floor
 end
 
--- The floor for the next scan of a class or race, by its leaderboard index. Starts at the probe's estimate, or at lo
--- (nothing below it matters), and bisects towards the lowest floor whose result still fits under the /who row
--- cap: an overflowing result is an arbitrary subset that can miss the top players.
+-- The floor for the next scan of a class or race, by its leaderboard index. It works from the top down: it
+-- starts at the highest level already on that leaderboard (an empty one starts at the probe's estimate, or at
+-- lo, nothing below it matters) and comes down one level per visit while the result fits under the /who row
+-- cap. A full result is an arbitrary subset that can miss the top players, so the floor goes back up and
+-- settles on the lowest floor that fits.
 -- hi is the highest level seen so far, there is no point in probing far above it.
 function WoWForeverRaceScanner:NextClassFloor(classIndex, lo, hi, now)
     local floor = self.classScanFloor[classIndex]
@@ -386,13 +388,23 @@ function WoWForeverRaceScanner:NextClassFloor(classIndex, lo, hi, now)
         -- a leaderboard index that is no class index belongs to a race
         local className = WoWForeverRace.Config.Classes[classIndex]
         local raceIndex = className == nil and classIndex - WoWForeverRace.Config.RaceBoardOffset or nil
-        floor = self:ProbeFloor(className, raceIndex) or lo
+        local lb = self.DB.factionrealm.leaderboard[classIndex]
+        if lb and #lb.players > 0 then
+            -- the top players first: whoever leads the leaderboard is at this level
+            floor = lb.highestLevel
+        else
+            floor = self:ProbeFloor(className, raceIndex) or lo
+        end
     elseif full == true then
-        -- Over the cap → raise floor, halfway to a floor known to fit (or to hi).
+        -- Over the cap -> raise floor, halfway to a floor known to fit (or to hi).
         local target  = hi
         local fitting = self.classFittingFloor[classIndex]
-        if fitting and fitting.level > floor and now - fitting.at < FLOOR_BOUND_TTL then
+        local fittingKnown = fitting and now - fitting.at < FLOOR_BOUND_TTL
+        if fittingKnown and fitting.level > floor then
             target = fitting.level
+        elseif fittingKnown and fitting.level == floor then
+            -- this floor used to fit: the players outgrew it, the next level is likely enough
+            target = floor + 1
         elseif target <= floor then
             -- a full result at or above the highest level seen: that level is
             -- outdated (cut off results are arbitrary), so aim for the level cap
@@ -400,14 +412,15 @@ function WoWForeverRaceScanner:NextClassFloor(classIndex, lo, hi, now)
         end
         floor = floor + math.max(math.ceil((target - floor) / 2), 1)
     elseif full == false then
-        -- Under the cap → lower floor, but not back into a range known to overflow.
+        -- Under the cap -> there is room, take in one more level, but don't go
+        -- back into a range known to overflow.
         local low    = lo
         local capped = self.classCappedFloor[classIndex]
         if capped and now - capped.at < FLOOR_BOUND_TTL then
             low = math.max(low, capped.level + 1)
         end
         if floor > low then
-            floor = floor - math.ceil((floor - low) / 2)
+            floor = floor - 1
         end
     end
 
