@@ -28,7 +28,7 @@ CI (`.github/workflows/ci.yml`) runs lint + tests in the same image on every PR 
 
 Coverage report: `luacov.report.out`. Files not exercised by tests (WoW API dependent): `main.lua`, `options.lua`, `gui/*.lua`, `dev.lua`, `updater.lua`.
 
-Test output silences the addon's debug prints; set `WFR_TEST_DEBUG=1` to see them. The stubs in `tests/stubs/` expose `Set*` helpers (`SetTime`, `SetWhoResults(results, total)`, `SetIsInGuild`, `SetGroupState(members, inRaid, inInstanceGroup)`, `SetWhoPanelVisible(visible)`, `SetChatLockdown(lockedDown)`, `C_Timer.Advance`) to drive the world state; extend them rather than mocking inside individual tests. When the Ace3 libraries start using a new WoW global, stub it in `tests/stubs/misc.lua`; when addon code starts using a WoW API as a bare global, add it to `read_globals` in `.luacheckrc` (access through `_G.Name` needs no entry).
+Test output silences the addon's debug prints; set `WFR_TEST_DEBUG=1` to see them. The stubs in `tests/stubs/` expose `Set*` helpers (`SetTime`, `SetWhoResults(results, total)`, `SetIsInGuild`, `SetFaction(faction)`, `SetGroupState(members, inRaid, inInstanceGroup)`, `SetWhoPanelVisible(visible)`, `SetChatLockdown(lockedDown)`, `C_Timer.Advance`) to drive the world state; extend them rather than mocking inside individual tests. When the Ace3 libraries start using a new WoW global, stub it in `tests/stubs/misc.lua`; when addon code starts using a WoW API as a bare global, add it to `read_globals` in `.luacheckrc` (access through `_G.Name` needs no entry).
 
 ## Architecture
 
@@ -60,6 +60,7 @@ WoWForeverRace_DB.factionrealm = {
   raceStartedAt = serverTime,  -- earliest dingedAt seen (since the launch, once it passed)
 }
 ```
+Race data must stay in `factionrealm`: every other scope (`profile`, `global`, `realm`, ...) is shared by the Horde and Alliance characters of an account and holds settings only. `tests/storage.lua` guards this.
 
 ### Object-Oriented Pattern
 ```lua
@@ -98,13 +99,14 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 - Leaderboard capped at 50 players per faction-realm
 - Race finish: the race is finished only when **every** class leaderboard in `Config.MopClassIndexes` is full at `Config.MaxLevel`. `Tracker:CheckRaceFinished` is the single authority - the scanner's `SCAN_FINISHED(endofrace)` signal is verified against the boards, never trusted directly
 - Remote data is untrusted: `Tracker:ProcessPlayerInfo` drops entries without a string name or with a level outside `1..Config.MaxLevel`, and only events listed in `Config.Network.Events` are accepted from the wire
+- Faction lock: the race is per faction and the wire has no other way to tell the factions apart, so every message envelope is `{event, payload, faction}`. `Network:SendObject` adds `Core:MyFaction()` (`UnitFactionGroup("player")`, the value that also scopes the AceDB `factionrealm` data); `Network:HandleAddonMessage` drops a message whose faction is missing, not a string or not the own faction, before anything is published (debug print only, not counted in the message stats)
 - Scanner timings (constants in `scanner.lua`): 15s cooldown between scans, 60s timeout before an unanswered `/who` is abandoned, 15min rest for a fully-scanned class (`/who` only sees online players, so a "complete" result is just a snapshot). A result is complete only when `C_FriendList.GetNumWhoResults()` reports no more server-side matches than rows shown
 - WHO results are validated against the pending query (level range + class filter) so manual `/who` results are never misattributed to a scan
 - `Network:SendObject(..., "GROUP")` routes to `INSTANCE_CHAT` in instance groups, else `RAID`/`PARTY`
 - Peers can track a different class list (other client, older build on the shared `TCRace` prefix). Wherever a peer's per-class hash table is available (`GUILDSYNC`, `BPING`, `BPONG`, `DATAREQ`), full, FTL and per-class comparisons only cover the leaderboards that peer reported (`leaderboardClassIndexes(config, peerHashes)`, `Tracker:ComputeNeedSet`); a missing entry means "not tracked", never "differs". The discovery beacon (`DATAAVAIL`) carries only the full hash, so such peers still cost one `DATAREQ` round trip per beacon, which then sends nothing
 - Network event names: `PINFOB`, `REQSYNC`, `OFFERSYNC`, `STARTSYNC`, `SYNC`, `DATAAVAIL`, `DATAREQ`, `GUILDSYNC`, `GUILDOFFR`, `BPING`, `BPONG`, `FTLSYNC`, `PHSYNC`
 - Local event names: `NETWORK_READY`, `WHO_RESULT`, `SYNC_RESULT`, `FTL_SYNC_RESULT`, `PH_SYNC_RESULT`, `SCAN_FINISHED`, `RACE_FINISHED`, `DING`, `REFRESH_GUI`, `MSG_STATS`, `BUDDY_UPDATE`
-- The addon-channel prefix is still `TCRace` (inherited from TheClassicRace) so clients of both addons keep exchanging data; user-facing names say WoWForeverRace
+- The addon-channel prefix is still `TCRace` (inherited from TheClassicRace) and the envelope stays readable for older clients (event and payload first), but updated clients drop every message without a faction, so nothing is accepted from TheClassicRace or older WoWForeverRace clients; user-facing names say WoWForeverRace
 - Debug/trace gates use `@debug@` marker in `.toc` and `config.lua`; version uses `@project-version@`. `src/dev.lua` (dev-only slash commands, `/wfr help`) is only loaded from an unpackaged checkout
 - Keep WoW-API-heavy code in `main.lua`, `options.lua`, and `gui/`; `scanner.lua` has focused API stubs
 - Never use em dashes or en dashes anywhere (code, comments, UI text, docs); use a plain hyphen

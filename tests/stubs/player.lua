@@ -61,8 +61,19 @@ _G.UnitRace = function()
     return "Night Elf"
 end
 
+-- see SetFaction(faction): the stub reads the variable on every call, because
+-- AceDB and core.lua capture the function itself when they load
+local defaultFaction = "Alliance"
+local playerFaction = defaultFaction
 _G.UnitFactionGroup = function()
-    return "Alliance"
+    return playerFaction
+end
+
+_G.SetFaction = function(faction)
+    if faction == nil then
+        faction = defaultFaction
+    end
+    playerFaction = faction
 end
 
 _G.GetBuildInfo = function()
