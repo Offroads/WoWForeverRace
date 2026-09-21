@@ -99,7 +99,8 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
     WoWForeverRace:DebugPrint("Recv raw <- " .. tostring(sender))
 
     local ok, err = pcall(function()
-        -- YELL gives "Name", GUILD/WHISPER give "Name-Realm" - split before comparing
+        -- WoW Forever senders are "First Surname" without a realm on every channel,
+        -- a "Name-Realm" form is still split off in case a cross-realm sender shows up
         local senderName, senderRealm = self.Core:SplitFullPlayer(sender)
 
         -- completely ignore anything from other realms

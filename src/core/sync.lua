@@ -532,8 +532,8 @@ end
 
 -- Add or update a buddy entry in the persistent DB list.
 function WoWForeverRaceSync:AddBuddy(name)
-    -- sender format differs per channel (YELL gives "Name", GUILD/WHISPER give
-    -- "Name-Realm") - normalize same-realm names so we don't store duplicates
+    -- senders normally come without a realm; normalize a same-realm "Name-Realm"
+    -- anyway so we don't store duplicates (and a whisper to "Name-Realm" is not delivered)
     local shortName, realm = self.Core:SplitFullPlayer(name)
     if self.Core:IsMyRealm(realm) then
         if shortName == self.Core:RealMe() then return end
