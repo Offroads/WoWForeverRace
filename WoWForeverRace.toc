@@ -7,6 +7,7 @@
 ## DefaultState: Enabled
 ## LoadOnDemand: 0
 ## SavedVariables: WoWForeverRace_DB
+## X-Curse-Project-ID: 1705007
 ## X-License: MIT
 ## X-Credits: Based on TheClassicRace by Ruben de Vries
 

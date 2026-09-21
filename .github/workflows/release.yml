@@ -29,7 +29,8 @@ jobs:
 
       # One zip for the WoW Forever client, the only interface in the TOC.
       # The packager labels the WoW Forever interface (16xxx) as retail in
-      # release.json until it learns that client, so no -p/-a upload ids here.
+      # release.json until it learns that client. The CurseForge project id
+      # comes from X-Curse-Project-ID in the TOC.
       - name: Package with BigWigs packager
         uses: BigWigsMods/packager@v2
         env:
