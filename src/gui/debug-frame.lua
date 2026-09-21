@@ -8,7 +8,7 @@ local WoWForeverRace = _G.WoWForeverRace
 local AceGUI = LibStub("AceGUI-3.0")
 
 -- WoW API
-local GetServerTime, math = _G.GetServerTime, _G.math
+local GetServerTime, math, C_Timer = _G.GetServerTime, _G.math, _G.C_Timer
 
 local WHITE  = "|cffffffff"
 local YELLOW = "|cffffff00"
@@ -79,6 +79,7 @@ function WoWForeverRaceDebugFrame.new(Config, Core, DB, EventBus)
 end
 
 function WoWForeverRaceDebugFrame:Hide()
+    self:HideLog()
     if self.frame then
         self.frame:Hide()
         self.frame:Release()
@@ -136,6 +137,12 @@ function WoWForeverRaceDebugFrame:Show()
     end)
     frame:AddChild(resetStatsBtn)
 
+    local logBtn = AceGUI:Create("Button")
+    logBtn:SetText("Debug Log")
+    logBtn:SetWidth(150)
+    logBtn:SetCallback("OnClick", function() _self:ShowLog() end)
+    frame:AddChild(logBtn)
+
     local scrolltainer = AceGUI:Create("SimpleGroup")
     scrolltainer:SetLayout("Fill")
     scrolltainer:SetFullWidth(true)
@@ -150,6 +157,83 @@ function WoWForeverRaceDebugFrame:Show()
     self.scroll = scroll
 
     self:Render()
+end
+
+function WoWForeverRaceDebugFrame:HideLog()
+    if self.logFrame then
+        self.logFrame:Hide()
+        self.logFrame:Release()
+        self.logFrame = nil
+        self.logBox = nil
+    end
+end
+
+-- Every debug / trace message of the session in a scrollable edit box:
+-- click into it, Ctrl+A / Ctrl+C to copy.
+function WoWForeverRaceDebugFrame:ShowLog()
+    self:HideLog()
+
+    local _self = self
+
+    local frame = AceGUI:Create("Window")
+    frame:SetTitle(self.Config.Name .. " Debug Log")
+    frame:SetWidth(640)
+    frame:SetHeight(480)
+    frame:SetLayout("Flow")
+    frame:SetCallback("OnClose", function(widget)
+        widget:Release()
+        _self.logFrame = nil
+        _self.logBox = nil
+    end)
+    self.logFrame = frame
+
+    local refreshBtn = AceGUI:Create("Button")
+    refreshBtn:SetText("Refresh")
+    refreshBtn:SetWidth(150)
+    refreshBtn:SetCallback("OnClick", function() _self:RenderLog() end)
+    frame:AddChild(refreshBtn)
+
+    local clearBtn = AceGUI:Create("Button")
+    clearBtn:SetText("Clear Log")
+    clearBtn:SetWidth(150)
+    clearBtn:SetCallback("OnClick", function()
+        WoWForeverRace.DebugLog = {}
+        _self:RenderLog()
+    end)
+    frame:AddChild(clearBtn)
+
+    local box = AceGUI:Create("MultiLineEditBox")
+    box:SetLabel("")
+    box:DisableButton(true)
+    box:SetFullWidth(true)
+    box:SetFullHeight(true)
+    frame:AddChild(box)
+    self.logBox = box
+
+    self:RenderLog()
+end
+
+function WoWForeverRaceDebugFrame:RenderLog()
+    if not self.logBox then return end
+    local text = table.concat(WoWForeverRace.DebugLog, "\n")
+    self.logBox:SetText(text)
+    -- the scroll frame follows the cursor: jump to the newest line
+    self.logBox.editBox:SetCursorPosition(#text)
+end
+
+-- Called for every logged message. Redraws are batched, and skipped while the box
+-- has focus so a selection being copied is not thrown away (Escape or Refresh resumes).
+function WoWForeverRaceDebugFrame:OnDebugLog()
+    if not self.logBox or self.logRenderPending then return end
+    self.logRenderPending = true
+
+    local _self = self
+    C_Timer.After(0.2, function()
+        _self.logRenderPending = false
+        if _self.logBox and not _self.logBox.editBox:HasFocus() then
+            _self:RenderLog()
+        end
+    end)
 end
 
 -- Three-column row using relative widths so the columns always fill the
