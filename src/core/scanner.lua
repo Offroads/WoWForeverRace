@@ -47,10 +47,12 @@ function WoWForeverRaceScanner.new(Core, DB, EventBus)
     self.DB = DB
     self.EventBus = EventBus
     self.lastScanTime = -SCAN_COOLDOWN
-    -- The filtered scans cycle through slots: the classes, then the races of our
-    -- faction (ScanSlots). The per-class state below is keyed by the slot's
-    -- leaderboard index, so it serves the race slots as well.
-    self.nextScanClassIdx = 1  -- cycles through ScanSlots
+    -- The filtered scans cycle through slots: the classes and the races of our
+    -- faction (ScanSlots), classes first. The per-class state below is keyed by
+    -- the slot's leaderboard index, so it serves the race slots as well.
+    self.nextScanClassIdx = 1  -- cycles through the class slots
+    self.nextScanRaceIdx = 1   -- cycles through the race slots
+    self.classScansSinceRace = 0  -- a race only gets a turn after a round of class scans
     self.lastScanClassIndex = nil  -- leaderboard index of the pending filtered scan
     self.lastScanRaceIndex = nil   -- race of the pending scan, when it is a race scan
     self.classScanFloor = {}   -- per-class adaptive floor level
@@ -92,6 +94,8 @@ end
 function WoWForeverRaceScanner:ResetState()
     self.lastScanTime = -SCAN_COOLDOWN
     self.nextScanClassIdx = 1
+    self.nextScanRaceIdx = 1
+    self.classScansSinceRace = 0
     self.lastScanClassIndex = nil
     self.lastScanRaceIndex = nil
     self.classScanFloor = {}
@@ -139,25 +143,44 @@ function WoWForeverRaceScanner:RaceWhoFilter(raceIndex)
     return (_G.WHO_TAG_RACE or "r-") .. '"' .. name .. '"'
 end
 
--- The filtered scans of one cycle: every class, then every race of our faction.
+-- The filtered scans: one slot per class and one per race of our faction, as two lists.
 -- boardIndex is the leaderboard the slot fills and the key of its scan state.
 function WoWForeverRaceScanner:ScanSlots()
     local config = WoWForeverRace.Config
-    local slots = {}
+    local classSlots, raceSlots = {}, {}
     for _, classIndex in ipairs(config.MopClassIndexes) do
-        slots[#slots + 1] = {
+        classSlots[#classSlots + 1] = {
             boardIndex = classIndex,
             filter = self:ClassWhoFilter(config.Classes[classIndex]),
         }
     end
     for _, raceIndex in ipairs(self.Core:MyRaceIndexes()) do
-        slots[#slots + 1] = {
+        raceSlots[#raceSlots + 1] = {
             boardIndex = config:RaceBoardIndex(raceIndex),
             raceIndex = raceIndex,
             filter = self:RaceWhoFilter(raceIndex),
         }
     end
-    return slots
+    return classSlots, raceSlots
+end
+
+-- Position of the next slot that still needs a scan, starting at startIdx and wrapping
+-- around. A slot is done when it rests after a complete scan, or when its leaderboard
+-- is full AND the lowest player is already at max level.
+function WoWForeverRaceScanner:NextDueSlot(slots, startIdx, now)
+    local maxLevel = WoWForeverRace.Config.MaxLevel
+    local maxSize  = WoWForeverRace.Config.MaxLeaderboardSize
+    for i = 0, #slots - 1 do
+        local pos        = ((startIdx - 1 + i) % #slots) + 1
+        local lb         = self.DB.factionrealm.leaderboard[slots[pos].boardIndex]
+        local completeAt = self.classScanComplete[slots[pos].boardIndex]
+        local resting    = completeAt ~= nil and now - completeAt < CLASS_COMPLETE_TTL
+        local final      = lb and #lb.players >= maxSize and lb.minLevel >= maxLevel
+        if slots[pos].filter and lb and not resting and not final then
+            return pos
+        end
+    end
+    return nil
 end
 
 -- Stops the Blizzard who panel from popping up for the response to our scan.
@@ -275,14 +298,10 @@ function WoWForeverRaceScanner:OnWhoListUpdate()
         return
     end
 
-    -- the result is complete when the server had no more matches than it sent us;
-    -- the row cap is only a fallback for clients that don't report the total
-    local resultComplete
-    if total ~= nil then
-        resultComplete = total <= numShown
-    else
-        resultComplete = numShown < WHO_RESULT_CAP
-    end
+    -- The result is complete when it stayed under the row cap. A full result counts as
+    -- cut off even when the client reports no more matches than rows: the WoW Forever
+    -- client caps that total at the row cap too ("50 People Found" for any larger result).
+    local resultComplete = numShown < WHO_RESULT_CAP and (total == nil or total <= numShown)
 
     if self.lastScanClassIndex then
         self.lastResultFull[self.lastScanClassIndex] = not resultComplete
@@ -374,6 +393,10 @@ function WoWForeverRaceScanner:NextClassFloor(classIndex, lo, hi, now)
         local fitting = self.classFittingFloor[classIndex]
         if fitting and fitting.level > floor and now - fitting.at < FLOOR_BOUND_TTL then
             target = fitting.level
+        elseif target <= floor then
+            -- a full result at or above the highest level seen: that level is
+            -- outdated (cut off results are arbitrary), so aim for the level cap
+            target = WoWForeverRace.Config.MaxLevel
         end
         floor = floor + math.max(math.ceil((target - floor) / 2), 1)
     elseif full == false then
@@ -416,8 +439,6 @@ function WoWForeverRaceScanner:TriggerScan()
 
     local maxLevel   = WoWForeverRace.Config.MaxLevel
     local maxSize    = WoWForeverRace.Config.MaxLeaderboardSize
-    local slots      = self:ScanSlots()
-    local numSlots   = #slots
     local query      = nil
 
     -- The session's first scan is an unfiltered probe of the whole level range: its
@@ -431,23 +452,29 @@ function WoWForeverRaceScanner:TriggerScan()
         query = "2-" .. tostring(maxLevel)
     end
 
-    -- Cycle through the classes and races that still need work.
-    -- One is done only when its leaderboard is full AND the lowest player is already at max level.
-    if not query then for i = 0, numSlots - 1 do
-        local slot       = ((self.nextScanClassIdx - 1 + i) % numSlots) + 1
-        local classIndex = slots[slot].boardIndex
-        local classLb    = self.DB.factionrealm.leaderboard[classIndex]
-        local filter     = slots[slot].filter
-        local completeAt = self.classScanComplete[classIndex]
-        local restingComplete = completeAt ~= nil and now - completeAt < CLASS_COMPLETE_TTL
-        local isDone = classLb and (
-                restingComplete
-                or (#classLb.players >= maxSize and classLb.minLevel >= maxLevel))
+    -- Cycle through the classes and races that still need work, classes first: a race
+    -- only gets a turn after a round of class scans, or when no class needs one.
+    if not query then
+        local classSlots, raceSlots = self:ScanSlots()
+        local classPos = self:NextDueSlot(classSlots, self.nextScanClassIdx, now)
+        local racePos  = self:NextDueSlot(raceSlots, self.nextScanRaceIdx, now)
 
-        if filter and classLb and not isDone then
-            self.nextScanClassIdx = (slot % numSlots) + 1
+        local slot = nil
+        if racePos and (classPos == nil or self.classScansSinceRace >= #classSlots) then
+            slot = raceSlots[racePos]
+            self.nextScanRaceIdx = (racePos % #raceSlots) + 1
+            self.classScansSinceRace = 0
+        elseif classPos then
+            slot = classSlots[classPos]
+            self.nextScanClassIdx = (classPos % #classSlots) + 1
+            self.classScansSinceRace = self.classScansSinceRace + 1
+        end
+
+        if slot then
+            local classIndex = slot.boardIndex
+            local classLb    = self.DB.factionrealm.leaderboard[classIndex]
             self.lastScanClassIndex = classIndex
-            self.lastScanRaceIndex = slots[slot].raceIndex
+            self.lastScanRaceIndex = slot.raceIndex
 
             -- Leaderboard full but players still leveling: nothing below the lowest known level matters.
             local lo = 2
@@ -457,10 +484,9 @@ function WoWForeverRaceScanner:TriggerScan()
             local hi = math.max(classLb.highestLevel, globalLb.highestLevel)
             local scanMin = self:NextClassFloor(classIndex, lo, hi, now)
 
-            query = tostring(scanMin) .. "-" .. tostring(maxLevel) .. " " .. filter
-            break
+            query = tostring(scanMin) .. "-" .. tostring(maxLevel) .. " " .. slot.filter
         end
-    end end -- end class / race scan loop + if not query guard
+    end
 
     -- All class and race leaderboards done: scan by global top range
     if not query then

@@ -107,7 +107,7 @@ describe("Scanner", function()
         assert.equals("2-60 c-\"Warrior\"", GetWhoQuery())
     end)
 
-    it("treats a result with exactly the cap as complete when the server agrees", function()
+    it("treats a result that fills the row cap as cut off, whatever total the client reports", function()
         db.factionrealm.leaderboard[0].players = {
             {name = "Seed", level = 60, classIndex = 1, dingedAt = time},
         }
@@ -117,14 +117,46 @@ describe("Scanner", function()
         scanner:TriggerScan()
         assert.equals("2-60 c-\"Warrior\"", GetWhoQuery())
 
-        -- 50 rows shown and the server says there are exactly 50 matches
+        -- the WoW Forever client caps the reported total at the row cap too
+        -- ("50 People Found"), so a full result always counts as cut off
         local rows = {}
         for i = 1, 50 do rows[i] = {fullName = "Warr" .. i, level = 60, filename = "WARRIOR"} end
         SetWhoResults(rows, 50)
         scanner:OnWhoListUpdate()
 
+        assert.is_true(scanner.lastResultFull[1])
+        assert.is_nil(scanner.classScanComplete[1])
+    end)
+
+    it("treats a result under the row cap as complete", function()
+        db.factionrealm.leaderboard[0].players = {
+            {name = "Seed", level = 60, classIndex = 1, dingedAt = time},
+        }
+        scanner.probe = NO_PROBE
+
+        scanner:TriggerScan()
+        local rows = {}
+        for i = 1, 49 do rows[i] = {fullName = "Warr" .. i, level = 60, filename = "WARRIOR"} end
+        SetWhoResults(rows, 49)
+        scanner:OnWhoListUpdate()
+
         assert.is_false(scanner.lastResultFull[1])
         assert.is_not_nil(scanner.classScanComplete[1])
+    end)
+
+    it("aims for the level cap when a full result comes from above the highest level seen", function()
+        db.factionrealm.leaderboard[0].players = {
+            {name = "Seed", level = 7, classIndex = 1, dingedAt = time},
+        }
+        db.factionrealm.leaderboard[0].highestLevel = 7
+        scanner.probe = NO_PROBE
+        scanner.classScanFloor[1] = 7
+        scanner.lastResultFull[1] = true
+
+        scanner:TriggerScan()
+
+        -- not 8: fifty players at 7 or higher means 7 is nowhere near the top
+        assert.equals("34-60 c-\"Warrior\"", GetWhoQuery())
     end)
 
     it("falls back to the row cap when the server total is unknown", function()
@@ -203,12 +235,12 @@ describe("Scanner", function()
         scanner.lastResultFull[1] = true
 
         scanner:TriggerScan()
-        assert.equals("31-60 c-\"Warrior\"", GetWhoQuery())
+        assert.equals("45-60 c-\"Warrior\"", GetWhoQuery())
 
         scanner.nextScanClassIdx = 1
         SetTime(time + 61)
         scanner:TriggerScan()
-        assert.equals("31-60 c-\"Warrior\"", GetWhoQuery())
+        assert.equals("45-60 c-\"Warrior\"", GetWhoQuery())
     end)
 
     it("re-scans a completed class after the rest period", function()
@@ -417,7 +449,36 @@ describe("Scanner", function()
                     })
         end)
 
-        it("scans the races of the faction after the classes", function()
+        it("scans the classes first and gives a race one turn per round of class scans", function()
+            local now = time
+            local queries = {}
+            for i = 1, 20 do
+                scanner:TriggerScan()
+                queries[i] = GetWhoQuery()
+                -- a full result, so neither the classes nor the races come to rest
+                local rows = {}
+                for r = 1, 50 do
+                    rows[r] = {fullName = "P" .. r, level = 60,
+                               filename = string.upper(string.match(queries[i], 'c%-"(%a+)"') or "MAGE"),
+                               raceStr = string.match(queries[i], 'r%-"([%a ]+)"')}
+                end
+                SetWhoResults(rows, 50)
+                scanner:OnWhoListUpdate()
+                now = now + 16
+                SetTime(now)
+            end
+
+            for i = 1, 9 do
+                assert.is_not_nil(string.find(queries[i], 'c-"', 1, true), queries[i])
+            end
+            assert.is_not_nil(string.find(queries[10], 'r-"Human"', 1, true), queries[10])
+            for i = 11, 19 do
+                assert.is_not_nil(string.find(queries[i], 'c-"', 1, true), queries[i])
+            end
+            assert.is_not_nil(string.find(queries[20], 'r-"Dwarf"', 1, true), queries[20])
+        end)
+
+        it("scans the races when no class needs a scan", function()
             restClasses()
 
             scanner:TriggerScan()
@@ -434,7 +495,7 @@ describe("Scanner", function()
         it("scans the Horde races on a Horde character", function()
             SetFaction("Horde")
             restClasses()
-            scanner.nextScanClassIdx = 14
+            scanner.nextScanRaceIdx = 5
 
             scanner:TriggerScan()
 
