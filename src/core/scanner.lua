@@ -8,6 +8,7 @@ local WorldFrame = _G.WorldFrame
 local GetTime = _G.GetTime
 local C_Timer = _G.C_Timer
 local hooksecurefunc = _G.hooksecurefunc
+local InCombatLockdown = _G.InCombatLockdown
 
 --[[
 Scanner listens passively to WHO_LIST_UPDATE events and publishes results via EventBus.
@@ -16,6 +17,7 @@ SendWho() is a restricted function in WoW Forever and cannot be called from
 timers or any non-hardware-event context. TriggerScan() is therefore wired to hardware events:
   - WorldFrame OnMouseDown (every in-world click), with a cooldown (SCAN_COOLDOWN)
   - The minimap icon's OnClick
+  - Optionally (options.keypressScanning) every key press, see UpdateKeypressScanning
 
 This mirrors the CensusPlusClassic approach: piggyback on the player's existing
 hardware events rather than requiring a dedicated UI button.
@@ -70,9 +72,12 @@ function WoWForeverRaceScanner.new(Core, DB, EventBus)
     self.whoFrame = CreateFrame("Frame")
     self.whoFrame:RegisterEvent("WHO_LIST_UPDATE")
     local _self = self
-    self.whoFrame:SetScript("OnEvent", function(_, event)
+    self.whoFrame:SetScript("OnEvent", function(frame, event)
         if event == "WHO_LIST_UPDATE" then
             _self:OnWhoListUpdate()
+        elseif event == "PLAYER_REGEN_ENABLED" then
+            frame:UnregisterEvent("PLAYER_REGEN_ENABLED")
+            _self:UpdateKeypressScanning()
         end
     end)
 
@@ -91,7 +96,36 @@ function WoWForeverRaceScanner.new(Core, DB, EventBus)
         end)
     end
 
+    self:UpdateKeypressScanning()
+
     return self
+end
+
+-- Key presses are hardware events as well, so with options.keypressScanning on they
+-- drive scans like the world clicks do. Call again after the option changed.
+-- The key frame is only created once the option is on; turning it off again just
+-- makes the handler a no-op.
+function WoWForeverRaceScanner:UpdateKeypressScanning()
+    if self.keyFrame or not self.DB.profile.options.keypressScanning then return end
+
+    -- SetPropagateKeyboardInput is protected in combat, and a keyboard frame that
+    -- does not propagate swallows every key: wait for the end of combat instead.
+    if InCombatLockdown and InCombatLockdown() then
+        self.whoFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+        return
+    end
+
+    local _self = self
+    local keyFrame = CreateFrame("Frame")
+    if not keyFrame.SetPropagateKeyboardInput then return end
+    keyFrame:SetPropagateKeyboardInput(true)
+    keyFrame:EnableKeyboard(true)
+    keyFrame:SetScript("OnKeyDown", function()
+        if _self.DB.profile.options.keypressScanning then
+            _self:TriggerScan()
+        end
+    end)
+    self.keyFrame = keyFrame
 end
 
 function WoWForeverRaceScanner:ResetState()

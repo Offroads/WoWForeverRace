@@ -45,6 +45,50 @@ describe("Scanner", function()
         assert.equals("2-60", GetWhoQuery())
     end)
 
+    describe("key press scanning", function()
+        after_each(function()
+            SetInCombat(false)
+        end)
+
+        it("scans on a key press by default", function()
+            -- the keys must still reach the game
+            assert.is_true(scanner.keyFrame.propagateKeyboardInput)
+            assert.is_true(scanner.keyFrame.keyboardEnabled)
+
+            scanner.keyFrame:GetScript("OnKeyDown")(scanner.keyFrame, "W")
+            assert.equals("2-60", GetWhoQuery())
+        end)
+
+        it("stops scanning on a key press once the option is off", function()
+            db.profile.options.keypressScanning = false
+            scanner:UpdateKeypressScanning()
+
+            scanner.keyFrame:GetScript("OnKeyDown")(scanner.keyFrame, "W")
+            assert.is_nil(GetWhoQuery())
+        end)
+
+        it("does not hook the keyboard while the option is off", function()
+            db.profile.options.keypressScanning = false
+            scanner = WoWForeverRace.Scanner(core, db, eventbus)
+            assert.is_nil(scanner.keyFrame)
+
+            db.profile.options.keypressScanning = true
+            scanner:UpdateKeypressScanning()
+            assert.is_not_nil(scanner.keyFrame)
+        end)
+
+        it("waits for the end of combat before it hooks the keyboard", function()
+            SetInCombat(true)
+            scanner = WoWForeverRace.Scanner(core, db, eventbus)
+            assert.is_nil(scanner.keyFrame)
+
+            SetInCombat(false)
+            scanner.whoFrame:FireEvent("PLAYER_REGEN_ENABLED")
+            assert.is_not_nil(scanner.keyFrame)
+            assert.is_false(scanner.whoFrame:IsEventRegistered("PLAYER_REGEN_ENABLED"))
+        end)
+    end)
+
     it("scans less often once a /who reply was lost", function()
         scanner:TriggerScan()
         -- no reply: the timeout gives up on the scan

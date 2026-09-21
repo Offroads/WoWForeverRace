@@ -54,6 +54,14 @@ function Frame:HookScript(handler, callback)
     end
 end
 
+function Frame:EnableKeyboard(enabled)
+    self.keyboardEnabled = enabled
+end
+
+function Frame:SetPropagateKeyboardInput(propagate)
+    self.propagateKeyboardInput = propagate
+end
+
 function Frame:RegisterEvent(event)
     self.events[event] = true
 end

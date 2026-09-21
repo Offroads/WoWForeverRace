@@ -107,6 +107,19 @@ function WoWForeverRace:RegisterOptions()
                         set = function(_, val) _self.DB.profile.options.networking = val end,
                         get = function() return _self.DB.profile.options.networking end,
                     },
+                    keypressScanning = {
+                        order = 32,
+                        name = "Scan on key presses",
+                        desc = "Also scan /who when you press a key, not only when you click in the world",
+                        descStyle = "inline",
+                        width = "full",
+                        type = "toggle",
+                        set = function(_, val)
+                            _self.DB.profile.options.keypressScanning = val
+                            _self.scanner:UpdateKeypressScanning()
+                        end,
+                        get = function() return _self.DB.profile.options.keypressScanning end,
+                    },
                     debugMode = {
                         order = 33,
                         name = "Debug Mode",

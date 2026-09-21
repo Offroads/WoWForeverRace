@@ -8,6 +8,7 @@ local WoWForeverRaceDefaultDB = {
                 hide = false,
             },
             networking = true,
+            keypressScanning = true,
             maxLevelNotify = true,
             classTopN = 3,
             raceTopN = 1,
