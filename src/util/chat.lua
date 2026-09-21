@@ -24,31 +24,57 @@ function WoWForeverRace:PPrint(message)
     print("|cFF7777FFWoWForeverRace:|cFFFFFFFF", message)
 end
 
+-- Debug / trace output is also kept here (oldest first, plain text) so the debug
+-- window can show more than the chat frame holds, in a box it can be copied from.
+local DEBUG_LOG_MAX = 2000
+WoWForeverRace.DebugLog = {}
+
+function WoWForeverRace:AddDebugLog(message)
+    local log = self.DebugLog
+    -- strip colors and hyperlinks, an edit box would hand them out as raw escape codes
+    local text = tostring(message)
+        :gsub("|c%x%x%x%x%x%x%x%x", "")
+        :gsub("|r", "")
+        :gsub("|H.-|h(.-)|h", "%1")
+    log[#log + 1] = (_G.date or os.date)("%H:%M:%S") .. " " .. text
+    while #log > DEBUG_LOG_MAX do table.remove(log, 1) end
+
+    if self.DebugFrame then
+        self.DebugFrame:OnDebugLog()
+    end
+end
+
 function WoWForeverRace:DebugPrint(message)
     local enabled = self.DB and self.DB.profile.options.debug or (not self.DB and self.Config.Debug)
     if enabled then
         print("|cFF7777FFWoWForeverRace Debug:|cFFFFFFFF", message)
+        self:AddDebugLog(message)
     end
 end
 
 function WoWForeverRace:TracePrint(message)
     if (self.Config.Trace == true) then
         print("|cFF7777FFWoWForeverRace Trace:|cFFFFFFFF", message)
+        self:AddDebugLog(message)
     end
 end
 
 function WoWForeverRace:DebugPrintTable(t)
     local enabled = self.DB and self.DB.profile.options.debug or (not self.DB and self.Config.Debug)
     if enabled then
+        local dump = dumpTable(t)
         print("|cFF7777FFWoWForeverRace Debug:|cFFFFFFFF table...")
-        print(dumpTable(t))
+        print(dump)
+        self:AddDebugLog(dump)
     end
 end
 
 function WoWForeverRace:TracePrintTable(t)
     if (self.Config.Trace == true) then
+        local dump = dumpTable(t)
         print("|cFF7777FFWoWForeverRace Trace:|cFFFFFFFF table...")
-        print(dumpTable(t))
+        print(dump)
+        self:AddDebugLog(dump)
     end
 end
 
