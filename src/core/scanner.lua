@@ -419,7 +419,7 @@ function WoWForeverRaceScanner:TriggerScan()
         query = tostring(scanMin) .. "-" .. tostring(maxLevel)
     end
 
-    WoWForeverRace:DebugPrint("Scanning /who " .. query)
+    WoWForeverRace:DebugPrint("Scanning /who " .. query, true)
 
     if C_FriendList and C_FriendList.SendWho then
         self:SuppressWhoUi()
