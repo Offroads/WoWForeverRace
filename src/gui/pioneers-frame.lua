@@ -53,9 +53,10 @@ function WoWForeverRacePioneersView:Render(container, classIndex)
 
     local WHITE = WoWForeverRace.Colors.WHITE
     local ftl = self.DB.factionrealm.firstToLevel or {}
-    -- Use realm-opened timestamp as the fixed race-start reference.
-    -- Fall back to raceStartedAt (earliest player detection) if realmOpenedAt is not yet synced.
-    local refTime = self.DB.factionrealm.realmOpenedAt or self.DB.factionrealm.raceStartedAt
+    -- Use the official realm launch as the fixed race-start reference. Before launch fall back to the
+    -- realm-opened timestamp, or raceStartedAt (earliest player detection) if that is not yet synced.
+    local refTime = self.Core:RaceStartTime(
+            self.DB.factionrealm.realmOpenedAt or self.DB.factionrealm.raceStartedAt)
     local levels = ftl[classIndex]
 
     local scrolltainer = AceGUI:Create("SimpleGroup")

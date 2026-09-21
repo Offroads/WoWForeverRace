@@ -104,6 +104,16 @@ function WoWForeverRaceCore:Now()
     return GetServerTime()
 end
 
+-- Reference time the race is measured from: the official realm launch once it has passed,
+-- else (before launch, e.g. on the beta) the given inferred fallback.
+function WoWForeverRaceCore:RaceStartTime(fallback)
+    local launchAt = self.Config.RealmLaunchAt
+    if launchAt ~= nil and self:Now() >= launchAt then
+        return launchAt
+    end
+    return fallback
+end
+
 function WoWForeverRaceCore:LoginTime()
     return self.loginTime
 end

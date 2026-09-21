@@ -31,6 +31,10 @@ local WoWForeverRaceConfig = {
     MaxLevel = 60,
     MaxLeaderboardSize = 50,
 
+    -- Official realm launch, 2026-11-04 23:00 UTC (2026-11-05 00:00 GMT+1), as server time (UTC epoch).
+    -- There is no API for this; update it for each launch. nil falls back to the inferred timestamps.
+    RealmLaunchAt = 1793833200,
+
     -- OfferSync throttle time window
     RequestSyncWait = 5,
     RetrySyncWait = 30,
