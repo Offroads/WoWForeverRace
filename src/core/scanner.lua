@@ -14,7 +14,7 @@ Scanner listens passively to WHO_LIST_UPDATE events and publishes results via Ev
 
 SendWho() is a restricted function in WoW Forever and cannot be called from
 timers or any non-hardware-event context. TriggerScan() is therefore wired to hardware events:
-  - WorldFrame OnMouseDown (every in-world click), with a 15s cooldown
+  - WorldFrame OnMouseDown (every in-world click), with a cooldown (SCAN_COOLDOWN)
   - The minimap icon's OnClick
 
 This mirrors the CensusPlusClassic approach: piggyback on the player's existing
@@ -30,11 +30,12 @@ setmetatable(WoWForeverRaceScanner, {
     end,
 })
 
-local SCAN_COOLDOWN  = 15  -- seconds between automatic scans
+local SCAN_COOLDOWN  = 5   -- seconds between automatic scans, doubled whenever a reply is lost
+local SCAN_COOLDOWN_MAX = 30
 local SCAN_TIMEOUT   = 60  -- seconds before an unanswered /who is abandoned
 local WHO_RESULT_CAP = 50  -- WoW never returns more than this many /who rows
-local CLASS_COMPLETE_TTL = 900  -- seconds before a fully-scanned class is scanned again
-local FLOOR_BOUND_TTL = 900  -- seconds a class floor is remembered as overflowing / fitting
+local CLASS_COMPLETE_TTL = 900  -- seconds before a fully-scanned class or race is scanned again
+local FLOOR_BOUND_TTL = 900  -- seconds a class or race floor is remembered as overflowing / fitting
 
 -- Blizzard frames that open the who panel on WHO_LIST_UPDATE. In WoW Forever the who
 -- list lives in the load-on-demand group finder. Looked up by name at scan time.
@@ -46,9 +47,16 @@ function WoWForeverRaceScanner.new(Core, DB, EventBus)
     self.Core = Core
     self.DB = DB
     self.EventBus = EventBus
-    self.lastScanTime = -SCAN_COOLDOWN
-    self.nextScanClassIdx = 1  -- cycles through MopClassIndexes
-    self.lastScanClassIndex = nil
+    self.lastScanTime = -SCAN_COOLDOWN_MAX
+    self.scanCooldown = SCAN_COOLDOWN
+    -- The filtered scans cycle through slots: the classes and the races of our
+    -- faction (ScanSlots), classes first. The per-class state below is keyed by
+    -- the slot's leaderboard index, so it serves the race slots as well.
+    self.nextScanClassIdx = 1  -- cycles through the class slots
+    self.nextScanRaceIdx = 1   -- cycles through the race slots
+    self.classScansSinceRace = 0  -- a race only gets a turn after a round of class scans
+    self.lastScanClassIndex = nil  -- leaderboard index of the pending filtered scan
+    self.lastScanRaceIndex = nil   -- race of the pending scan, when it is a race scan
     self.classScanFloor = {}   -- per-class adaptive floor level
     self.classCappedFloor = {} -- per-class: {level, at} of the highest floor that overflowed the row cap
     self.classFittingFloor = {} -- per-class: {level, at} of the lowest floor that fit under the row cap
@@ -57,6 +65,7 @@ function WoWForeverRaceScanner.new(Core, DB, EventBus)
     self.scanPending = false
     self.pendingScanMin = nil
     self.lastResultFull = {}   -- per-class: did last scan hit WHO_RESULT_CAP?
+    self.floorRaiseStreak = {} -- per-class: full results in a row without a known floor to aim for
 
     self.whoFrame = CreateFrame("Frame")
     self.whoFrame:RegisterEvent("WHO_LIST_UPDATE")
@@ -86,13 +95,18 @@ function WoWForeverRaceScanner.new(Core, DB, EventBus)
 end
 
 function WoWForeverRaceScanner:ResetState()
-    self.lastScanTime = -SCAN_COOLDOWN
+    self.lastScanTime = -SCAN_COOLDOWN_MAX
+    self.scanCooldown = SCAN_COOLDOWN
     self.nextScanClassIdx = 1
+    self.nextScanRaceIdx = 1
+    self.classScansSinceRace = 0
     self.lastScanClassIndex = nil
+    self.lastScanRaceIndex = nil
     self.classScanFloor = {}
     self.classCappedFloor = {}
     self.classFittingFloor = {}
     self.lastResultFull = {}
+    self.floorRaiseStreak = {}
     self.classScanComplete = {}
     self.probe = nil
     self.scanPending = false
@@ -102,6 +116,13 @@ end
 
 -- Gives up on the pending scan (lost reply) and hands the who UI back.
 function WoWForeverRaceScanner:AbandonScan()
+    -- The server answers /who only so often and drops what comes in faster. There is
+    -- no API for that limit, so a lost reply slows the scans down for the session
+    -- (unless somebody else's /who explains the loss).
+    if self.scanPending and not self.foreignWhoSeen then
+        self.scanCooldown = math.min(self.scanCooldown * 2, SCAN_COOLDOWN_MAX)
+        WoWForeverRace:DebugPrint("Lost a /who reply, scanning every " .. self.scanCooldown .. "s from now on")
+    end
     self.scanPending = false
     self.pendingScanMin = nil
     self:RestoreWhoUi()
@@ -125,6 +146,53 @@ function WoWForeverRaceScanner:ClassWhoFilter(className)
     local name = localized and localized[className] or WoWForeverRace.Config.WhoClassFilter[className]
     if not name then return nil end
     return (_G.WHO_TAG_CLASS or "c-") .. '"' .. name .. '"'
+end
+
+-- The race part of a /who query. The server matches the localized race name too.
+function WoWForeverRaceScanner:RaceWhoFilter(raceIndex)
+    local name = self.Core:RaceName(raceIndex)
+    if not name then return nil end
+    return (_G.WHO_TAG_RACE or "r-") .. '"' .. name .. '"'
+end
+
+-- The filtered scans: one slot per class and one per race of our faction, as two lists.
+-- boardIndex is the leaderboard the slot fills and the key of its scan state.
+function WoWForeverRaceScanner:ScanSlots()
+    local config = WoWForeverRace.Config
+    local classSlots, raceSlots = {}, {}
+    for _, classIndex in ipairs(config.MopClassIndexes) do
+        classSlots[#classSlots + 1] = {
+            boardIndex = classIndex,
+            filter = self:ClassWhoFilter(config.Classes[classIndex]),
+        }
+    end
+    for _, raceIndex in ipairs(self.Core:MyRaceIndexes()) do
+        raceSlots[#raceSlots + 1] = {
+            boardIndex = config:RaceBoardIndex(raceIndex),
+            raceIndex = raceIndex,
+            filter = self:RaceWhoFilter(raceIndex),
+        }
+    end
+    return classSlots, raceSlots
+end
+
+-- Position of the next slot that still needs a scan, starting at startIdx and wrapping
+-- around. A slot is done when it rests after a complete scan, or when its leaderboard
+-- is full AND the lowest player is already at max level.
+function WoWForeverRaceScanner:NextDueSlot(slots, startIdx, now)
+    local maxLevel = WoWForeverRace.Config.MaxLevel
+    local maxSize  = WoWForeverRace.Config.MaxLeaderboardSize
+    for i = 0, #slots - 1 do
+        local pos        = ((startIdx - 1 + i) % #slots) + 1
+        local lb         = self.DB.factionrealm.leaderboard[slots[pos].boardIndex]
+        local completeAt = self.classScanComplete[slots[pos].boardIndex]
+        local resting    = completeAt ~= nil and now - completeAt < CLASS_COMPLETE_TTL
+        local final      = lb and #lb.players >= maxSize and lb.minLevel >= maxLevel
+        if slots[pos].filter and lb and not resting and not final then
+            return pos
+        end
+    end
+    return nil
 end
 
 -- Stops the Blizzard who panel from popping up for the response to our scan.
@@ -171,30 +239,42 @@ function WoWForeverRaceScanner:OnWhoListUpdate()
 
     -- Collect the rows first: a manual /who fired while our scan is pending
     -- also raises WHO_LIST_UPDATE, and must not be misattributed to the scan.
+    -- (a race scan's leaderboard index is no class index, so it has no pending class)
     local pendingClass = self.lastScanClassIndex ~= nil
             and WoWForeverRace.Config.Classes[self.lastScanClassIndex] or nil
+    local pendingRace = self.lastScanRaceIndex
     local matchesQuery = true
     local batch = {}
     for i = 1, numShown do
-        local name, level, filename
+        local name, level, filename, raceStr
 
         local info = C_FriendList.GetWhoInfo(i)
         if type(info) == "table" then
             name     = info.fullName
             level    = tonumber(info.level)
             filename = info.filename
+            raceStr  = info.raceStr
         else
             -- Positional API fallback: charName, guild, charLevel, race, class, zone, filename, gender
-            local charName, _, charLevel, _, _, _, charFilename = C_FriendList.GetWhoInfo(i)
+            local charName, _, charLevel, charRace, _, _, charFilename = C_FriendList.GetWhoInfo(i)
             name     = charName
             level    = tonumber(charLevel)
             filename = charFilename
+            raceStr  = charRace
         end
+
+        -- the row only has the localized race name; nil when it is none of our faction's
+        local raceIndex = self.Core:RaceIndexByName(raceStr)
 
         if level ~= nil and self.pendingScanMin ~= nil and level < self.pendingScanMin then
             matchesQuery = false
         end
         if filename ~= nil and pendingClass ~= nil and string.upper(filename) ~= pendingClass then
+            matchesQuery = false
+        end
+        -- Only another known race gives a foreign result away: a name we can't
+        -- resolve (other client languages may use gendered names) proves nothing.
+        if raceIndex ~= nil and pendingRace ~= nil and raceIndex ~= pendingRace then
             matchesQuery = false
         end
 
@@ -205,6 +285,7 @@ function WoWForeverRaceScanner:OnWhoListUpdate()
                     name  = playerName,
                     level = level,
                     class = filename and string.upper(filename) or nil,
+                    raceIndex = raceIndex,
                 })
             end
         end
@@ -229,14 +310,10 @@ function WoWForeverRaceScanner:OnWhoListUpdate()
         return
     end
 
-    -- the result is complete when the server had no more matches than it sent us;
-    -- the row cap is only a fallback for clients that don't report the total
-    local resultComplete
-    if total ~= nil then
-        resultComplete = total <= numShown
-    else
-        resultComplete = numShown < WHO_RESULT_CAP
-    end
+    -- The result is complete when it stayed under the row cap. A full result counts as
+    -- cut off even when the client reports no more matches than rows: the WoW Forever
+    -- client caps that total at the row cap too ("50 People Found" for any larger result).
+    local resultComplete = numShown < WHO_RESULT_CAP and (total == nil or total <= numShown)
 
     if self.lastScanClassIndex then
         self.lastResultFull[self.lastScanClassIndex] = not resultComplete
@@ -246,7 +323,7 @@ function WoWForeverRaceScanner:OnWhoListUpdate()
         end
         if resultComplete and self.pendingScanMin ~= nil and self.pendingScanMin <= 2 then
             -- /who only returns online players, so a complete result is just a
-            -- snapshot: rest the class for CLASS_COMPLETE_TTL, don't retire it.
+            -- snapshot: rest the class or race for CLASS_COMPLETE_TTL, don't retire it.
             self.classScanComplete[self.lastScanClassIndex] = GetTime()
         end
     elseif self.probePending then
@@ -254,6 +331,7 @@ function WoWForeverRaceScanner:OnWhoListUpdate()
     end
     self.probePending = false
     self.pendingScanMin = nil
+    self.lastScanRaceIndex = nil
 
     if #batch == 0 then return end
 
@@ -265,27 +343,37 @@ function WoWForeverRaceScanner:OnWhoListUpdate()
 end
 
 -- Keeps the unfiltered probe scan as a sample of who is online: the server's match
--- count plus the levels and classes of the rows it sent, see ProbeFloor.
+-- count plus the levels, classes and races of the rows it sent, see ProbeFloor.
 function WoWForeverRaceScanner:RecordProbe(batch, total)
-    local probe = {total = total, levels = {}, classCount = {}}
+    local probe = {total = total, levels = {}, classCount = {}, raceCount = {}}
     for _, player in ipairs(batch) do
         table.insert(probe.levels, player.level)
         if player.class then
             probe.classCount[player.class] = (probe.classCount[player.class] or 0) + 1
+        end
+        if player.raceIndex then
+            probe.raceCount[player.raceIndex] = (probe.raceCount[player.raceIndex] or 0) + 1
         end
     end
     table.sort(probe.levels, function(a, b) return a > b end)
     self.probe = probe
 end
 
--- Estimates from the probe sample where a class scan has to start to fit under the
--- row cap. nil when the whole class is expected to fit (or there is no usable probe).
-function WoWForeverRaceScanner:ProbeFloor(className)
+-- Estimates from the probe sample where a class scan (or, without a className, the
+-- scan of a race) has to start to fit under the row cap. nil when the whole class
+-- is expected to fit (or there is no usable probe).
+function WoWForeverRaceScanner:ProbeFloor(className, raceIndex)
     local probe = self.probe
     if not probe or not probe.total or #probe.levels == 0 then return nil end
 
     local sampled    = #probe.levels
-    local classTotal = probe.total * (probe.classCount[className] or 0) / sampled
+    local count
+    if className ~= nil then
+        count = probe.classCount[className]
+    else
+        count = probe.raceCount and probe.raceCount[raceIndex]
+    end
+    local classTotal = probe.total * (count or 0) / sampled
     if classTotal <= WHO_RESULT_CAP then return nil end
 
     -- the share of the class that fits, applied to the sampled level distribution
@@ -296,9 +384,11 @@ function WoWForeverRaceScanner:ProbeFloor(className)
     return floor
 end
 
--- The floor for the next scan of a class. Starts at the probe's estimate, or at lo
--- (nothing below it matters), and bisects towards the lowest floor whose result still fits under the /who row
--- cap: an overflowing result is an arbitrary subset that can miss the top players.
+-- The floor for the next scan of a class or race, by its leaderboard index. It works from the top down: it
+-- starts at the highest level already on that leaderboard (an empty one starts at the probe's estimate, or at
+-- lo, nothing below it matters) and comes down one level per visit while the result fits under the /who row
+-- cap. A full result is an arbitrary subset that can miss the top players, so the floor goes back up and
+-- settles on the lowest floor that fits.
 -- hi is the highest level seen so far, there is no point in probing far above it.
 function WoWForeverRaceScanner:NextClassFloor(classIndex, lo, hi, now)
     local floor = self.classScanFloor[classIndex]
@@ -307,24 +397,47 @@ function WoWForeverRaceScanner:NextClassFloor(classIndex, lo, hi, now)
     self.lastResultFull[classIndex] = nil
 
     if floor == nil then
-        floor = self:ProbeFloor(WoWForeverRace.Config.Classes[classIndex]) or lo
+        -- a leaderboard index that is no class index belongs to a race
+        local className = WoWForeverRace.Config.Classes[classIndex]
+        local raceIndex = className == nil and classIndex - WoWForeverRace.Config.RaceBoardOffset or nil
+        local lb = self.DB.factionrealm.leaderboard[classIndex]
+        if lb and #lb.players > 0 then
+            -- the top players first: whoever leads the leaderboard is at this level
+            floor = lb.highestLevel
+        else
+            floor = self:ProbeFloor(className, raceIndex) or lo
+        end
     elseif full == true then
-        -- Over the cap → raise floor, halfway to a floor known to fit (or to hi).
+        -- Over the cap -> raise floor, halfway to a floor known to fit (or to hi).
         local target  = hi
         local fitting = self.classFittingFloor[classIndex]
-        if fitting and fitting.level > floor and now - fitting.at < FLOOR_BOUND_TTL then
+        local fittingKnown = fitting and now - fitting.at < FLOOR_BOUND_TTL
+        local step = nil
+        if fittingKnown and fitting.level > floor then
             target = fitting.level
+        elseif fittingKnown and fitting.level == floor then
+            -- this floor used to fit: the players outgrew it, the next level is likely enough
+            step = 1
+        elseif target <= floor then
+            -- A full result from the highest level seen: nobody is known above it, so
+            -- look just above (21-60 after a full 20-60). If that is full as well the
+            -- highest level seen is outdated: double the step for each full result in a row.
+            local streak = self.floorRaiseStreak[classIndex] or 0
+            self.floorRaiseStreak[classIndex] = streak + 1
+            step = 2 ^ streak
         end
-        floor = floor + math.max(math.ceil((target - floor) / 2), 1)
+        floor = floor + (step or math.max(math.ceil((target - floor) / 2), 1))
     elseif full == false then
-        -- Under the cap → lower floor, but not back into a range known to overflow.
+        self.floorRaiseStreak[classIndex] = nil
+        -- Under the cap -> there is room, take in one more level, but don't go
+        -- back into a range known to overflow.
         local low    = lo
         local capped = self.classCappedFloor[classIndex]
         if capped and now - capped.at < FLOOR_BOUND_TTL then
             low = math.max(low, capped.level + 1)
         end
         if floor > low then
-            floor = floor - math.ceil((floor - low) / 2)
+            floor = floor - 1
         end
     end
 
@@ -333,10 +446,10 @@ function WoWForeverRaceScanner:NextClassFloor(classIndex, lo, hi, now)
     return floor
 end
 
--- TriggerScan sends a /who query for the next class leaderboard that isn't full.
--- Once all class leaderboards reach 50 players it falls back to a global level scan.
+-- TriggerScan sends a /who query for the next class or race leaderboard that isn't final.
+-- Once all of them are it falls back to a global level scan.
 -- MUST be called from a hardware event context (mouse click, key press).
--- Safe to call frequently; enforces a 15s cooldown internally.
+-- Safe to call frequently; enforces a cooldown internally.
 function WoWForeverRaceScanner:TriggerScan()
     local now = GetTime()
 
@@ -351,13 +464,11 @@ function WoWForeverRaceScanner:TriggerScan()
 
     if self.DB.factionrealm.finished then return end
 
-    if now - self.lastScanTime < SCAN_COOLDOWN then return end
+    if now - self.lastScanTime < self.scanCooldown then return end
     self.lastScanTime = now
 
     local maxLevel   = WoWForeverRace.Config.MaxLevel
     local maxSize    = WoWForeverRace.Config.MaxLeaderboardSize
-    local validIdx   = WoWForeverRace.Config.MopClassIndexes
-    local numClasses = #validIdx
     local query      = nil
 
     -- The session's first scan is an unfiltered probe of the whole level range: its
@@ -367,26 +478,33 @@ function WoWForeverRaceScanner:TriggerScan()
     local probing = self.probe == nil or not globalLb or #globalLb.players == 0
     if probing then
         self.lastScanClassIndex = nil
+        self.lastScanRaceIndex = nil
         query = "2-" .. tostring(maxLevel)
     end
 
-    -- Cycle through classes that still need work.
-    -- A class is done only when its leaderboard is full AND the lowest player is already at max level.
-    if not query then for i = 0, numClasses - 1 do
-        local slot       = ((self.nextScanClassIdx - 1 + i) % numClasses) + 1
-        local classIndex = validIdx[slot]
-        local classLb    = self.DB.factionrealm.leaderboard[classIndex]
-        local className  = WoWForeverRace.Config.Classes[classIndex]
-        local filter     = self:ClassWhoFilter(className)
-        local completeAt = self.classScanComplete[classIndex]
-        local restingComplete = completeAt ~= nil and now - completeAt < CLASS_COMPLETE_TTL
-        local isDone = classLb and (
-                restingComplete
-                or (#classLb.players >= maxSize and classLb.minLevel >= maxLevel))
+    -- Cycle through the classes and races that still need work, classes first: a race
+    -- only gets a turn after a round of class scans, or when no class needs one.
+    if not query then
+        local classSlots, raceSlots = self:ScanSlots()
+        local classPos = self:NextDueSlot(classSlots, self.nextScanClassIdx, now)
+        local racePos  = self:NextDueSlot(raceSlots, self.nextScanRaceIdx, now)
 
-        if filter and classLb and not isDone then
-            self.nextScanClassIdx = (slot % numClasses) + 1
+        local slot = nil
+        if racePos and (classPos == nil or self.classScansSinceRace >= #classSlots) then
+            slot = raceSlots[racePos]
+            self.nextScanRaceIdx = (racePos % #raceSlots) + 1
+            self.classScansSinceRace = 0
+        elseif classPos then
+            slot = classSlots[classPos]
+            self.nextScanClassIdx = (classPos % #classSlots) + 1
+            self.classScansSinceRace = self.classScansSinceRace + 1
+        end
+
+        if slot then
+            local classIndex = slot.boardIndex
+            local classLb    = self.DB.factionrealm.leaderboard[classIndex]
             self.lastScanClassIndex = classIndex
+            self.lastScanRaceIndex = slot.raceIndex
 
             -- Leaderboard full but players still leveling: nothing below the lowest known level matters.
             local lo = 2
@@ -396,18 +514,18 @@ function WoWForeverRaceScanner:TriggerScan()
             local hi = math.max(classLb.highestLevel, globalLb.highestLevel)
             local scanMin = self:NextClassFloor(classIndex, lo, hi, now)
 
-            query = tostring(scanMin) .. "-" .. tostring(maxLevel) .. " " .. filter
-            break
+            query = tostring(scanMin) .. "-" .. tostring(maxLevel) .. " " .. slot.filter
         end
-    end end -- end class scan loop + if not query guard
+    end
 
-    -- All class leaderboards done: scan by global top range
+    -- All class and race leaderboards done: scan by global top range
     if not query then
         self.lastScanClassIndex = nil
+        self.lastScanRaceIndex = nil
         local lb = self.DB.factionrealm.leaderboard[0]
 
         -- Global leaderboard is also full with everyone at max level - the race
-        -- may be over; the Tracker verifies every class board before finishing.
+        -- may be over; the Tracker verifies every class and race board before finishing.
         if #lb.players >= maxSize and lb.minLevel >= maxLevel then
             self.EventBus:PublishEvent(WoWForeverRace.Config.Events.ScanFinished, true)
             return

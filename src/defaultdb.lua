@@ -10,6 +10,7 @@ local WoWForeverRaceDefaultDB = {
             networking = true,
             maxLevelNotify = true,
             classTopN = 3,
+            raceTopN = 1,
             globalTopN = 5,
             debug = false,
         },

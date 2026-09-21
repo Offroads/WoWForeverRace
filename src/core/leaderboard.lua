@@ -44,7 +44,7 @@ function WoWForeverRaceLeaderboard.ComputeHash(lbdb)
     local hash = 5381
     for _, player in ipairs(lbdb.players) do
         local entry = player.name .. ":" .. player.level .. ":" .. (player.classIndex or 0)
-                .. ":" .. math.floor(player.dingedAt or 0)
+                .. ":" .. math.floor(player.dingedAt or 0) .. ":" .. (player.raceIndex or 0)
         for i = 1, #entry do
             hash = ((hash * 33) + string.byte(entry, i)) % 2147483647
         end
@@ -103,13 +103,17 @@ function WoWForeverRaceLeaderboard:ProcessPlayerInfo(playerInfo)
             and playerInfo.dingedAt ~= nil
             and (previousPlayer.dingedAt == nil or playerInfo.dingedAt < previousPlayer.dingedAt)
 
-    -- no change in rank; still fill in a previously unknown classIndex in place, so
-    -- clients holding the same player with and without class info converge on the
-    -- same hash instead of mismatching forever
+    -- no change in rank; still fill in a previously unknown classIndex or raceIndex in
+    -- place, so clients holding the same player with and without class / race info
+    -- converge on the same hash instead of mismatching forever
     if not isNew and not isDing and not isDingedAtUpdate then
         if (previousPlayer.classIndex == nil or previousPlayer.classIndex == 0)
                 and playerInfo.classIndex ~= nil and playerInfo.classIndex ~= 0 then
             previousPlayer.classIndex = playerInfo.classIndex
+        end
+        if (previousPlayer.raceIndex == nil or previousPlayer.raceIndex == 0)
+                and playerInfo.raceIndex ~= nil and playerInfo.raceIndex ~= 0 then
+            previousPlayer.raceIndex = playerInfo.raceIndex
         end
         return
     end
@@ -130,6 +134,12 @@ function WoWForeverRaceLeaderboard:ProcessPlayerInfo(playerInfo)
             and previousPlayer.classIndex ~= nil and previousPlayer.classIndex ~= 0 then
         classIndex = previousPlayer.classIndex
     end
+    -- same for the race
+    local raceIndex = playerInfo.raceIndex
+    if (raceIndex == nil or raceIndex == 0) and previousPlayer ~= nil
+            and previousPlayer.raceIndex ~= nil and previousPlayer.raceIndex ~= 0 then
+        raceIndex = previousPlayer.raceIndex
+    end
 
     -- remove from previous rank
     if previousRank ~= nil then
@@ -142,6 +152,7 @@ function WoWForeverRaceLeaderboard:ProcessPlayerInfo(playerInfo)
         level = playerInfo.level,
         dingedAt = playerInfo.dingedAt,
         classIndex = classIndex,
+        raceIndex = raceIndex,
     })
 
     -- truncate when leaderboard reached max size

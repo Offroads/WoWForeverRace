@@ -100,6 +100,57 @@ function WoWForeverRaceCore:ClassByIndex(classIndex)
     end
 end
 
+-- the races our faction tracks, see Config.FactionRaceIndexes
+function WoWForeverRaceCore:MyRaceIndexes()
+    return self.Config:RaceIndexes(self:MyFaction())
+end
+
+function WoWForeverRaceCore:IsValidRaceIndex(raceIndex)
+    return self.Config:IsValidRaceIndex(raceIndex, self:MyFaction())
+end
+
+-- every leaderboard index of our faction, see Config:BoardIndexes
+function WoWForeverRaceCore:BoardIndexes(peerHashes)
+    return self.Config:BoardIndexes(self:MyFaction(), peerHashes)
+end
+
+-- The client's localized race name, which is what /who shows and filters by;
+-- the English names in Config.RaceNames are the fallback.
+function WoWForeverRaceCore:RaceName(raceIndex)
+    if self.Config.Races[raceIndex] == nil then
+        return nil
+    end
+
+    local creatureInfo = _G.C_CreatureInfo
+    local info = creatureInfo and creatureInfo.GetRaceInfo and creatureInfo.GetRaceInfo(raceIndex)
+    if type(info) == "table" and type(info.raceName) == "string" and info.raceName ~= "" then
+        return info.raceName
+    end
+
+    return self.Config.RaceNames[raceIndex]
+end
+
+-- The race behind a localized race name (a /who row has nothing else). Only the
+-- races of our faction resolve, /who lists nobody else. nil when unknown.
+function WoWForeverRaceCore:RaceIndexByName(raceStr)
+    if type(raceStr) ~= "string" then
+        return nil
+    end
+
+    -- faction and locale don't change within a session
+    if self.raceIndexByName == nil then
+        self.raceIndexByName = {}
+        for _, raceIndex in ipairs(self:MyRaceIndexes()) do
+            local name = self:RaceName(raceIndex)
+            if name ~= nil then
+                self.raceIndexByName[name] = raceIndex
+            end
+        end
+    end
+
+    return self.raceIndexByName[raceStr]
+end
+
 function WoWForeverRaceCore:SplitFullPlayer(fullPlayer)
     local splt = WoWForeverRace.SplitString(fullPlayer, "-")
 

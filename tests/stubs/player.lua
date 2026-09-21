@@ -20,7 +20,7 @@ _G.C_FriendList = {
         whoQuery = query
     end,
 }
--- results: list of {fullName, level, filename}; total: server-side match count
+-- results: list of {fullName, level, filename, raceStr}; total: server-side match count
 -- (defaults to #results, pass a higher value to simulate a truncated result)
 _G.SetWhoResults = function(results, total)
     whoResults = results or {}
@@ -58,7 +58,30 @@ _G.UnitClass = function()
 end
 
 _G.UnitRace = function()
-    return "Night Elf"
+    return "Night Elf", "NightElf", 4
+end
+
+-- The playable races as the enUS client names them. See SetRaceNames(names): the
+-- stub reads the table on every call, but Core caches the names per instance, so
+-- set them before creating the Core under test.
+local defaultRaces = {
+    [1] = {"Human", "Human"}, [2] = {"Orc", "Orc"}, [3] = {"Dwarf", "Dwarf"},
+    [4] = {"Night Elf", "NightElf"}, [5] = {"Undead", "Scourge"}, [6] = {"Tauren", "Tauren"},
+    [7] = {"Gnome", "Gnome"}, [8] = {"Troll", "Troll"},
+    [95] = {"High Order Skyborne", "Skyborne"}, [96] = {"Windshaper Skyborne", "Skyborne"},
+}
+local raceNames = {}
+_G.C_CreatureInfo = {
+    GetRaceInfo = function(raceID)
+        local race = defaultRaces[raceID]
+        if race == nil then return nil end
+        return {raceName = raceNames[raceID] or race[1], clientFileString = race[2], raceID = raceID}
+    end,
+}
+
+-- names: {[raceID] = localized name}, to simulate another client language
+_G.SetRaceNames = function(names)
+    raceNames = names or {}
 end
 
 -- see SetFaction(faction): the stub reads the variable on every call, because

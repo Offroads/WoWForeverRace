@@ -130,15 +130,15 @@ describe("Tracker", function()
 
             tracker:ProcessPlayerInfoBatch({ playerInfo("Nubone", 5), })
             assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.Ding,
-                    match.is_table(), 1, 1)
+                    match.is_table(), 1, 1, nil)
 
             tracker:ProcessPlayerInfoBatch({ playerInfo("Nubone", 6), })
             assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.Ding,
-                    match.is_table(), 1, 1)
+                    match.is_table(), 1, 1, nil)
 
             tracker:ProcessPlayerInfoBatch({ playerInfo("Nub2", 7), })
             assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.Ding,
-                    match.is_table(), 1, 1)
+                    match.is_table(), 1, 1, nil)
 
             eventBusSpy:clear()
             tracker:ProcessPlayerInfoBatch({ playerInfo("Nubone", 6), })
@@ -146,7 +146,7 @@ describe("Tracker", function()
 
             tracker:ProcessPlayerInfoBatch({ playerInfo("Nubone", 7), })
             assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.Ding,
-                    match.is_table(), 2, 2)
+                    match.is_table(), 2, 2, nil)
         end)
 
         it("shouldn't broadcast to network OnNetPlayerInfo", function()
@@ -171,7 +171,7 @@ describe("Tracker", function()
             })
 
             assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.Ding,
-                    match.is_table(), 1, 1)
+                    match.is_table(), 1, 1, nil)
 
             assert.spy(eventBusSpy).called_at_most(1)
         end)
@@ -530,9 +530,9 @@ describe("Tracker", function()
     end)
 
     describe("RaceFinished", function()
-        -- fills the class leaderboards with max-level players, optionally
-        -- leaving some class boards one player short
-        local function fillClassLeaderboards(missing)
+        -- fills the class and race leaderboards with max-level players, optionally
+        -- leaving some boards one player short
+        local function fillClassLeaderboards(missing, missingRaces)
             missing = missing or {}
             for _, classIndex in ipairs(WoWForeverRace.Config.MopClassIndexes) do
                 local size = config.MaxLeaderboardSize
@@ -546,6 +546,22 @@ describe("Tracker", function()
                 db.factionrealm.leaderboard[classIndex].players = players
                 if size >= config.MaxLeaderboardSize then
                     db.factionrealm.leaderboard[classIndex].minLevel = config.MaxLevel
+                end
+            end
+            -- the race leaderboards count too; missingRaces leaves some one player short
+            for _, raceIndex in ipairs(core:MyRaceIndexes()) do
+                local size = config.MaxLeaderboardSize
+                if missingRaces and missingRaces[raceIndex] then size = size - 1 end
+
+                local lb = db.factionrealm.leaderboard[config:RaceBoardIndex(raceIndex)]
+                local players = {}
+                for i = 1, size do
+                    players[i] = {name = "R" .. raceIndex .. "Racer" .. i, level = config.MaxLevel,
+                                  dingedAt = time + i, classIndex = WARRIORIDX, raceIndex = raceIndex}
+                end
+                lb.players = players
+                if size >= config.MaxLeaderboardSize then
+                    lb.minLevel = config.MaxLevel
                 end
             end
             tracker:ReinitLeaderboards()
@@ -873,6 +889,228 @@ describe("Tracker", function()
             end
 
             assert.is_true(tracker:ComputeNeedSet(requesterHashes)[PALADINIDX])
+        end)
+    end)
+
+    describe("Race leaderboards", function()
+        local HUMAN, NIGHTELF, SKYBORNE = 1, 4, 95
+
+        local function raceBoard(raceIndex)
+            return db.factionrealm.leaderboard[config:RaceBoardIndex(raceIndex)]
+        end
+
+        local function racePlayer(name, level, raceIndex, classIndex, dingedAt)
+            local info = playerInfo(name, level, classIndex, dingedAt)
+            info.raceIndex = raceIndex
+            return info
+        end
+
+        it("puts a player of a known race on the overall, class and race leaderboard", function()
+            tracker:ProcessPlayerInfo(racePlayer("Nubone", 5, SKYBORNE))
+
+            assert.equals("Nubone", db.factionrealm.leaderboard[0].players[1].name)
+            assert.equals("Nubone", db.factionrealm.leaderboard[DRUIDIDX].players[1].name)
+            assert.equals("Nubone", raceBoard(SKYBORNE).players[1].name)
+            assert.equals(SKYBORNE, raceBoard(SKYBORNE).players[1].raceIndex)
+            assert.equals(0, #raceBoard(HUMAN).players)
+        end)
+
+        it("keeps a player of an unknown or invalid race off the race leaderboards", function()
+            -- unknown, zero, the Skyborne of the other faction, an untracked race, garbage
+            for i, raceIndex in ipairs({false, 0, 96, 10, "4", {}}) do
+                tracker:ProcessPlayerInfo(racePlayer("Nub" .. i, 5, raceIndex or nil))
+            end
+
+            assert.equals(5, #db.factionrealm.leaderboard[0].players)
+            for _, player in ipairs(db.factionrealm.leaderboard[0].players) do
+                assert.is_nil(player.raceIndex)
+            end
+            for _, raceIndex in ipairs(core:MyRaceIndexes()) do
+                assert.equals(0, #raceBoard(raceIndex).players)
+            end
+            assert.equals(0, #db.factionrealm.leaderboard[config:RaceBoardIndex(96)].players)
+        end)
+
+        it("remembers the race for records that arrive without one", function()
+            tracker:ProcessPlayerInfo(racePlayer("Nubone", 5, NIGHTELF))
+            -- a peer that never saw the player in /who
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 6))
+
+            assert.equals(6, raceBoard(NIGHTELF).players[1].level)
+            assert.equals(NIGHTELF, db.factionrealm.leaderboard[0].players[1].raceIndex)
+        end)
+
+        it("fills in the race of a player first seen without one", function()
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 5))
+            assert.equals(0, #raceBoard(NIGHTELF).players)
+
+            tracker:ProcessPlayerInfo(racePlayer("Nubone", 5, NIGHTELF))
+
+            assert.equals("Nubone", raceBoard(NIGHTELF).players[1].name)
+            assert.equals(NIGHTELF, db.factionrealm.leaderboard[0].players[1].raceIndex)
+            assert.equals(NIGHTELF, db.factionrealm.leaderboard[DRUIDIDX].players[1].raceIndex)
+        end)
+
+        it("publishes the race rank with the ding", function()
+            local eventBusSpy = spy.on(eventbus, "PublishEvent")
+
+            tracker:ProcessPlayerInfo(racePlayer("Nubone", 7, HUMAN))
+            tracker:ProcessPlayerInfo(racePlayer("Nubtwo", 6, NIGHTELF))
+            tracker:ProcessPlayerInfo(racePlayer("Nubthree", 5, NIGHTELF))
+
+            assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.Ding,
+                    match.is_table(), 1, 1, 1)
+            assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.Ding,
+                    match.is_table(), 2, 2, 1)
+            assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.Ding,
+                    match.is_table(), 3, 3, 2)
+        end)
+
+        it("reports a change that only touches the race leaderboard", function()
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 5))
+            local eventBusSpy = spy.on(eventbus, "PublishEvent")
+
+            local _, isChanged = tracker:ProcessPlayerInfo(racePlayer("Nubone", 5, NIGHTELF))
+
+            assert.is_true(isChanged)
+            assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.Ding,
+                    match.is_table(), nil, nil, 1)
+        end)
+
+        it("never records pioneers per race", function()
+            tracker:ProcessPlayerInfo(racePlayer("Nubone", 5, SKYBORNE))
+
+            for classFilter in pairs(db.factionrealm.firstToLevel) do
+                assert.is_true(classFilter == 0 or config:IsValidClassIndex(classFilter))
+            end
+        end)
+
+        it("hashes, requests and sends the race leaderboards", function()
+            tracker:ProcessPlayerInfo(racePlayer("Nubone", 5, HUMAN))
+
+            -- a requester that agrees on everything but the Human leaderboard
+            local hashes = {}
+            for _, boardIndex in ipairs(core:BoardIndexes()) do
+                hashes[boardIndex + 1] = WoWForeverRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[boardIndex])
+            end
+            hashes[config:RaceBoardIndex(HUMAN) + 1] = 1
+            assert.same({[config:RaceBoardIndex(HUMAN)] = true}, tracker:ComputeNeedSet(hashes))
+
+            -- a requester that reports no race leaderboards does not track them
+            hashes[config:RaceBoardIndex(HUMAN) + 1] = nil
+            assert.same({}, tracker:ComputeNeedSet(hashes))
+        end)
+
+        it("sends the players that are only on a race leaderboard", function()
+            -- fill the overall leaderboard (5 slots) with druids, then a lower Human paladin
+            for i = 1, 5 do
+                tracker:ProcessPlayerInfo(racePlayer("Druid" .. i, 20 + i, NIGHTELF))
+            end
+            tracker:ProcessPlayerInfo(racePlayer("Human", 10, HUMAN, PALADINIDX))
+
+            local batches = tracker:CollectBatches({[config:RaceBoardIndex(HUMAN)] = true})
+
+            assert.equals(1, #batches)
+            assert.equals(config:RaceBoardIndex(HUMAN), batches[1].classIndex)
+            assert.equals("Human", batches[1].players[1].name)
+        end)
+
+        it("includes the race leaderboards in the full hash", function()
+            local before = tracker:ComputeFullHash()
+            raceBoard(HUMAN).players = {racePlayer("Nubone", 5, HUMAN)}
+            assert.not_equals(before, tracker:ComputeFullHash())
+        end)
+
+        it("heals and purges the race leaderboards like the others", function()
+            raceBoard(HUMAN).players = {
+                racePlayer("Low", 5, HUMAN, nil, time - 100.5),
+                racePlayer("High", 9, HUMAN, nil, time - 50),
+            }
+            tracker:NormalizeDB()
+            assert.equals("High", raceBoard(HUMAN).players[1].name)
+            assert.equals(time - 101, raceBoard(HUMAN).players[2].dingedAt)
+
+            -- the realm launched after these records
+            core.Config = setmetatable({RealmLaunchAt = time - 10}, {__index = WoWForeverRace.Config})
+            tracker:PurgePreLaunchData()
+
+            assert.equals(0, #raceBoard(HUMAN).players)
+        end)
+
+        it("keeps the history of race leaderboard members and of players who can still enter one", function()
+            -- every class leaderboard and the overall one are final, the Human one is not
+            for _, boardIndex in ipairs({0, DRUIDIDX}) do
+                local players = {}
+                for i = 1, config.MaxLeaderboardSize do
+                    players[i] = {name = "Top" .. i, level = config.MaxLevel, dingedAt = time + i, classIndex = DRUIDIDX}
+                end
+                db.factionrealm.leaderboard[boardIndex].players = players
+                db.factionrealm.leaderboard[boardIndex].minLevel = config.MaxLevel
+            end
+            raceBoard(HUMAN).players = {racePlayer("Member", 30, HUMAN)}
+            db.factionrealm.playerHistory = {
+                Member = {classIndex = DRUIDIDX, raceIndex = HUMAN, levels = {[30] = time}},
+                Hopeful = {classIndex = DRUIDIDX, raceIndex = HUMAN, levels = {[20] = time}},
+                Raceless = {classIndex = DRUIDIDX, levels = {[20] = time}},
+            }
+
+            tracker:PrunePlayerHistory()
+
+            assert.is_not_nil(db.factionrealm.playerHistory.Member)
+            assert.is_not_nil(db.factionrealm.playerHistory.Hopeful)
+            assert.is_nil(db.factionrealm.playerHistory.Raceless)
+        end)
+    end)
+
+    describe("RaceFinished with race leaderboards", function()
+        local function fill(boardIndex, size)
+            local players = {}
+            for i = 1, size do
+                players[i] = {name = "B" .. boardIndex .. "Racer" .. i, level = config.MaxLevel,
+                              dingedAt = time + i, classIndex = WARRIORIDX}
+            end
+            local lb = db.factionrealm.leaderboard[boardIndex]
+            lb.players = players
+            if size >= config.MaxLeaderboardSize then
+                lb.minLevel = config.MaxLevel
+            end
+        end
+
+        local function fillAllBut(openBoardIndex)
+            for _, boardIndex in ipairs(core:BoardIndexes()) do
+                if boardIndex ~= 0 then
+                    fill(boardIndex, boardIndex == openBoardIndex and config.MaxLeaderboardSize - 1
+                            or config.MaxLeaderboardSize)
+                end
+            end
+            tracker:ReinitLeaderboards()
+        end
+
+        it("does not finish while a race leaderboard is unfilled", function()
+            fillAllBut(config:RaceBoardIndex(7))
+
+            tracker:CheckRaceFinished()
+            tracker:OnScanFinished(true)
+
+            assert.is_false(db.factionrealm.finished)
+        end)
+
+        it("finishes when the final ding fills the last race leaderboard", function()
+            fillAllBut(config:RaceBoardIndex(7))
+
+            local gnome = playerInfo("Lastgnome", config.MaxLevel, WARRIORIDX)
+            gnome.raceIndex = 7
+            tracker:ProcessPlayerInfo(gnome)
+
+            assert.is_true(db.factionrealm.finished)
+        end)
+
+        it("ignores the race leaderboards of the other faction", function()
+            fillAllBut(nil)
+
+            tracker:CheckRaceFinished()
+
+            assert.is_true(db.factionrealm.finished)
         end)
     end)
 end)

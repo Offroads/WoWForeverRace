@@ -14,7 +14,7 @@ local HELP = {
     "/wfr status         print scanner / sync / leaderboard state",
     "/wfr scan           trigger a /who scan now (must be typed, needs a hardware event)",
     "/wfr update         re-run the login sync",
-    "/wfr ding NAME LVL [CLASS]   fake a /who result for a player",
+    "/wfr ding NAME LVL [CLASS] [RACEID]   fake a /who result for a player",
     "/wfr whoami NAME    pretend to be another player on this realm",
     "/wfr reset          wipe the leaderboards, pioneers and history for this faction-realm (keeps realmOpenedAt)",
     "/wfr probe          dump what the client API returns into a copyable window (do a /who first)",
@@ -24,7 +24,7 @@ local HELP = {
 The /wfr handler, overwrites with a more advanced development mode /wfr
 --]]
 function WoWForeverRace:slashwfr(input)
-    local action, arg1, arg2, arg3 = self:GetArgs(input, 4)
+    local action, arg1, arg2, arg3, arg4 = self:GetArgs(input, 5)
 
     --[[SCAN]]--
     if action == "scan" then
@@ -72,7 +72,7 @@ function WoWForeverRace:slashwfr(input)
     --[[DING name level]]--
     elseif action == "ding" then
         if arg1 == nil or tonumber(arg2) == nil then
-            self:PPrint("usage: /wfr ding NAME LEVEL [CLASS]")
+            self:PPrint("usage: /wfr ding NAME LEVEL [CLASS] [RACEID]")
             return
         end
         self:DebugPrint("Forced Ding [" .. arg1 .. "] lvl" .. arg2 .. ".")
@@ -80,6 +80,7 @@ function WoWForeverRace:slashwfr(input)
             name = arg1,
             level = tonumber(arg2),
             class = arg3 and string.upper(arg3) or "DRUID",
+            raceIndex = tonumber(arg4),
         }})
 
     --[[HELP]]--
@@ -103,11 +104,14 @@ function WoWForeverRace:PrintDevStatus()
     self:PPrint("db version " .. tostring(db.dbversion) .. ", finished: " .. tostring(db.finished)
             .. ", realm opened " .. tostring(db.realmOpenedAt))
 
-    for _, classIndex in ipairs({0, unpack(self.Config.MopClassIndexes)}) do
-        local lb = db.leaderboard[classIndex]
+    for _, boardIndex in ipairs(self.Core:BoardIndexes()) do
+        local lb = db.leaderboard[boardIndex]
         if lb and #lb.players > 0 then
-            self:PPrint(string.format("  board %2d (%s): %d players, min lvl %d, max lvl %d",
-                    classIndex, self.Core:ClassByIndex(classIndex), #lb.players, lb.minLevel, lb.highestLevel))
+            -- a leaderboard index that is no class index belongs to a race
+            local label = self.Config.Classes[boardIndex] or boardIndex == 0 and self.Core:ClassByIndex(0)
+                    or self.Core:RaceName(boardIndex - self.Config.RaceBoardOffset)
+            self:PPrint(string.format("  board %3d (%s): %d players, min lvl %d, max lvl %d",
+                    boardIndex, tostring(label), #lb.players, lb.minLevel, lb.highestLevel))
         end
     end
 

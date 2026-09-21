@@ -8,28 +8,38 @@ local WoWForeverRace = _G.WoWForeverRace
 local WoWForeverRaceSerializer = {}
 WoWForeverRace.Serializer = WoWForeverRaceSerializer
 
+-- Player record, legacy format: level(2) classIndex [.raceIndex] name dingedAtDelta
+-- The race is optional (unknown races are left out): names never contain a digit
+-- or a '.', so it fits between the class and the name.
 function WoWForeverRaceSerializer.SerializePlayerInfo(playerInfo, dingedAtOffset)
     local level = math.floor(playerInfo.level)
     local classIndex = math.floor(playerInfo.classIndex or 0)
+    local raceIndex = math.floor(tonumber(playerInfo.raceIndex) or 0)
     local dingedAt = math.floor(playerInfo.dingedAt - (dingedAtOffset or 0))
 
     if level <= 99 then
-        return string.format("%02d", level) .. classIndex .. playerInfo.name .. dingedAt
+        local race = raceIndex > 0 and ("." .. raceIndex) or ""
+        return string.format("%02d", level) .. classIndex .. race .. playerInfo.name .. dingedAt
     end
 
     -- The legacy format has an unframed two-digit level. Use a tagged,
     -- delimiter-based record for later expansions without changing old data.
-    return "!" .. level .. ":" .. classIndex .. ":" .. playerInfo.name .. ":" .. dingedAt
+    local race = raceIndex > 0 and (":" .. raceIndex) or ""
+    return "!" .. level .. ":" .. classIndex .. ":" .. playerInfo.name .. ":" .. dingedAt .. race
 end
 
 function WoWForeverRaceSerializer.DeserializePlayerInfo(str, dingedAtOffset)
-    local level, classIndex, name, dingedAt = string.match(
-            str, "^!(%d+):(%d+):([^:]+):(%-?%d+)")
+    local level, classIndex, name, dingedAt, raceIndex = string.match(
+            str, "^!(%d+):(%d+):([^:]+):(%-?%d+):(%d+)")
+    if level == nil then
+        level, classIndex, name, dingedAt = string.match(
+                str, "^!(%d+):(%d+):([^:]+):(%-?%d+)")
+    end
 
     if level == nil then
         -- Legacy format: level is two digits, followed by a one- or two-digit class index.
         local lvlandClass
-        lvlandClass, name, dingedAt = string.match(str, "^(%d+)([^%d-]+)(%-?%d+)")
+        lvlandClass, raceIndex, name, dingedAt = string.match(str, "^(%d+)%.?(%d*)([^%d%-]+)(%-?%d+)")
         if lvlandClass == nil then return nil end
         level = string.sub(lvlandClass, 1, 2)
         classIndex = string.sub(lvlandClass, 3)
@@ -39,6 +49,8 @@ function WoWForeverRaceSerializer.DeserializePlayerInfo(str, dingedAtOffset)
         name = name,
         level = tonumber(level),
         classIndex = tonumber(classIndex) or 0,
+        -- nil when the sender didn't know the race
+        raceIndex = tonumber(raceIndex),
         dingedAt = tonumber(dingedAt) + (dingedAtOffset or 0),
     }
 end

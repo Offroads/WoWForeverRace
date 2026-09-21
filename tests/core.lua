@@ -83,4 +83,59 @@ describe("Core", function()
             assert.equals(1500, core:RaceStartTime(1500))
         end)
     end)
+
+    describe("Races", function()
+        after_each(function()
+            SetRaceNames(nil)
+        end)
+
+        it("tracks the races of the faction of the player", function()
+            assert.same({1, 3, 4, 7, 95}, core:MyRaceIndexes())
+            assert.is_true(core:IsValidRaceIndex(95))
+            assert.is_false(core:IsValidRaceIndex(96))
+
+            SetFaction("Horde")
+            assert.same({2, 5, 6, 8, 96}, core:MyRaceIndexes())
+            assert.is_true(core:IsValidRaceIndex(96))
+            assert.is_false(core:IsValidRaceIndex(95))
+        end)
+
+        it("resolves the race name of a /who row", function()
+            assert.equals(4, core:RaceIndexByName("Night Elf"))
+            assert.equals(95, core:RaceIndexByName("High Order Skyborne"))
+            -- the races of the other faction never show up in our /who
+            assert.is_nil(core:RaceIndexByName("Windshaper Skyborne"))
+            assert.is_nil(core:RaceIndexByName("Orc"))
+            assert.is_nil(core:RaceIndexByName("Murloc"))
+            assert.is_nil(core:RaceIndexByName(nil))
+            assert.is_nil(core:RaceIndexByName(4))
+        end)
+
+        it("resolves the Horde Skyborne on a Horde character", function()
+            SetFaction("Horde")
+            core = WoWForeverRace.Core(config, "Nub", "NubVille")
+            assert.equals(96, core:RaceIndexByName("Windshaper Skyborne"))
+            assert.is_nil(core:RaceIndexByName("High Order Skyborne"))
+        end)
+
+        it("uses the localized race names of the client", function()
+            SetRaceNames({[4] = "Nachtelf"})
+            core = WoWForeverRace.Core(config, "Nub", "NubVille")
+            assert.equals("Nachtelf", core:RaceName(4))
+            assert.equals(4, core:RaceIndexByName("Nachtelf"))
+            assert.is_nil(core:RaceIndexByName("Night Elf"))
+        end)
+
+        it("falls back to the English race names without the client API", function()
+            local creatureInfo = _G.C_CreatureInfo
+            _G.C_CreatureInfo = nil
+            assert.equals("Night Elf", core:RaceName(4))
+            _G.C_CreatureInfo = creatureInfo
+        end)
+
+        it("has no name for a race that is not tracked", function()
+            assert.is_nil(core:RaceName(10))
+            assert.is_nil(core:RaceName(nil))
+        end)
+    end)
 end)

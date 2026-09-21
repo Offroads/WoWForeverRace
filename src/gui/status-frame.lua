@@ -39,21 +39,32 @@ function WoWForeverRaceStatusFrame.new(Config, Core, DB, EventBus)
     EventBus:RegisterCallback(self.Config.Events.Ding, self, self.OnDing)
     EventBus:RegisterCallback(self.Config.Events.RefreshGUI, self, self.OnRefreshGUI)
 
+    -- one leaderboard is selected at a time: a race (raceIndex), else a class or
+    -- the overall one (classIndex 0, which a race selection resets to)
     self.classIndex = 0
+    self.raceIndex = nil
     self.view = "leaderboard"   -- "leaderboard" or "pioneers"
     self.frame = nil
     self.tabicons = nil
     self.lefticons = nil
+    self.raceicons = nil
     self.contentframe = nil
     self.refreshPending = false
 
-    self.players = self.DB.factionrealm.leaderboard[self.classIndex].players
+    self.players = self.DB.factionrealm.leaderboard[self:SelectedBoardIndex()].players
 
     self.pioneersView = WoWForeverRace.PioneersView(Config, Core, DB)
 
     self:OnRefreshGUI()
 
     return self
+end
+
+function WoWForeverRaceStatusFrame:SelectedBoardIndex()
+    if self.raceIndex ~= nil then
+        return self.Config:RaceBoardIndex(self.raceIndex)
+    end
+    return self.classIndex
 end
 
 -- Coalesces rapid-fire Ding/RefreshGUI events (e.g. 50-player sync batch) into
@@ -77,10 +88,11 @@ function WoWForeverRaceStatusFrame:OnRefreshGUI()
 end
 
 function WoWForeverRaceStatusFrame:Refresh()
-    self.players = self.DB.factionrealm.leaderboard[self.classIndex].players
+    self.players = self.DB.factionrealm.leaderboard[self:SelectedBoardIndex()].players
 
     if self.frame ~= nil and self.contentframe ~= nil then
         self:RenderLeftIcon()
+        self:RenderRaceIcons()
         self:RenderTabicons()
         self:Render()
     end
@@ -122,14 +134,21 @@ function WoWForeverRaceStatusFrame:Show()
             _self.lefticons:Release()
             _self.lefticons = nil
         end
+
+        -- release race icons
+        if _self.raceicons then
+            _self.raceicons:Release()
+            _self.raceicons = nil
+        end
     end)
     WoWForeverRaceStatusFrame.FixResizeStatusUpdates(frame)
     frame:DoLayout()
 
-    self.players = self.DB.factionrealm.leaderboard[self.classIndex].players
+    self.players = self.DB.factionrealm.leaderboard[self:SelectedBoardIndex()].players
     self.frame = frame
 
     self:RenderLeftIcon()
+    self:RenderRaceIcons()
     self:RenderTabicons()
     self:Render()
 end
@@ -188,6 +207,62 @@ function WoWForeverRaceStatusFrame:RenderLeftIcon()
     self.lefticons = lefticons
 end
 
+-- Left-side icons below the pioneers toggle: one per race of our faction that has
+-- at least one discovered player, selecting that race's leaderboard.
+function WoWForeverRaceStatusFrame:RenderRaceIcons()
+    if self.raceicons then
+        self.raceicons:Release()
+        self.raceicons = nil
+    end
+
+    local races = {}
+    for _, raceIndex in ipairs(self.Core:MyRaceIndexes()) do
+        local raceLb = self.DB.factionrealm.leaderboard[self.Config:RaceBoardIndex(raceIndex)]
+        if raceLb and #raceLb.players > 0 then
+            races[#races + 1] = raceIndex
+        end
+    end
+    if #races == 0 then return end
+
+    local raceicons = AceGUI:Create("SimpleGroup")
+    raceicons.frame:SetFrameStrata("LOW")
+    raceicons:SetLayout("Flow")
+    raceicons:SetWidth(20)
+    raceicons:SetFullWidth(false)
+
+    local C_Texture = _G.C_Texture
+    for _, raceIndex in ipairs(races) do
+        local icon = AceGUI:Create("Icon")
+        icon:SetCallback("OnClick", function()
+            -- the pioneers view has no race filter, it shows the overall pioneers
+            self.raceIndex = raceIndex
+            self.classIndex = 0
+            self:Refresh()
+        end)
+        icon:SetLabel(nil)
+        local atlas = "raceicon-" .. tostring(self.Config.RaceIconAtlas[raceIndex]) .. "-male"
+        if C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(atlas) then
+            icon.image:SetAtlas(atlas)
+        else
+            icon:SetImage("Interface\\Icons\\INV_Misc_QuestionMark")
+        end
+        icon:SetImageSize(20, 20)
+        icon:SetWidth(20)
+        icon:SetHeight(20)
+        if self.raceIndex ~= raceIndex then
+            icon.image:SetVertexColor(0.8, 0.8, 0.8, 0.8)
+        end
+        raceicons:AddChild(icon)
+    end
+
+    raceicons:SetHeight(#races * 22)
+    raceicons:ClearAllPoints()
+    raceicons.frame:SetPoint("TOPRIGHT", self.lefticons.frame, "BOTTOMRIGHT", 0, -8)
+    raceicons.frame:Show()
+
+    self.raceicons = raceicons
+end
+
 function WoWForeverRaceStatusFrame:RenderTabicons()
     if self.tabicons then
         self.tabicons:Release()
@@ -206,6 +281,7 @@ function WoWForeverRaceStatusFrame:RenderTabicons()
         local icon = AceGUI:Create("Icon")
         icon:SetCallback("OnClick", function()
             self.classIndex = classIndex
+            self.raceIndex = nil
             self:Refresh()
         end)
         icon:SetLabel(nil)
@@ -217,7 +293,7 @@ function WoWForeverRaceStatusFrame:RenderTabicons()
         icon:SetImageSize(20, 20)
         icon:SetWidth(20)
         icon:SetHeight(20)
-        if self.classIndex ~= classIndex then
+        if self.raceIndex ~= nil or self.classIndex ~= classIndex then
             icon.image:SetVertexColor(0.8, 0.8, 0.8, 0.8)
         end
         tabicons:AddChild(icon)

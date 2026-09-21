@@ -307,4 +307,43 @@ describe("Serializer", function()
             ))
         end)
     end)
+
+    describe("PlayerInfo race", function()
+        it("round trips a known race", function()
+            local human = {name = "Nub One", level = 5, dingedAt = time, classIndex = 11, raceIndex = 1}
+            local skyborne = {name = "Nub Two", level = 60, dingedAt = time, classIndex = 1, raceIndex = 95}
+
+            assert.same("0511.1Nub One1000000000", SerPInfo(human))
+            assert.same(human, DeserPInfo(SerPInfo(human)))
+            assert.same("601.95Nub Two1000000000", SerPInfo(skyborne))
+            assert.same(skyborne, DeserPInfo(SerPInfo(skyborne)))
+        end)
+
+        it("leaves an unknown race out, which is the format without races", function()
+            assert.same("0511Nubone1000000000",
+                    SerPInfo({name = "Nubone", level = 5, dingedAt = time, classIndex = 11}))
+            assert.same("0511Nubone1000000000",
+                    SerPInfo({name = "Nubone", level = 5, dingedAt = time, classIndex = 11, raceIndex = 0}))
+            assert.is_nil(DeserPInfo("0511Nubone1000000000").raceIndex)
+        end)
+
+        it("round trips the race in the tagged format", function()
+            local nub = {name = "Nubone", level = 120, dingedAt = time, classIndex = 11, raceIndex = 96}
+            assert.same("!120:11:Nubone:1000000000:96", SerPInfo(nub))
+            assert.same(nub, DeserPInfo(SerPInfo(nub)))
+
+            nub.raceIndex = nil
+            assert.same("!120:11:Nubone:1000000000", SerPInfo(nub))
+            assert.same(nub, DeserPInfo(SerPInfo(nub)))
+        end)
+
+        it("round trips a batch that mixes known and unknown races", function()
+            local batch = {
+                {name = "Nub One", level = 7, dingedAt = time + 20, classIndex = 11, raceIndex = 4},
+                {name = "Nub Two", level = 6, dingedAt = time, classIndex = 1},
+                {name = "Nub Three", level = 5, dingedAt = time + 5, classIndex = 0, raceIndex = 95},
+            }
+            assert.same(batch, DeserPInfoBatch(SerPInfoBatch(batch)))
+        end)
+    end)
 end)
