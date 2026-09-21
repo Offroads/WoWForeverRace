@@ -105,6 +105,62 @@ local WoWForeverRaceConfig = {
         DRUID = "Druid",
     },
 
+    -- The playable races, by the client's race ID. Like the class indexes these are
+    -- part of the wire and DB format: never renumber. The value is the client's
+    -- internal name (clientFileString); Skyborne exists once per faction.
+    UnknownRaceIndex = 0,
+    Races = {
+        [1] = "Human",
+        [2] = "Orc",
+        [3] = "Dwarf",
+        [4] = "NightElf",
+        [5] = "Scourge",
+        [6] = "Tauren",
+        [7] = "Gnome",
+        [8] = "Troll",
+        [95] = "Skyborne",
+        [96] = "Skyborne",
+    },
+
+    -- The races each faction tracks, also the order of the race scans and race icons.
+    -- The client can't tell (C_CreatureInfo.GetFactionInfo is unreliable on WoW Forever)
+    FactionRaceIndexes = {
+        Alliance = {1, 3, 4, 7, 95},
+        Horde = {2, 5, 6, 8, 96},
+    },
+
+    -- English race names, the fallback when the client has no localized name
+    RaceNames = {
+        [1] = "Human",
+        [2] = "Orc",
+        [3] = "Dwarf",
+        [4] = "Night Elf",
+        [5] = "Undead",
+        [6] = "Tauren",
+        [7] = "Gnome",
+        [8] = "Troll",
+        [95] = "High Order Skyborne",
+        [96] = "Windshaper Skyborne",
+    },
+
+    -- the <name> in the raceicon-<name>-male atlas (Undead is not named after its clientFileString)
+    RaceIconAtlas = {
+        [1] = "human",
+        [2] = "orc",
+        [3] = "dwarf",
+        [4] = "nightelf",
+        [5] = "undead",
+        [6] = "tauren",
+        [7] = "gnome",
+        [8] = "troll",
+        [95] = "skyborne",
+        [96] = "skyborne",
+    },
+
+    -- A race leaderboard lives at leaderboard[RaceBoardOffset + raceIndex], clear of
+    -- the overall board (0) and the class boards (1-12) the race IDs would collide with
+    RaceBoardOffset = 100,
+
     BroadcastInterval = 60,
     YellChunkSize = 10,
     YellChunkDelay = 2,
@@ -168,4 +224,44 @@ function WoWForeverRaceConfig:IsValidClassIndex(classIndex)
     end
 
     return false
+end
+
+function WoWForeverRaceConfig:RaceIndexes(faction)
+    return self.FactionRaceIndexes[faction] or {}
+end
+
+function WoWForeverRaceConfig:IsValidRaceIndex(raceIndex, faction)
+    for _, validRaceIndex in ipairs(self:RaceIndexes(faction)) do
+        if raceIndex == validRaceIndex then
+            return true
+        end
+    end
+
+    return false
+end
+
+function WoWForeverRaceConfig:RaceBoardIndex(raceIndex)
+    return self.RaceBoardOffset + raceIndex
+end
+
+-- Every leaderboard index of a faction: overall (0), the classes, the faction's races.
+-- peerHashes: optional per-board hash table received from a peer (index i+1 =
+-- leaderboard[i]). Peers can track other boards (other client, older build), so when
+-- given, only the boards that peer reported are included: a missing entry means
+-- "not tracked", never "differs". Without this such a board looks like a difference
+-- forever and is re-sent on every sync round.
+function WoWForeverRaceConfig:BoardIndexes(faction, peerHashes)
+    local indexes = {0}
+    local function add(boardIndex)
+        if type(peerHashes) ~= "table" or peerHashes[boardIndex + 1] ~= nil then
+            indexes[#indexes + 1] = boardIndex
+        end
+    end
+    for _, classIndex in ipairs(self.MopClassIndexes) do
+        add(classIndex)
+    end
+    for _, raceIndex in ipairs(self:RaceIndexes(faction)) do
+        add(self:RaceBoardIndex(raceIndex))
+    end
+    return indexes
 end

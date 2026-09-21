@@ -267,4 +267,43 @@ describe("Leaderboard", function()
             }, dbboard.players)
         end)
     end)
+
+    describe("Race", function()
+        it("stores the race of a new player", function()
+            leaderboard:ProcessPlayerInfo(merge({name = "Nub1", level = 5, raceIndex = 4}, base))
+            assert.equals(4, dbboard.players[1].raceIndex)
+        end)
+
+        it("fills in an unknown race without a change in rank", function()
+            leaderboard:ProcessPlayerInfo(merge({name = "Nub1", level = 5}, base))
+            assert.is_nil(dbboard.players[1].raceIndex)
+
+            leaderboard:ProcessPlayerInfo(merge({name = "Nub1", level = 5, raceIndex = 4}, base))
+            assert.equals(4, dbboard.players[1].raceIndex)
+        end)
+
+        it("keeps a known race over an unknown one", function()
+            leaderboard:ProcessPlayerInfo(merge({name = "Nub1", level = 5, raceIndex = 4}, base))
+            leaderboard:ProcessPlayerInfo(merge({name = "Nub1", level = 5}, base))
+            assert.equals(4, dbboard.players[1].raceIndex)
+
+            -- also when the player dings
+            leaderboard:ProcessPlayerInfo(merge({name = "Nub1", level = 6, raceIndex = 0}, base))
+            assert.equals(6, dbboard.players[1].level)
+            assert.equals(4, dbboard.players[1].raceIndex)
+        end)
+
+        it("hashes the race, so a filled in race reaches the other clients", function()
+            leaderboard:ProcessPlayerInfo(merge({name = "Nub1", level = 5}, base))
+            local withoutRace = WoWForeverRace.Leaderboard.ComputeHash(dbboard)
+
+            leaderboard:ProcessPlayerInfo(merge({name = "Nub1", level = 5, raceIndex = 4}, base))
+            local withRace = WoWForeverRace.Leaderboard.ComputeHash(dbboard)
+            assert.not_equals(withoutRace, withRace)
+
+            -- a client that knew the race all along agrees
+            local other = {players = {merge({name = "Nub1", level = 5, raceIndex = 4}, base)}}
+            assert.equals(withRace, WoWForeverRace.Leaderboard.ComputeHash(other))
+        end)
+    end)
 end)

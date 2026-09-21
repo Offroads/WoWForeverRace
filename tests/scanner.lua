@@ -379,4 +379,166 @@ describe("Scanner", function()
 
         assert.spy(eventBusSpy).called_at_most(0)
     end)
+
+    describe("race scans", function()
+        -- rests every class, so the rotation reaches the race slots
+        local function restClasses()
+            for _, classIndex in ipairs(WoWForeverRace.Config.MopClassIndexes) do
+                scanner.classScanComplete[classIndex] = time
+            end
+        end
+
+        before_each(function()
+            db.factionrealm.leaderboard[0].players = {
+                {name = "Seed", level = 60, classIndex = 1, dingedAt = time},
+            }
+            scanner.probe = NO_PROBE
+        end)
+
+        after_each(function()
+            SetRaceNames(nil)
+            SetFaction(nil)
+        end)
+
+        it("publishes the race of the who rows", function()
+            local eventBusSpy = spy.on(eventbus, "PublishEvent")
+
+            scanner:TriggerScan()
+            SetWhoResults({
+                {fullName = "Warr", level = 45, filename = "WARRIOR", raceStr = "High Order Skyborne"},
+                {fullName = "Oddity", level = 40, filename = "WARRIOR", raceStr = "Murloc"},
+            })
+            scanner:OnWhoListUpdate()
+
+            assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus),
+                    WoWForeverRace.Config.Events.SlashWhoResult, {
+                        {name = "Warr", level = 45, class = "WARRIOR", raceIndex = 95},
+                        {name = "Oddity", level = 40, class = "WARRIOR"},
+                    })
+        end)
+
+        it("scans the races of the faction after the classes", function()
+            restClasses()
+
+            scanner:TriggerScan()
+            assert.equals('2-60 r-"Human"', GetWhoQuery())
+
+            scanner:OnWhoListUpdate()
+            SetTime(time + 16)
+            scanner:TriggerScan()
+
+            -- Human is resting, so the rotation moves on to Dwarf
+            assert.equals('2-60 r-"Dwarf"', GetWhoQuery())
+        end)
+
+        it("scans the Horde races on a Horde character", function()
+            SetFaction("Horde")
+            restClasses()
+            scanner.nextScanClassIdx = 14
+
+            scanner:TriggerScan()
+
+            assert.equals('2-60 r-"Windshaper Skyborne"', GetWhoQuery())
+        end)
+
+        it("uses the localized race name in race scans", function()
+            SetRaceNames({[1] = "Mensch"})
+            core = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
+            scanner = WoWForeverRace.Scanner(core, db, eventbus)
+            scanner.probe = NO_PROBE
+            restClasses()
+
+            scanner:TriggerScan()
+
+            assert.equals('2-60 r-"Mensch"', GetWhoQuery())
+        end)
+
+        it("skips a race whose leaderboard is final", function()
+            restClasses()
+            local humans = db.factionrealm.leaderboard[WoWForeverRace.Config:RaceBoardIndex(1)]
+            for i = 1, WoWForeverRace.Config.MaxLeaderboardSize do
+                humans.players[i] = {name = "Human" .. i, level = 60, classIndex = 1, raceIndex = 1, dingedAt = time}
+            end
+            humans.minLevel = 60
+
+            scanner:TriggerScan()
+
+            assert.equals('2-60 r-"Dwarf"', GetWhoQuery())
+        end)
+
+        it("does not attribute a manual /who to a pending race scan", function()
+            restClasses()
+            scanner:TriggerScan()
+            assert.equals('2-60 r-"Human"', GetWhoQuery())
+
+            local eventBusSpy = spy.on(eventbus, "PublishEvent")
+            SetWhoResults({{fullName = "Shorty", level = 20, filename = "MAGE", raceStr = "Gnome"}})
+            scanner:OnWhoListUpdate()
+
+            assert.spy(eventBusSpy).called_at_most(0)
+            assert.is_true(scanner.scanPending)
+
+            -- the real response, with a name the client could not resolve in between
+            SetWhoResults({
+                {fullName = "Hume", level = 45, filename = "MAGE", raceStr = "Human"},
+                {fullName = "Humette", level = 44, filename = "MAGE", raceStr = "Humanette"},
+            })
+            scanner:OnWhoListUpdate()
+
+            assert.is_false(scanner.scanPending)
+            assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus),
+                    WoWForeverRace.Config.Events.SlashWhoResult, {
+                        {name = "Hume", level = 45, class = "MAGE", raceIndex = 1},
+                        {name = "Humette", level = 44, class = "MAGE"},
+                    })
+        end)
+
+        it("bisects the floor of a crowded race like a class floor", function()
+            restClasses()
+            db.factionrealm.leaderboard[0].highestLevel = 60
+            local rows = {}
+            for i = 1, 50 do
+                rows[i] = {fullName = "Human" .. i, level = 30, filename = "MAGE", raceStr = "Human"}
+            end
+
+            scanner:TriggerScan()
+            assert.equals('2-60 r-"Human"', GetWhoQuery())
+            SetWhoResults(rows, 200)
+            scanner:OnWhoListUpdate()
+
+            -- every other race rests, so the rotation comes back to Human
+            for _, raceIndex in ipairs({3, 4, 7, 95}) do
+                scanner.classScanComplete[WoWForeverRace.Config:RaceBoardIndex(raceIndex)] = time
+            end
+            SetTime(time + 16)
+            scanner:TriggerScan()
+
+            assert.equals('31-60 r-"Human"', GetWhoQuery())
+        end)
+
+        it("starts a crowded race where the probe expects it to fit under the cap", function()
+            scanner.probe = nil
+            db.factionrealm.leaderboard[0].highestLevel = 7
+            local rows = {}
+            for i = 1, 50 do
+                rows[i] = {
+                    fullName = "Player" .. i,
+                    level    = i <= 4 and 6 or (i <= 12 and 4 or 2),
+                    filename = "MAGE",
+                    raceStr  = i % 2 == 0 and "Human" or "Gnome",
+                }
+            end
+            scanner:TriggerScan()
+            assert.equals("2-60", GetWhoQuery())
+            SetWhoResults(rows, 400)
+            scanner:OnWhoListUpdate()
+
+            restClasses()
+            SetTime(time + 16)
+            scanner:TriggerScan()
+
+            -- 50 of ~200 humans fit: the top quarter of the sample starts at level 4
+            assert.equals('4-60 r-"Human"', GetWhoQuery())
+        end)
+    end)
 end)

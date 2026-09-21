@@ -77,6 +77,19 @@ function WoWForeverRace:RegisterOptions()
                         set = function(_, val) _self.DB.profile.options.classTopN = val end,
                         get = function() return _self.DB.profile.options.classTopN end,
                     },
+                    raceTopN = {
+                        order = 14,
+                        name = "Race top N",
+                        desc = "Notify for rank changes in the top N of any race leaderboard (0 = off)",
+                        descStyle = "inline",
+                        width = "full",
+                        type = "range",
+                        step = 1,
+                        min = 0,
+                        max = WoWForeverRace.Config.MaxLeaderboardSize,
+                        set = function(_, val) _self.DB.profile.options.raceTopN = val end,
+                        get = function() return _self.DB.profile.options.raceTopN end,
+                    },
 
                     hr2 = {
                         order = 30,

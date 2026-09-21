@@ -4,7 +4,7 @@ Guidance for AI coding agents (Claude Code, Codex, Copilot, etc.) working in thi
 
 ## Project Overview
 
-A World of Warcraft addon written in Lua that tracks the top 50 players racing to max level on each faction-realm (overall and per class) and records the first player to reach every level. It supports **WoW Forever only** (1.60.x client line, interface 16001): level cap 60 and the 9 classic classes, Paladin and Shaman on both factions (`Config.MaxLevel`, `Config.MopClassIndexes`). There is no expansion detection and no support for other clients. Built on the **Ace3 addon framework** (AceAddon, AceDB, AceComm, AceConfig, AceGUI, AceConsole, AceSerializer) with LibDataBroker, LibDBIcon and LibCompress.
+A World of Warcraft addon written in Lua that tracks the top 50 players racing to max level on each faction-realm (overall, per class and per player race) and records the first player to reach every level. It supports **WoW Forever only** (1.60.x client line, interface 16001): level cap 60 and the 9 classic classes, Paladin and Shaman on both factions (`Config.MaxLevel`, `Config.MopClassIndexes`), and 5 player races per faction: the 4 classic ones plus the faction's own Skyborne (`Config.FactionRaceIndexes`). There is no expansion detection and no support for other clients. Built on the **Ace3 addon framework** (AceAddon, AceDB, AceComm, AceConfig, AceGUI, AceConsole, AceSerializer) with LibDataBroker, LibDBIcon and LibCompress.
 
 ## Commands
 
@@ -28,7 +28,7 @@ CI (`.github/workflows/ci.yml`) runs lint + tests in the same image on every PR 
 
 Coverage report: `luacov.report.out`. Files not exercised by tests (WoW API dependent): `main.lua`, `options.lua`, `gui/*.lua`, `dev.lua`, `updater.lua`.
 
-Test output silences the addon's debug prints; set `WFR_TEST_DEBUG=1` to see them. The stubs in `tests/stubs/` expose `Set*` helpers (`SetTime`, `SetWhoResults(results, total)`, `SetIsInGuild`, `SetFaction(faction)`, `SetGroupState(members, inRaid, inInstanceGroup)`, `SetWhoPanelVisible(visible)`, `SetChatLockdown(lockedDown)`, `C_Timer.Advance`) to drive the world state; extend them rather than mocking inside individual tests. When the Ace3 libraries start using a new WoW global, stub it in `tests/stubs/misc.lua`; when addon code starts using a WoW API as a bare global, add it to `read_globals` in `.luacheckrc` (access through `_G.Name` needs no entry).
+Test output silences the addon's debug prints; set `WFR_TEST_DEBUG=1` to see them. The stubs in `tests/stubs/` expose `Set*` helpers (`SetTime`, `SetWhoResults(results, total)`, `SetIsInGuild`, `SetFaction(faction)`, `SetGroupState(members, inRaid, inInstanceGroup)`, `SetWhoPanelVisible(visible)`, `SetChatLockdown(lockedDown)`, `SetFaction(faction)`, `SetRaceNames(names)`, `C_Timer.Advance`) to drive the world state; extend them rather than mocking inside individual tests. When the Ace3 libraries start using a new WoW global, stub it in `tests/stubs/misc.lua`; when addon code starts using a WoW API as a bare global, add it to `read_globals` in `.luacheckrc` (access through `_G.Name` needs no entry).
 
 ## Architecture
 
@@ -40,7 +40,7 @@ All components are attached to the `WoWForeverRace` global addon object. No othe
 1. `Scanner` -> issues protected `/who` queries from hardware-event hooks
 2. `Scanner` -> publishes `WHO_RESULT` on EventBus
 3. `Tracker` -> listens for `WHO_RESULT`, updates Leaderboard
-4. `Leaderboard` -> detects new players/level-ups, publishes `DING`
+4. `Leaderboard` -> detects new players/level-ups, publishes `DING` (player info, overall rank, class rank, race rank)
 5. `ChatNotifier` -> listens for `DING`, sends chat messages
 6. `StatusFrame` -> listens for `REFRESH_GUI`, redraws UI
 7. `Network` -> bridges AceComm <-> EventBus for cross-player sync
@@ -51,10 +51,11 @@ All components are attached to the `WoWForeverRace` global addon object. No othe
 WoWForeverRace_DB.factionrealm = {
   leaderboard = {
     [0]    = { minLevel, highestLevel, players[] },  -- global (all classes)
-    [1..N] = { ... }                                  -- valid per-class
-  },
+    [1..N] = { ... },                                 -- valid per-class
+    [100 + raceIndex] = { ... },                      -- per player race of this faction (Config.RaceBoardOffset)
+  },                                                  -- players[] = { name, level, dingedAt, classIndex, raceIndex }
   firstToLevel = { [classFilter] = { [level] = {name, classIndex, dingedAt} } },
-  playerHistory = { [name] = { classIndex, levels = { [level] = dingedAt } } },
+  playerHistory = { [name] = { classIndex, raceIndex, levels = { [level] = dingedAt } } },  -- raceIndex is local only: not hashed, not synced
   buddies = { [name] = { lastSeen } },
   realmOpenedAt = serverTime,  -- first login with the addon, earliest wins on sync; never before the launch once it passed
   raceStartedAt = serverTime,  -- earliest dingedAt seen (since the launch, once it passed)
@@ -75,7 +76,7 @@ end
 ```
 
 ### Network Serialization
-Player batches use a compact legacy format with a tagged delimiter format for levels above 99. LibCompress is applied before transmission.
+Player batches use a compact legacy format with a tagged delimiter format for levels above 99. A known player race rides along as an optional `.raceIndex` between the class and the name (names never contain a digit or a `.`); a record without it is an unknown race. LibCompress is applied before transmission.
 
 ### WoW Forever client notes
 - The Forever client is built on the modern (retail, `mainline` family) UI and API with game type `camelot`; its FrameXML lives in the `forever` branch of `Gethe/wow-ui-source`. Check API questions against that branch, not against Classic Era
@@ -84,6 +85,10 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 - `C_FriendList.GetNumWhoResults()` returns `(numWhos, totalNumWhos)`; `C_FriendList.SendWho` is restricted, so scans stay wired to hardware events
 - The chat messaging lockdown (`C_ChatInfo.InChatMessagingLockdown()`) covers encounters, PvP matches and whole dungeon/raid maps. `Network:SendObject` holds messages in an outbox (latest only for non-payload events, capped) and `FlushOutbox` sends them once the lockdown ended; `Sync:InitSync` postpones itself the same way
 - A pending scan is abandoned by a `C_Timer` after `SCAN_TIMEOUT` (`Scanner:AbandonScan`), so the who UI is handed back without a click, also when the race finished meanwhile. After a foreign `C_FriendList.SendWho` (hooked, `Scanner:OnSendWho`) an empty result is not attributed to the scan
+- Player races: the 8 classic races have the client's race IDs 1-8; the new race Skyborne exists once per faction, ID 95 "High Order Skyborne" (Alliance) and ID 96 "Windshaper Skyborne" (Horde), both with the internal name `Skyborne`. The client's race table also lists every retail race and `C_CreatureInfo.GetFactionInfo` is unreliable here, so the races per faction are fixed in `Config.FactionRaceIndexes`
+- A who row only carries the localized race name (`raceStr`), no ID. `Core:RaceIndexByName` resolves it against `C_CreatureInfo.GetRaceInfo(raceID).raceName` for the races of the own faction; a name that doesn't resolve (other languages may use gendered names) is an unknown race, never an error
+- Race scans use the localized race name, quoted: `2-60 r-"Troll"` (`Scanner:RaceWhoFilter`). The filtered scans cycle through `Scanner:ScanSlots`: the 9 classes, then the 5 races of the own faction. Floor, rest period and probe estimate work per slot, keyed by the slot's leaderboard index
+- Race icons are the atlases `raceicon-<name>-male` with the names in `Config.RaceIconAtlas` (Undead is `undead`, not its internal name `scourge`)
 - Class scans use the localized class name (`LocalizedClassList`), quoted: `2-60 c-"Warrior"`; `Config.WhoClassFilter` is the English fallback
 - The session's first scan is an unfiltered probe (`2-60`, repeated while the leaderboard is empty). `Scanner:RecordProbe` keeps its match count, levels and classes, from which `Scanner:ProbeFloor` estimates per class where a scan fits under the row cap
 - The class scan floor (`Scanner:NextClassFloor`) starts at the probe's estimate, else at the bottom (2, or the board's `minLevel` once it is full), and bisects towards the lowest floor whose result still fits under the 50 row cap, bounded above by the highest level seen. Floors known to overflow / fit are remembered for `FLOOR_BOUND_TTL`. Player names contain a space (`"First Surname"`), never a `-`
@@ -97,13 +102,19 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 - Player identity format: `"Name-Realm"` (e.g. `"Nubone-NubVille"`)
 - Class indices: 1-12 (0 = unknown/all); valid playable classes are `Config.MopClassIndexes` (historical name: the 9 WoW Forever classes) - validate remote class indexes with `Config:IsValidClassIndex`
 - Leaderboard capped at 50 players per faction-realm
-- Race finish: the race is finished only when **every** class leaderboard in `Config.MopClassIndexes` is full at `Config.MaxLevel`. `Tracker:CheckRaceFinished` is the single authority - the scanner's `SCAN_FINISHED(endofrace)` signal is verified against the boards, never trusted directly
+- Race indexes are the client's race IDs and part of the wire and DB format - never renumber. Unknown race is nil (0 in hashes, absent on the wire); validate remote race indexes with `Core:IsValidRaceIndex`, which only accepts the races of the own faction. A known race is never replaced by an unknown one, and a record that arrives without a race falls back to the one remembered in `playerHistory`
+- Leaderboard indexes: 0 overall, 1-12 classes, `Config.RaceBoardOffset + raceIndex` races. `Core:BoardIndexes(peerHashes)` lists all of them; use it wherever "every leaderboard" is meant
+- Pioneers (`firstToLevel`) are overall and per class only, never per race
+- "The race" is the leveling competition; the character race is always "player race" / `raceIndex`
+- Race finish: the race is finished only when **every** class leaderboard in `Config.MopClassIndexes` and **every** race leaderboard of the own faction is full at `Config.MaxLevel`. `Tracker:CheckRaceFinished` is the single authority - the scanner's `SCAN_FINISHED(endofrace)` signal is verified against the boards, never trusted directly
 - Remote data is untrusted: `Tracker:ProcessPlayerInfo` drops entries without a string name or with a level outside `1..Config.MaxLevel`, and only events listed in `Config.Network.Events` are accepted from the wire
 - Faction lock: the race is per faction and the wire has no other way to tell the factions apart, so every message envelope is `{event, payload, faction}`. `Network:SendObject` adds `Core:MyFaction()` (`UnitFactionGroup("player")`, the value that also scopes the AceDB `factionrealm` data); `Network:HandleAddonMessage` drops a message whose faction is missing, not a string or not the own faction, before anything is published (debug print only, not counted in the message stats)
 - Scanner timings (constants in `scanner.lua`): 15s cooldown between scans, 60s timeout before an unanswered `/who` is abandoned, 15min rest for a fully-scanned class (`/who` only sees online players, so a "complete" result is just a snapshot). A result is complete only when `C_FriendList.GetNumWhoResults()` reports no more server-side matches than rows shown
-- WHO results are validated against the pending query (level range + class filter) so manual `/who` results are never misattributed to a scan
+- WHO results are validated against the pending query (level range + class filter, or for a race scan: no row of another known race) so manual `/who` results are never misattributed to a scan
 - `Network:SendObject(..., "GROUP")` routes to `INSTANCE_CHAT` in instance groups, else `RAID`/`PARTY`
-- Peers can track a different class list (other client, older build on the shared `TCRace` prefix). Wherever a peer's per-class hash table is available (`GUILDSYNC`, `BPING`, `BPONG`, `DATAREQ`), full, FTL and per-class comparisons only cover the leaderboards that peer reported (`leaderboardClassIndexes(config, peerHashes)`, `Tracker:ComputeNeedSet`); a missing entry means "not tracked", never "differs". The discovery beacon (`DATAAVAIL`) carries only the full hash, so such peers still cost one `DATAREQ` round trip per beacon, which then sends nothing
+- Race leaderboards sync through the per-board hash tables only (discovery beacon, guild sync, buddy ping/pong, group sync); the login handshake (`REQSYNC` / `OFFERSYNC` / zone `STARTSYNC`) still exchanges just the overall and the own class leaderboard
+- Chat announcements: the top N sliders `globalTopN`, `classTopN` and `raceTopN` (default 1: only the first of a race) gate a ding; it is always one chat line, the race rank is appended to the class / overall message or gets its own message when only the race gate passes. With `raceTopN` 0 the output is exactly the class / overall one
+- Peers can track a different class list (other client, older build on the shared `TCRace` prefix). Wherever a peer's per-board hash table (index i+1 = `leaderboard[i]`, classes and races) is available (`GUILDSYNC`, `BPING`, `BPONG`, `DATAREQ`), full, FTL and per-board comparisons only cover the leaderboards that peer reported (`Config:BoardIndexes(faction, peerHashes)`, `Tracker:ComputeNeedSet`); a missing entry means "not tracked", never "differs". The discovery beacon (`DATAAVAIL`) carries only the full hash, so such peers still cost one `DATAREQ` round trip per beacon, which then sends nothing
 - Network event names: `PINFOB`, `REQSYNC`, `OFFERSYNC`, `STARTSYNC`, `SYNC`, `DATAAVAIL`, `DATAREQ`, `GUILDSYNC`, `GUILDOFFR`, `BPING`, `BPONG`, `FTLSYNC`, `PHSYNC`
 - Local event names: `NETWORK_READY`, `WHO_RESULT`, `SYNC_RESULT`, `FTL_SYNC_RESULT`, `PH_SYNC_RESULT`, `SCAN_FINISHED`, `RACE_FINISHED`, `DING`, `REFRESH_GUI`, `MSG_STATS`, `BUDDY_UPDATE`
 - The addon-channel prefix is still `TCRace` (inherited from TheClassicRace) and the envelope stays readable for older clients (event and payload first), but updated clients drop every message without a faction, so nothing is accepted from TheClassicRace or older WoWForeverRace clients; user-facing names say WoWForeverRace

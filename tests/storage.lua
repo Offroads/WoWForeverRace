@@ -43,6 +43,8 @@ describe("Storage", function()
         local alliance = newDB()
         assert.equals("Alliance - ", string.sub(alliance.keys.factionrealm, 1, 11))
         alliance.factionrealm.leaderboard[0].players[1] = {name = "Ally", level = 10, classIndex = 11, dingedAt = time}
+        alliance.factionrealm.leaderboard[WoWForeverRace.Config:RaceBoardIndex(4)].players[1] =
+                {name = "Ally", level = 10, classIndex = 11, raceIndex = 4, dingedAt = time}
         alliance.factionrealm.firstToLevel[0] = {[10] = {name = "Ally", classIndex = 11, dingedAt = time}}
         alliance.factionrealm.playerHistory["Ally"] = {classIndex = 11, levels = {[10] = time}}
         alliance.factionrealm.buddies["Ally"] = {lastSeen = time}
@@ -54,6 +56,7 @@ describe("Storage", function()
 
         assert.equals("Horde - ", string.sub(horde.keys.factionrealm, 1, 8))
         assert.equals(0, #horde.factionrealm.leaderboard[0].players)
+        assert.equals(0, #horde.factionrealm.leaderboard[WoWForeverRace.Config:RaceBoardIndex(4)].players)
         assert.is_nil(next(horde.factionrealm.firstToLevel))
         assert.is_nil(next(horde.factionrealm.playerHistory))
         assert.is_nil(next(horde.factionrealm.buddies))

@@ -16,19 +16,13 @@ to us through the EventBus.
 ---@field Network WoWForeverRaceNetwork
 ---@field lbGlobal WoWForeverRaceLeaderboard
 ---@field lbPerClass table<string, WoWForeverRaceLeaderboard>
+---@field lbPerRace table<number, WoWForeverRaceLeaderboard>
 local WoWForeverRaceTracker = {}
 
 -- bounds for remote timestamps, see ProcessPlayerInfo
 local MIN_DINGED_AT = 946684800  -- 2000-01-01, long before any Classic realm opened
 local MAX_CLOCK_SKEW = 600       -- seconds a peer's clock may run ahead of ours
 
-local function leaderboardClassIndexes(config)
-    local indexes = {0}
-    for _, classIndex in ipairs(config.MopClassIndexes) do
-        indexes[#indexes + 1] = classIndex
-    end
-    return indexes
-end
 WoWForeverRaceTracker.__index = WoWForeverRaceTracker
 WoWForeverRace.Tracker = WoWForeverRaceTracker
 setmetatable(WoWForeverRaceTracker, {
@@ -76,14 +70,19 @@ function WoWForeverRaceTracker:ReinitLeaderboards()
     for _, classIndex in ipairs(self.Config.MopClassIndexes) do
         self.lbPerClass[classIndex] = WoWForeverRace.Leaderboard(self.Config, self.DB.factionrealm.leaderboard[classIndex])
     end
+    self.lbPerRace = {}
+    for _, raceIndex in ipairs(self.Core:MyRaceIndexes()) do
+        self.lbPerRace[raceIndex] = WoWForeverRace.Leaderboard(self.Config,
+                self.DB.factionrealm.leaderboard[self.Config:RaceBoardIndex(raceIndex)])
+    end
 end
 
 -- Heals data persisted by older versions: floors fractional timestamps and re-sorts
 -- every leaderboard into the canonical order. Stored order predating the deterministic
 -- sort otherwise causes permanent hash mismatches between clients holding identical data.
 function WoWForeverRaceTracker:NormalizeDB()
-    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
-        local lb = self.DB.factionrealm.leaderboard[classIndex]
+    for _, boardIndex in ipairs(self.Core:BoardIndexes()) do
+        local lb = self.DB.factionrealm.leaderboard[boardIndex]
         if lb then
             for _, player in ipairs(lb.players) do
                 if player.dingedAt ~= nil then
@@ -120,8 +119,8 @@ function WoWForeverRaceTracker:PurgePreLaunchData()
     local db = self.DB.factionrealm
     local purged = false
 
-    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
-        local lb = db.leaderboard[classIndex]
+    for _, boardIndex in ipairs(self.Core:BoardIndexes()) do
+        local lb = db.leaderboard[boardIndex]
         if lb then
             local highestLevel = 1
             local removed = false
@@ -213,8 +212,8 @@ function WoWForeverRaceTracker:PrunePlayerHistory()
     if playerHistory == nil then return end
 
     local keep = {}
-    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
-        local lb = self.DB.factionrealm.leaderboard[classIndex]
+    for _, boardIndex in ipairs(self.Core:BoardIndexes()) do
+        local lb = self.DB.factionrealm.leaderboard[boardIndex]
         if lb then
             for _, player in ipairs(lb.players) do
                 keep[player.name] = true
@@ -237,6 +236,12 @@ function WoWForeverRaceTracker:PrunePlayerHistory()
             else
                 boardFinal = globalFinal
             end
+            -- a player of a known race also competes on the race leaderboard
+            local raceIndex = hist ~= nil and hist.raceIndex or nil
+            if boardFinal and self.Core:IsValidRaceIndex(raceIndex) then
+                boardFinal = isLeaderboardFinal(
+                        self.DB.factionrealm.leaderboard[self.Config:RaceBoardIndex(raceIndex)], self.Config)
+            end
 
             if raceFinished or boardFinal then
                 playerHistory[name] = nil
@@ -253,10 +258,15 @@ function WoWForeverRaceTracker:OnScanFinished(endofrace)
 end
 
 function WoWForeverRaceTracker:CheckRaceFinished()
-    -- The race isn't over until every playable class has filled its
-    -- leaderboard at max level.
+    -- The race isn't over until every playable class and every race of our
+    -- faction has filled its leaderboard at max level.
     for _, classIndex in ipairs(self.Config.MopClassIndexes) do
         if not isLeaderboardFinal(self.DB.factionrealm.leaderboard[classIndex], self.Config) then
+            return
+        end
+    end
+    for _, raceIndex in ipairs(self.Core:MyRaceIndexes()) do
+        if not isLeaderboardFinal(self.DB.factionrealm.leaderboard[self.Config:RaceBoardIndex(raceIndex)], self.Config) then
             return
         end
     end
@@ -363,12 +373,12 @@ function WoWForeverRaceTracker:ProcessPlayerInfoBatch(playerInfoBatch)
     end
 end
 
--- djb2 chain over all leaderboards in fixed order (global=0, class 1-12).
+-- djb2 chain over all leaderboards in fixed order (global=0, classes, races), see Config:BoardIndexes.
 -- Any difference in any leaderboard produces a different hash.
 function WoWForeverRaceTracker:ComputeFullHash()
     local hash = 5381
-    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
-        local lb = self.DB.factionrealm.leaderboard[classIndex]
+    for _, boardIndex in ipairs(self.Core:BoardIndexes()) do
+        local lb = self.DB.factionrealm.leaderboard[boardIndex]
         if lb then
             hash = ((hash * 33) + WoWForeverRace.Leaderboard.ComputeHash(lb)) % 2147483647
         end
@@ -376,7 +386,7 @@ function WoWForeverRaceTracker:ComputeFullHash()
     return hash
 end
 
--- Returns {[classIndex]=true} for each leaderboard where requester's hash differs from ours.
+-- Returns {[boardIndex]=true} for each leaderboard (class or race) where requester's hash differs from ours.
 -- Returns nil if requesterClassHashes is not a table (old client: treat as needs everything).
 -- classHashes is a 1-based array: index i+1 corresponds to leaderboard[i].
 function WoWForeverRaceTracker:ComputeNeedSet(requesterClassHashes)
@@ -384,14 +394,14 @@ function WoWForeverRaceTracker:ComputeNeedSet(requesterClassHashes)
         return nil
     end
     local needSet = {}
-    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
-        local lb = self.DB.factionrealm.leaderboard[classIndex]
+    for _, boardIndex in ipairs(self.Core:BoardIndexes()) do
+        local lb = self.DB.factionrealm.leaderboard[boardIndex]
         local myHash = lb and WoWForeverRace.Leaderboard.ComputeHash(lb) or 0
-        -- nil: the requester's build does not track this class (other client or
+        -- nil: the requester's build does not track this board (other client or
         -- older build), it would discard the leaderboard anyway
-        local theirHash = requesterClassHashes[classIndex + 1]
+        local theirHash = requesterClassHashes[boardIndex + 1]
         if theirHash ~= nil and myHash ~= theirHash then
-            needSet[classIndex] = true
+            needSet[boardIndex] = true
         end
     end
     return needSet
@@ -407,8 +417,8 @@ function WoWForeverRaceTracker:InitDiscoveryTicker()
     end)
 end
 
--- Collect global + class-unique players into batches ready for sending.
--- needSet: optional {[classIndex]=true} filter; nil means include all.
+-- Collect global + class-unique + race-unique players into batches ready for sending.
+-- needSet: optional {[boardIndex]=true} filter; nil means include all.
 -- Returns nil if no batches would be produced.
 function WoWForeverRaceTracker:CollectBatches(needSet)
     local globalPlayers = self.DB.factionrealm.leaderboard[0].players
@@ -422,16 +432,17 @@ function WoWForeverRaceTracker:CollectBatches(needSet)
         batches[#batches + 1] = { players = globalPlayers, classIndex = 0 }
     end
 
-    for _, classIndex in ipairs(self.Config.MopClassIndexes) do
-        if needSet == nil or needSet[classIndex] then
-            local lb = self.DB.factionrealm.leaderboard[classIndex]
+    -- class and race boards; a player on both is sent with each, the receiver merges
+    for _, boardIndex in ipairs(self.Core:BoardIndexes()) do
+        if boardIndex ~= 0 and (needSet == nil or needSet[boardIndex]) then
+            local lb = self.DB.factionrealm.leaderboard[boardIndex]
             if lb and #lb.players > 0 then
                 local unique = {}
                 for _, p in ipairs(lb.players) do
                     if not inGlobal[p.name] then unique[#unique + 1] = p end
                 end
                 if #unique > 0 then
-                    batches[#batches + 1] = { players = unique, classIndex = classIndex }
+                    batches[#batches + 1] = { players = unique, classIndex = boardIndex }
                 end
             end
         end
@@ -551,11 +562,11 @@ function WoWForeverRaceTracker:OnNetDataAvailable(hash, sender)
     local myHash = self:ComputeFullHash()
     if myHash == hash then return end
 
-    -- send per-class hashes as 1-based array (index i+1 = leaderboard[i])
+    -- send per-board hashes (classes and races), index i+1 = leaderboard[i]
     local classHashes = {}
-    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
-        local lb = self.DB.factionrealm.leaderboard[classIndex]
-        classHashes[classIndex + 1] = lb and WoWForeverRace.Leaderboard.ComputeHash(lb) or 0
+    for _, boardIndex in ipairs(self.Core:BoardIndexes()) do
+        local lb = self.DB.factionrealm.leaderboard[boardIndex]
+        classHashes[boardIndex + 1] = lb and WoWForeverRace.Leaderboard.ComputeHash(lb) or 0
     end
 
     WoWForeverRace:DebugPrint("DataAvail from " .. sender .. ": hash differs, requesting")
@@ -627,6 +638,14 @@ function WoWForeverRaceTracker:ProcessPlayerInfo(playerInfo)
         return
     end
 
+    -- Only the races of our faction have a leaderboard; anything else off the wire
+    -- (or 0) is an unknown race. A sender that doesn't know the race must not cost
+    -- the player the race leaderboard: fall back to the race we remembered.
+    if not self.Core:IsValidRaceIndex(playerInfo.raceIndex) then
+        local hist = self.DB.factionrealm.playerHistory[playerInfo.name]
+        playerInfo.raceIndex = hist ~= nil and self.Core:IsValidRaceIndex(hist.raceIndex) and hist.raceIndex or nil
+    end
+
     WoWForeverRace:DebugPrint("[T] ProcessPlayerInfo: [" .. tostring(playerInfo.classIndex) .. "] "
             .. playerInfo.name .. " lvl" .. playerInfo.level)
 
@@ -637,23 +656,29 @@ function WoWForeverRaceTracker:ProcessPlayerInfo(playerInfo)
         classRank, classIsChanged, classLowestLevel = self.lbPerClass[playerInfo.classIndex]:ProcessPlayerInfo(playerInfo)
     end
 
+    -- an unknown race has no race leaderboard
+    local raceRank, raceIsChanged, raceLowestLevel = nil, nil
+    if playerInfo.raceIndex ~= nil and self.lbPerRace[playerInfo.raceIndex] ~= nil then
+        raceRank, raceIsChanged, raceLowestLevel = self.lbPerRace[playerInfo.raceIndex]:ProcessPlayerInfo(playerInfo)
+    end
+
     -- update pioneer records for every detected player
     self:UpdatePioneers(playerInfo)
     self:UpdatePlayerHistory(playerInfo)
 
     -- publish internal event
-    if globalIsChanged or classIsChanged then
-        self.EventBus:PublishEvent(self.Config.Events.Ding, playerInfo, globalRank, classRank)
+    if globalIsChanged or classIsChanged or raceIsChanged then
+        self.EventBus:PublishEvent(self.Config.Events.Ding, playerInfo, globalRank, classRank, raceRank)
     end
 
-    -- a class leaderboard can only become final when its lowest ranked
+    -- a class or race leaderboard can only become final when its lowest ranked
     -- member reaches max level, so that's the moment to check the race
-    if classLowestLevel == self.Config.MaxLevel then
+    if classLowestLevel == self.Config.MaxLevel or raceLowestLevel == self.Config.MaxLevel then
         self:CheckRaceFinished()
     end
 
     -- return normalized playerinfo and boolean if anything changed
-    return playerInfo, globalIsChanged or classIsChanged
+    return playerInfo, globalIsChanged or classIsChanged or raceIsChanged
 end
 
 -- Records this player's dingedAt in playerHistory for future per-character level breakdown.
@@ -673,6 +698,11 @@ function WoWForeverRaceTracker:UpdatePlayerHistory(playerInfo)
     local hist = db.playerHistory[name]
     if hist.classIndex == nil and classIndex ~= nil then
         hist.classIndex = classIndex
+    end
+    -- local only (not hashed, not synced): remembers the race for records that
+    -- arrive without one, and for PrunePlayerHistory
+    if hist.raceIndex == nil and playerInfo.raceIndex ~= nil then
+        hist.raceIndex = playerInfo.raceIndex
     end
     -- only keep the earliest detection at each level
     if hist.levels[level] == nil or dingedAt < hist.levels[level] then

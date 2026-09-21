@@ -11,6 +11,10 @@ local function leaderboardClassIndexes()
     end
     return indexes
 end
+-- every leaderboard we track ourselves: overall, classes and our faction's races
+local function boardIndexes()
+    return WoWForeverRace.Config:BoardIndexes("Alliance")
+end
 
 describe("Sync", function()
     local db
@@ -53,8 +57,8 @@ describe("Sync", function()
         myGlobalHash = WoWForeverRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[0])
         myClassHash = WoWForeverRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[11])
         myFTLHash = WoWForeverRace.Sync.ComputeFTLHash(db, WoWForeverRace.Config)
-        myFullHash = WoWForeverRace.Sync.ComputeFullHash(db, WoWForeverRace.Config)
-        myPHHash = WoWForeverRace.Sync.ComputePHHash(db, WoWForeverRace.Config)
+        myFullHash = WoWForeverRace.Sync.ComputeFullHash(db, WoWForeverRace.Config, nil, core:MyFaction())
+        myPHHash = WoWForeverRace.Sync.ComputePHHash(db, WoWForeverRace.Config, core:MyFaction())
     end)
 
     after_each(function()
@@ -504,7 +508,7 @@ describe("Sync", function()
             seedHistory()
 
             local globalHash = WoWForeverRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[0])
-            local phHash = WoWForeverRace.Sync.ComputePHHash(db, WoWForeverRace.Config)
+            local phHash = WoWForeverRace.Sync.ComputePHHash(db, WoWForeverRace.Config, core:MyFaction())
 
             eventbus:PublishEvent(NetEvents.StartSync,
                     {11, globalHash, myClassHash, myFTLHash, phHash + 1}, "Dude")
@@ -524,7 +528,7 @@ describe("Sync", function()
             seedHistory()
 
             local globalHash = WoWForeverRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[0])
-            local phHash = WoWForeverRace.Sync.ComputePHHash(db, WoWForeverRace.Config)
+            local phHash = WoWForeverRace.Sync.ComputePHHash(db, WoWForeverRace.Config, core:MyFaction())
 
             eventbus:PublishEvent(NetEvents.StartSync,
                     {11, globalHash, myClassHash, myFTLHash, phHash}, "Dude")
@@ -588,7 +592,7 @@ describe("Sync", function()
             AdvanceClock(WoWForeverRace.Config.GuildSyncWait + 1)
 
             local perClassHashes = {}
-            for _, classIndex in ipairs(leaderboardClassIndexes()) do
+            for _, classIndex in ipairs(boardIndexes()) do
                 perClassHashes[classIndex + 1] = WoWForeverRace.Leaderboard.ComputeHash(
                         db.factionrealm.leaderboard[classIndex])
             end
@@ -612,7 +616,7 @@ describe("Sync", function()
             AdvanceClock(WoWForeverRace.Config.GuildSyncWait + 1)
 
             local perClassHashes = {}
-            for _, classIndex in ipairs(leaderboardClassIndexes()) do
+            for _, classIndex in ipairs(boardIndexes()) do
                 perClassHashes[classIndex + 1] = WoWForeverRace.Leaderboard.ComputeHash(
                         db.factionrealm.leaderboard[classIndex])
             end
@@ -742,5 +746,74 @@ describe("Sync", function()
                     {name = "Nubfive", level = 5, dingedAt = time - 11, classIndex = 4},
                 }))
         assert.spy(eventBusSpy).called_at_most(1)
+    end)
+
+    describe("race leaderboards", function()
+        local HUMAN_BOARD = WoWForeverRace.Config:RaceBoardIndex(1)
+
+        local function myHashes()
+            local hashes = {}
+            for _, boardIndex in ipairs(boardIndexes()) do
+                hashes[boardIndex + 1] = WoWForeverRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[boardIndex])
+            end
+            return hashes
+        end
+
+        before_each(function()
+            db.factionrealm.leaderboard[HUMAN_BOARD].players = {
+                {name = "Nub One", level = 12, classIndex = 11, raceIndex = 1, dingedAt = time},
+            }
+            sync.isReady = true
+        end)
+
+        it("pushes a race leaderboard that differs to a buddy", function()
+            local networkSpy = spy.on(network, "SendObject")
+            local theirs = myHashes()
+            theirs[HUMAN_BOARD + 1] = 1
+            local theirFull = WoWForeverRace.Sync.ComputeFullHash(db, WoWForeverRace.Config, nil, core:MyFaction()) + 1
+
+            eventbus:PublishEvent(NetEvents.BuddyPong, {theirFull, theirs, myFTLHash}, "Dude")
+
+            assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.SyncPayload,
+                    WoWForeverRace.Serializer.SerializePlayerInfoBatch(db.factionrealm.leaderboard[HUMAN_BOARD].players),
+                    "WHISPER", "Dude")
+            assert.spy(networkSpy).called_at_most(1)
+        end)
+
+        it("sends no race leaderboard to a peer that does not track races", function()
+            local networkSpy = spy.on(network, "SendObject")
+            local theirs = {}
+            for _, classIndex in ipairs(leaderboardClassIndexes()) do
+                theirs[classIndex + 1] = WoWForeverRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[classIndex])
+            end
+            local theirFull = WoWForeverRace.Sync.ComputeFullHash(db, WoWForeverRace.Config, theirs, core:MyFaction())
+
+            eventbus:PublishEvent(NetEvents.BuddyPong, {theirFull, theirs, myFTLHash}, "Dude")
+
+            assert.spy(networkSpy).was_not_called()
+        end)
+
+        it("reports the race leaderboards in a buddy ping", function()
+            local networkSpy = spy.on(network, "SendObject")
+            db.factionrealm.buddies = {Dude = {lastSeen = time}}
+
+            sync:SendBuddyPings()
+
+            local fullHash = WoWForeverRace.Sync.ComputeFullHash(db, WoWForeverRace.Config, nil, core:MyFaction())
+            assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.BuddyPing,
+                    {fullHash, myHashes(), myFTLHash}, "WHISPER", "Dude")
+        end)
+
+        it("syncs the history of race leaderboard members", function()
+            db.factionrealm.playerHistory = {
+                ["Nub One"] = {classIndex = 11, levels = {[12] = time}},
+                ["Nobody"] = {classIndex = 11, levels = {[3] = time}},
+            }
+
+            local withRaces = WoWForeverRace.Sync.ComputePHHash(db, WoWForeverRace.Config, core:MyFaction())
+            local withoutRaces = WoWForeverRace.Sync.ComputePHHash(db, WoWForeverRace.Config, nil)
+
+            assert.not_equals(withoutRaces, withRaces)
+        end)
     end)
 end)
