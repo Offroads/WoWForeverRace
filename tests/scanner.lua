@@ -144,19 +144,40 @@ describe("Scanner", function()
         assert.is_not_nil(scanner.classScanComplete[1])
     end)
 
-    it("aims for the level cap when a full result comes from above the highest level seen", function()
+    it("looks just above the highest level seen after a full result, further when that is full too", function()
         db.factionrealm.leaderboard[0].players = {
-            {name = "Seed", level = 7, classIndex = 1, dingedAt = time},
+            {name = "Seed", level = 20, classIndex = 1, dingedAt = time},
         }
-        db.factionrealm.leaderboard[0].highestLevel = 7
+        db.factionrealm.leaderboard[0].highestLevel = 20
+        db.factionrealm.leaderboard[1].players = {
+            {name = "Seed", level = 20, classIndex = 1, dingedAt = time},
+        }
+        db.factionrealm.leaderboard[1].highestLevel = 20
         scanner.probe = NO_PROBE
-        scanner.classScanFloor[1] = 7
-        scanner.lastResultFull[1] = true
+
+        local now = time
+        local function nextWarriorScan(count)
+            local rows = {}
+            for i = 1, count do rows[i] = {fullName = "Warr" .. i, level = 60, filename = "WARRIOR"} end
+            SetWhoResults(rows)
+            scanner:OnWhoListUpdate()
+            now = now + 16
+            SetTime(now)
+            scanner.nextScanClassIdx = 1
+            scanner:TriggerScan()
+            return GetWhoQuery()
+        end
 
         scanner:TriggerScan()
+        assert.equals("20-60 c-\"Warrior\"", GetWhoQuery())
 
-        -- not 8: fifty players at 7 or higher means 7 is nowhere near the top
-        assert.equals("34-60 c-\"Warrior\"", GetWhoQuery())
+        -- fifty or more at 20: 21-60, not a jump towards the level cap
+        assert.equals("21-60 c-\"Warrior\"", nextWarriorScan(50))
+        -- still full, so level 20 was outdated: the step doubles
+        assert.equals("23-60 c-\"Warrior\"", nextWarriorScan(50))
+        assert.equals("27-60 c-\"Warrior\"", nextWarriorScan(50))
+        -- room again: back down one level per visit, and the next full result starts small
+        assert.equals("26-60 c-\"Warrior\"", nextWarriorScan(10))
     end)
 
     it("falls back to the row cap when the server total is unknown", function()
@@ -276,12 +297,12 @@ describe("Scanner", function()
         scanner.lastResultFull[1] = true
 
         scanner:TriggerScan()
-        assert.equals("45-60 c-\"Warrior\"", GetWhoQuery())
+        assert.equals("31-60 c-\"Warrior\"", GetWhoQuery())
 
         scanner.nextScanClassIdx = 1
         SetTime(time + 61)
         scanner:TriggerScan()
-        assert.equals("45-60 c-\"Warrior\"", GetWhoQuery())
+        assert.equals("31-60 c-\"Warrior\"", GetWhoQuery())
     end)
 
     it("re-scans a completed class after the rest period", function()

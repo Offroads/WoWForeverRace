@@ -63,6 +63,7 @@ function WoWForeverRaceScanner.new(Core, DB, EventBus)
     self.scanPending = false
     self.pendingScanMin = nil
     self.lastResultFull = {}   -- per-class: did last scan hit WHO_RESULT_CAP?
+    self.floorRaiseStreak = {} -- per-class: full results in a row without a known floor to aim for
 
     self.whoFrame = CreateFrame("Frame")
     self.whoFrame:RegisterEvent("WHO_LIST_UPDATE")
@@ -102,6 +103,7 @@ function WoWForeverRaceScanner:ResetState()
     self.classCappedFloor = {}
     self.classFittingFloor = {}
     self.lastResultFull = {}
+    self.floorRaiseStreak = {}
     self.classScanComplete = {}
     self.probe = nil
     self.scanPending = false
@@ -400,18 +402,23 @@ function WoWForeverRaceScanner:NextClassFloor(classIndex, lo, hi, now)
         local target  = hi
         local fitting = self.classFittingFloor[classIndex]
         local fittingKnown = fitting and now - fitting.at < FLOOR_BOUND_TTL
+        local step = nil
         if fittingKnown and fitting.level > floor then
             target = fitting.level
         elseif fittingKnown and fitting.level == floor then
             -- this floor used to fit: the players outgrew it, the next level is likely enough
-            target = floor + 1
+            step = 1
         elseif target <= floor then
-            -- a full result at or above the highest level seen: that level is
-            -- outdated (cut off results are arbitrary), so aim for the level cap
-            target = WoWForeverRace.Config.MaxLevel
+            -- A full result from the highest level seen: nobody is known above it, so
+            -- look just above (21-60 after a full 20-60). If that is full as well the
+            -- highest level seen is outdated: double the step for each full result in a row.
+            local streak = self.floorRaiseStreak[classIndex] or 0
+            self.floorRaiseStreak[classIndex] = streak + 1
+            step = 2 ^ streak
         end
-        floor = floor + math.max(math.ceil((target - floor) / 2), 1)
+        floor = floor + (step or math.max(math.ceil((target - floor) / 2), 1))
     elseif full == false then
+        self.floorRaiseStreak[classIndex] = nil
         -- Under the cap -> there is room, take in one more level, but don't go
         -- back into a range known to overflow.
         local low    = lo
