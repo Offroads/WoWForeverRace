@@ -36,7 +36,7 @@ local WoWForeverRaceDefaultDB = {
         -- realmOpenedAt: GetServerTime() recorded on first-ever DB init for this realm; synced to keep earliest.
         -- Once the realm launch has passed, a value from before it is raised to the launch and not accepted on sync
         realmOpenedAt = nil,
-        -- raceStartedAt: earliest dingedAt ever seen; fallback reference when realmOpenedAt is nil
+        -- raceStartedAt: earliest dingedAt seen (since the realm launch, once it passed); fallback reference when realmOpenedAt is nil
         raceStartedAt = nil,
         -- playerHistory[name] = {classIndex, levels = {[level] = dingedAt}}
         -- synced once per login (leaderboard players only); non-members are pruned on

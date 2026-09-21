@@ -148,7 +148,8 @@ function WoWForeverRaceTracker:PurgePreLaunchData()
             if self.Core:PredatesLaunch(record.dingedAt) then
                 levels[level] = nil
                 purged = true
-            elseif classFilter == 0 and (raceStartedAt == nil or record.dingedAt < raceStartedAt) then
+            elseif classFilter == 0 and record.dingedAt ~= nil
+                    and (raceStartedAt == nil or record.dingedAt < raceStartedAt) then
                 raceStartedAt = record.dingedAt
             end
         end
@@ -167,10 +168,16 @@ function WoWForeverRaceTracker:PurgePreLaunchData()
     end
 
     -- beta characters don't exist on the released realm, so neither do the buddies met there
+    local buddiesPurged = false
     for name, buddy in pairs(db.buddies or {}) do
         if buddy.lastSeen == nil or self.Core:PredatesLaunch(buddy.lastSeen) then
             db.buddies[name] = nil
+            buddiesPurged = true
         end
+    end
+    if buddiesPurged then
+        WoWForeverRace:DebugPrint("Dropped buddies from before the realm launch")
+        self.EventBus:PublishEvent(self.Config.Events.BuddyUpdate)
     end
 
     if self.Core:PredatesLaunch(db.raceStartedAt) then

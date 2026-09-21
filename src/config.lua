@@ -32,7 +32,9 @@ local WoWForeverRaceConfig = {
     MaxLeaderboardSize = 50,
 
     -- Official realm launch, 2026-11-04 23:00 UTC (2026-11-05 00:00 GMT+1), as server time (UTC epoch).
-    -- There is no API for this; update it for each launch. nil falls back to the inferred timestamps.
+    -- There is no API for this. One global value for the single WoW Forever launch: correct it if that
+    -- launch moves, but never move it forward for a later one - once it has passed, every client purges
+    -- the race data from before it. nil falls back to the inferred timestamps and purges nothing.
     RealmLaunchAt = 1793833200,
 
     -- OfferSync throttle time window

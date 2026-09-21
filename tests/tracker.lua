@@ -470,6 +470,26 @@ describe("Tracker", function()
                 assert.equals(2, #db.factionrealm.leaderboard[0].players)
             end)
 
+            it("publishes BuddyUpdate when buddies were dropped", function()
+                local eventBusSpy = spy.on(eventbus, "PublishEvent")
+                core.Config = launched
+                tracker:PurgePreLaunchData()
+
+                assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.BuddyUpdate)
+            end)
+
+            it("survives a pioneer record without dingedAt", function()
+                -- array part, so the valid record is visited first and the broken one gets compared
+                db.factionrealm.firstToLevel[0] = {
+                    {name = "Live", classIndex = DRUIDIDX, dingedAt = launchAt + 10},
+                    {name = "Broken", classIndex = DRUIDIDX},
+                }
+                core.Config = launched
+                tracker:PurgePreLaunchData()
+
+                assert.equals(launchAt + 10, db.factionrealm.raceStartedAt)
+            end)
+
             it("runs before a ding is processed, so a beta record cannot hold its slot", function()
                 core.Config = launched
                 tracker:ProcessPlayerInfo(playerInfo("First", 10, WARRIORIDX, launchAt + 60))
