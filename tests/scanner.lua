@@ -50,14 +50,7 @@ describe("Scanner", function()
             SetInCombat(false)
         end)
 
-        it("is off by default", function()
-            assert.is_nil(scanner.keyFrame)
-        end)
-
-        it("scans on a key press once the option is on", function()
-            db.profile.options.keypressScanning = true
-            scanner:UpdateKeypressScanning()
-
+        it("scans on a key press by default", function()
             -- the keys must still reach the game
             assert.is_true(scanner.keyFrame.propagateKeyboardInput)
             assert.is_true(scanner.keyFrame.keyboardEnabled)
@@ -66,9 +59,7 @@ describe("Scanner", function()
             assert.equals("2-60", GetWhoQuery())
         end)
 
-        it("stops scanning on a key press once the option is off again", function()
-            db.profile.options.keypressScanning = true
-            scanner:UpdateKeypressScanning()
+        it("stops scanning on a key press once the option is off", function()
             db.profile.options.keypressScanning = false
             scanner:UpdateKeypressScanning()
 
@@ -76,10 +67,19 @@ describe("Scanner", function()
             assert.is_nil(GetWhoQuery())
         end)
 
-        it("waits for the end of combat before it hooks the keyboard", function()
-            SetInCombat(true)
+        it("does not hook the keyboard while the option is off", function()
+            db.profile.options.keypressScanning = false
+            scanner = WoWForeverRace.Scanner(core, db, eventbus)
+            assert.is_nil(scanner.keyFrame)
+
             db.profile.options.keypressScanning = true
             scanner:UpdateKeypressScanning()
+            assert.is_not_nil(scanner.keyFrame)
+        end)
+
+        it("waits for the end of combat before it hooks the keyboard", function()
+            SetInCombat(true)
+            scanner = WoWForeverRace.Scanner(core, db, eventbus)
             assert.is_nil(scanner.keyFrame)
 
             SetInCombat(false)
