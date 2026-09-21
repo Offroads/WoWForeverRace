@@ -56,6 +56,8 @@ WoWForeverRace_DB.factionrealm = {
   firstToLevel = { [classFilter] = { [level] = {name, classIndex, dingedAt} } },
   playerHistory = { [name] = { classIndex, levels = { [level] = dingedAt } } },
   buddies = { [name] = { lastSeen } },
+  realmOpenedAt = serverTime,  -- first login with the addon, earliest wins on sync; never before the launch once it passed
+  raceStartedAt = serverTime,  -- earliest dingedAt seen (since the launch, once it passed)
 }
 ```
 
@@ -85,6 +87,10 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 - The session's first scan is an unfiltered probe (`2-60`, repeated while the leaderboard is empty). `Scanner:RecordProbe` keeps its match count, levels and classes, from which `Scanner:ProbeFloor` estimates per class where a scan fits under the row cap
 - The class scan floor (`Scanner:NextClassFloor`) starts at the probe's estimate, else at the bottom (2, or the board's `minLevel` once it is full), and bisects towards the lowest floor whose result still fits under the 50 row cap, bounded above by the highest level seen. Floors known to overflow / fit are remembered for `FLOOR_BOUND_TTL`. Player names contain a space (`"First Surname"`), never a `-`
 - The TOC declares the WoW Forever interface only (`## Interface: 16001`); bump it with each client patch
+- The client has no API for a realm's launch time, so it is hardcoded as `Config.RealmLaunchAt` (UTC epoch). It is one global value for the single WoW Forever launch: correct it if Blizzard moves that launch, but never move it forward for a later one - everything older than it is purged on every client
+- `Core:RaceStartTime` measures the race from the launch once it has passed, else (and for dings from before it) from `realmOpenedAt` / `raceStartedAt`
+- The released race starts from fresh leaderboards. Once the launch has passed, `Tracker:PurgePreLaunchData` drops this faction-realm's race data and buddies from before it (beta); settings and newer data stay. It runs at login, or when the launch passes mid-session: before the next ding or sync result is processed, else from the discovery beacon
+- From then on the Tracker ignores every incoming ding, pioneer record, history level and `realmOpenedAt` from before the launch (checked with `Core:PredatesLaunch`)
 
 ### Key Conventions
 - Player identity format: `"Name-Realm"` (e.g. `"Nubone-NubVille"`)

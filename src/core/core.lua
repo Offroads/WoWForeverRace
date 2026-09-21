@@ -104,6 +104,32 @@ function WoWForeverRaceCore:Now()
     return GetServerTime()
 end
 
+-- Reference time the race is measured from: the official realm launch once it has passed,
+-- else (before launch, e.g. on the beta) the given inferred fallback. A ding from before the
+-- launch (beta leftovers) keeps the fallback, so it never ends up with a negative time.
+function WoWForeverRaceCore:RaceStartTime(fallback, dingedAt)
+    local launchAt = self:LaunchTime()
+    if self:HasLaunched() and (dingedAt == nil or dingedAt >= launchAt) then
+        return launchAt
+    end
+    return fallback
+end
+
+function WoWForeverRaceCore:LaunchTime()
+    return self.Config.RealmLaunchAt
+end
+
+function WoWForeverRaceCore:HasLaunched()
+    local launchAt = self:LaunchTime()
+    return launchAt ~= nil and self:Now() >= launchAt
+end
+
+-- True for a timestamp from before the realm launch, once that launch has passed. The released
+-- race starts from fresh leaderboards, so such (beta) data is neither kept nor accepted.
+function WoWForeverRaceCore:PredatesLaunch(timestamp)
+    return self:HasLaunched() and type(timestamp) == "number" and timestamp < self:LaunchTime()
+end
+
 function WoWForeverRaceCore:LoginTime()
     return self.loginTime
 end
