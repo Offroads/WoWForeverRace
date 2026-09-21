@@ -45,6 +45,14 @@ _G.SetWhoPanelVisible = function(visible)
         _G.LFGWhoListFrame:Hide()
     end
 end
+-- see SetInCombat(inCombat): the combat lockdown
+local inCombat = false
+_G.InCombatLockdown = function()
+    return inCombat
+end
+_G.SetInCombat = function(value)
+    inCombat = value or false
+end
 _G.GetRealmName = function()
     return "NubVille"
 end
