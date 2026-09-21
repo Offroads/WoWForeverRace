@@ -294,6 +294,7 @@ end
 function WoWForeverRaceSync:SetReady()
     if not self.isReady then
         self.isReady = true
+        WoWForeverRace:DebugPrint("Sync done", true)
         self:SendBuddyPings()
     end
 end
@@ -449,10 +450,7 @@ function WoWForeverRaceSync:OnNetSyncPayload(payload, sender)
     self.EventBus:PublishEvent(self.Config.Events.SyncResult, batch)
 
     -- mark ourselves as synced up
-    if not self.isReady then
-        WoWForeverRace:DebugPrint("we're now synced up")
-        self:SetReady()
-    end
+    self:SetReady()
 end
 
 -- Periodic guild sync ticker: re-runs the guild sync flow every GuildSyncInterval seconds.

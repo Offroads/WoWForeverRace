@@ -44,17 +44,20 @@ function WoWForeverRace:AddDebugLog(message)
     end
 end
 
-function WoWForeverRace:DebugPrint(message)
+-- Debug / trace output goes to the debug window log only; pass toChat for the
+-- few messages that should also show up in the chat frame.
+function WoWForeverRace:DebugPrint(message, toChat)
     local enabled = self.DB and self.DB.profile.options.debug or (not self.DB and self.Config.Debug)
     if enabled then
-        print("|cFF7777FFWoWForeverRace Debug:|cFFFFFFFF", message)
+        if toChat then
+            print("|cFF7777FFWoWForeverRace Debug:|cFFFFFFFF", message)
+        end
         self:AddDebugLog(message)
     end
 end
 
 function WoWForeverRace:TracePrint(message)
     if (self.Config.Trace == true) then
-        print("|cFF7777FFWoWForeverRace Trace:|cFFFFFFFF", message)
         self:AddDebugLog(message)
     end
 end
@@ -62,19 +65,13 @@ end
 function WoWForeverRace:DebugPrintTable(t)
     local enabled = self.DB and self.DB.profile.options.debug or (not self.DB and self.Config.Debug)
     if enabled then
-        local dump = dumpTable(t)
-        print("|cFF7777FFWoWForeverRace Debug:|cFFFFFFFF table...")
-        print(dump)
-        self:AddDebugLog(dump)
+        self:AddDebugLog(dumpTable(t))
     end
 end
 
 function WoWForeverRace:TracePrintTable(t)
     if (self.Config.Trace == true) then
-        local dump = dumpTable(t)
-        print("|cFF7777FFWoWForeverRace Trace:|cFFFFFFFF table...")
-        print(dump)
-        self:AddDebugLog(dump)
+        self:AddDebugLog(dumpTable(t))
     end
 end
 
