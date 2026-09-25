@@ -12,6 +12,11 @@ externals:
     libs/LibDBIcon: https://repos.wowace.com/wow/libdbicon-1-0/trunk/LibDBIcon-1.0
     libs/LibCompress: svn://svn.wowace.com/wow/libcompress/mainline/trunk
 
+# release notes: without this the packager posts the raw git log
+manual-changelog:
+    filename: CHANGELOG.md
+    markup-type: markdown
+
 ignore:
     - tests
     - scripts

@@ -28,7 +28,7 @@ CI (`.github/workflows/ci.yml`) runs lint + tests in the same image on every PR 
 
 Coverage report: `luacov.report.out`. Files not exercised by tests (WoW API dependent): `main.lua`, `options.lua`, `gui/*.lua`, `dev.lua`, `updater.lua`.
 
-`CHANGELOG.md` is the release notes: the BigWigs packager ships it in the zip and posts it on CurseForge, so add every user-visible change under `Unreleased` in the PR that makes it, and rename that section to the version when tagging.
+`CHANGELOG.md` is the release notes: the BigWigs packager ships it in the zip and posts it on GitHub and CurseForge (`manual-changelog` in `.pkgmeta`, else it posts the raw git log), so add every user-visible change under `Unreleased` in the PR that makes it, and rename that section to the version when tagging.
 
 `tests/sync-e2e.lua` exercises every sync flow (login zone sync, guild sync, buddy ping, group sync, discovery beacon, ding push, faction lock) between two complete addon stacks wired together through the real network envelope, one of them seeded with `tests/fixtures/horde-pve-factionrealm.lua`: real beta data, the `factionrealm` block of a SavedVariables file with `playerHistory` trimmed to the players on a leaderboard. Regenerate it the same way when the DB layout changes; data fixtures are excluded from busted's file discovery (`.busted`) and from luacheck (`.luacheckrc`).
 
