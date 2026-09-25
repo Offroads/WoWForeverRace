@@ -14,6 +14,7 @@ local HELP = {
     "/wfr status         print scanner / sync / leaderboard state",
     "/wfr scan           trigger a /who scan now (must be typed, needs a hardware event)",
     "/wfr update         re-run the login sync",
+    "/wfr roster         read the guild roster and group members into the leaderboards now",
     "/wfr ding NAME LVL [CLASS] [RACEID]   fake a /who result for a player",
     "/wfr whoami NAME    pretend to be another player on this realm",
     "/wfr reset          wipe the leaderboards, pioneers and history for this faction-realm (keeps realmOpenedAt)",
@@ -56,6 +57,13 @@ function WoWForeverRace:slashwfr(input)
     --[[STATUS]]--
     elseif action == "status" then
         self:PrintDevStatus()
+
+    --[[ROSTER]]--
+    elseif action == "roster" then
+        self.Roster:ResetState()
+        self.Roster:RequestGuildRoster()
+        self.Roster:OnGuildRosterUpdate()
+        self.Roster:OnGroupUpdate()
 
     --[[API PROBE]]--
     elseif action == "probe" then
@@ -125,6 +133,7 @@ function WoWForeverRace:PrintDevStatus()
             .. " partner=" .. tostring(sync.syncPartner and sync.syncPartner.name)
             .. " lastSync=" .. tostring(sync.lastSync))
 
+    self:PPrint("roster: " .. WoWForeverRace.table.cnt(self.Roster.seen) .. " guild / group members forwarded")
     self:PPrint("buddies: " .. WoWForeverRace.table.cnt(db.buddies)
             .. ", players with history: " .. WoWForeverRace.table.cnt(db.playerHistory))
 end

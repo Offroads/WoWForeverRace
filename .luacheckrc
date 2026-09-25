@@ -44,6 +44,7 @@ files["tests"] = {
     globals = {"WoWForeverRace"},
     read_globals = {
         "SetTime", "SetWhoResults", "GetWhoQuery", "ResetWhoQuery", "SetWhoPanelVisible", "SetChatLockdown",
-        "SetIsInGuild", "SetGroupState", "SetFaction", "SetRaceNames", "SetInCombat",
+        "SetIsInGuild", "SetGroupState", "SetGroupMembers", "SetGuildRoster", "GetGuildRosterRequests",
+        "SetFaction", "SetRaceNames", "SetInCombat",
     },
 }

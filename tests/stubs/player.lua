@@ -57,16 +57,53 @@ _G.GetRealmName = function()
     return "NubVille"
 end
 
-_G.UnitName = function()
+-- Group members, see SetGroupMembers(members, inRaid): the unit tokens party1..
+-- (or raid2.., raid1 being ourselves) resolve to these; every other unit token is
+-- the player. Each member: {name, realm, level, class (file name), raceIndex,
+-- faction (default the player's), connected}.
+local groupMembers = {}
+
+local function groupMember(unit)
+    if type(unit) ~= "string" then return nil end
+    local prefix, index = string.match(unit, "^(%a+)(%d+)$")
+    if prefix == "party" then
+        return groupMembers[tonumber(index)]
+    elseif prefix == "raid" then
+        return groupMembers[tonumber(index) - 1]
+    end
+    return nil
+end
+
+_G.UnitName = function(unit)
+    local member = groupMember(unit)
+    if member ~= nil then
+        return member.name, member.realm
+    end
     return "Nub"
 end
 
-_G.UnitClass = function()
+_G.UnitClass = function(unit)
+    local member = groupMember(unit)
+    if member ~= nil then
+        return member.class, member.class, 0
+    end
     return "Druid", "DRUID", 11
 end
 
-_G.UnitRace = function()
+_G.UnitRace = function(unit)
+    local member = groupMember(unit)
+    if member ~= nil then
+        return "Race", "Race", member.raceIndex
+    end
     return "Night Elf", "NightElf", 4
+end
+
+_G.UnitLevel = function(unit)
+    local member = groupMember(unit)
+    if member ~= nil then
+        return member.level or 0
+    end
+    return 60
 end
 
 -- The playable races as the enUS client names them. See SetRaceNames(names): the
@@ -96,7 +133,11 @@ end
 -- AceDB and core.lua capture the function itself when they load
 local defaultFaction = "Alliance"
 local playerFaction = defaultFaction
-_G.UnitFactionGroup = function()
+_G.UnitFactionGroup = function(unit)
+    local member = groupMember(unit)
+    if member ~= nil then
+        return member.faction or playerFaction
+    end
     return playerFaction
 end
 
@@ -122,6 +163,37 @@ _G.SetIsInGuild = function(inGuild)
         inGuild = defaultIsInGuild
     end
     isInGuild = inGuild
+end
+
+-- the guild roster, see SetGuildRoster(members): each member is
+-- {name (Name-Realm), level, class (file name), online}
+local guildRoster = {}
+local guildRosterRequests = 0
+_G.GetNumGuildMembers = function()
+    local online = 0
+    for _, member in ipairs(guildRoster) do
+        if member.online then online = online + 1 end
+    end
+    return #guildRoster, online
+end
+_G.GetGuildRosterInfo = function(i)
+    local member = guildRoster[i]
+    if member == nil then return nil end
+    return member.name, "Member", 1, member.level, member.class, "Zone", "", "", member.online or false,
+        0, member.class
+end
+_G.C_GuildInfo = {
+    GuildRoster = function()
+        guildRosterRequests = guildRosterRequests + 1
+    end,
+}
+_G.SetGuildRoster = function(members)
+    guildRoster = members or {}
+    guildRosterRequests = 0
+end
+-- how many times the roster was requested since SetGuildRoster
+_G.GetGuildRosterRequests = function()
+    return guildRosterRequests
 end
 
 _G.GetLocale = function()
@@ -181,6 +253,16 @@ end
 
 _G.GetNumGroupMembers = function()
     return numGroupMembers
+end
+
+-- the other members of our group (the player is counted on top), nil leaves the group
+_G.SetGroupMembers = function(members, inRaid)
+    groupMembers = members or {}
+    if #groupMembers == 0 then
+        _G.SetGroupState(nil)
+    else
+        _G.SetGroupState(#groupMembers + 1, inRaid)
+    end
 end
 
 _G.IsInRaid = function()

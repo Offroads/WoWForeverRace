@@ -2,7 +2,7 @@
 local WoWForeverRace = _G.WoWForeverRace
 
 -- WoW API
-local CreateFrame = _G.CreateFrame
+local CreateFrame, UnitRace = _G.CreateFrame, _G.UnitRace
 
 --[[
 Updater is responsible for when we level up ourselves
@@ -44,11 +44,13 @@ function WoWForeverRaceUpdater:OnPlayerLevelUp(level)
     WoWForeverRace:DebugPrint("OnPlayerLevelUp(" .. tostring(level) .. ")")
 
     local classIndex = self.Core:MyClass()
+    local _, _, raceIndex = UnitRace("player")
 
     -- we fake an /who result
     self.EventBus:PublishEvent(WoWForeverRace.Config.Events.SlashWhoResult, {{
         name = self.Core:Me(),
         level = level,
         classIndex = classIndex,
+        raceIndex = self.Core:IsValidRaceIndex(raceIndex) and raceIndex or nil,
     }, })
 end
