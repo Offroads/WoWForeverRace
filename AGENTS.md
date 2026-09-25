@@ -106,7 +106,7 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 - From then on the Tracker ignores every incoming ding, pioneer record, history level and `realmOpenedAt` from before the launch (checked with `Core:PredatesLaunch`)
 
 ### Key Conventions
-- Player identity format: `"Name-Realm"` (e.g. `"Nubone-NubVille"`)
+- Player identity format: `"Name-Realm"` (e.g. `"Nubone-NubVille"`). Our own name comes from `Core.PlayerIdentity()` (`GetUnitName("player", true)` and `GetNormalizedRealmName()`): `UnitName` / `UnitFullName("player")` return the surname in the realm slot on this client ("Offroad", "Hunt"), while every other source says "Offroad Hunt"
 - Class indices: 1-12 (0 = unknown/all); valid playable classes are `Config.MopClassIndexes` (historical name: the 9 WoW Forever classes) - validate remote class indexes with `Config:IsValidClassIndex`
 - Leaderboard capped at 50 players per faction-realm
 - Race indexes are the client's race IDs and part of the wire and DB format - never renumber. Unknown race is nil (0 in hashes, absent on the wire); validate remote race indexes with `Core:IsValidRaceIndex`, which only accepts the races of the own faction. A known race is never replaced by an unknown one, and a record that arrives without a race falls back to the one remembered in `playerHistory`

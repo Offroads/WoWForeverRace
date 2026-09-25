@@ -26,7 +26,7 @@ read_globals = {
     -- libraries
     "LibStub",
     -- WoW API used as bare globals by the addon
-    "CreateFrame", "GetServerTime", "UnitFactionGroup", "UnitFullName",
+    "CreateFrame", "GetServerTime", "UnitFactionGroup",
     "geterrorhandler", "unpack",
 }
 

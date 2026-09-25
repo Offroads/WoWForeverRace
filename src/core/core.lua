@@ -27,6 +27,25 @@ function WoWForeverRaceCore.new(Config, player, realm)
     return self
 end
 
+-- Our own name and realm the way /who rows, the guild roster and addon message
+-- senders report us: "First Surname". UnitFullName("player") is no good for that on
+-- this client, it returns the surname in its realm slot ("Offroad", "Hunt").
+-- The realm is nil until the client knows it (before PLAYER_LOGIN).
+function WoWForeverRaceCore.PlayerIdentity()
+    local name
+    if _G.GetUnitName ~= nil then
+        name = _G.GetUnitName("player", true)
+    end
+    if name == nil then
+        name = _G.UnitName("player")
+    end
+    local realm
+    if _G.GetNormalizedRealmName ~= nil then
+        realm = _G.GetNormalizedRealmName()
+    end
+    return name, realm
+end
+
 function WoWForeverRaceCore:InitMe(player, realm)
     WoWForeverRace:DebugPrint("InitMe: " .. tostring(player)  .. ", " .. tostring(realm))
     if realm == nil then
