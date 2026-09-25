@@ -35,6 +35,9 @@ files["src/config.lua"] = {
     ignore = {"314"},
 }
 
+-- generated data fixtures (tests/fixtures/*.lua) are plain `return {...}` tables
+exclude_files = {"tests/fixtures/*.lua"}
+
 -- tests run under busted and use the helpers exported by tests/stubs/*.lua
 files["tests"] = {
     std = "+busted",
