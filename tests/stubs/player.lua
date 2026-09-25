@@ -74,21 +74,30 @@ local function groupMember(unit)
     return nil
 end
 
+-- We are "Nub Nubson": like the client, UnitName / UnitFullName return the surname
+-- in the realm slot and only GetUnitName gives the full name.
 _G.UnitName = function(unit)
     local member = groupMember(unit)
     if member ~= nil then
         return member.name, member.realm
     end
-    return "Nub"
+    return "Nub", "Nubson"
 end
 
 -- the full name, with the realm appended for a cross realm unit when asked
 _G.GetUnitName = function(unit, showServer)
-    local name, realm = _G.UnitName(unit)
-    if showServer and realm ~= nil and realm ~= "" then
-        return name .. "-" .. realm
+    local member = groupMember(unit)
+    if member ~= nil then
+        if showServer and member.realm ~= nil and member.realm ~= "" then
+            return member.name .. "-" .. member.realm
+        end
+        return member.name
     end
-    return name
+    return "Nub Nubson"
+end
+
+_G.GetNormalizedRealmName = function()
+    return "NubVille"
 end
 
 _G.UnitClass = function(unit)
@@ -226,9 +235,8 @@ _G.GetCurrentRegionName = function()
 end
 
 _G.UnitFullName = function(target)
-    -- @TODO: returns name-server for cross realm, should make a test for this
     if target == "player" then
-        return _G.UnitName(), _G.GetRealmName()
+        return _G.UnitName("player")
     else
         error("unsupported", 1)
     end

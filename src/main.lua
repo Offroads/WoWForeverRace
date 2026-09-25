@@ -39,7 +39,7 @@ function WoWForeverRace:OnInitialize()
     self.DB = LibStub("AceDB-3.0"):New("WoWForeverRace_DB", WoWForeverRace.DefaultDB, true)
 
     -- determine who we are
-    local player, realm = UnitFullName("player")
+    local player, realm = WoWForeverRace.Core.PlayerIdentity()
 
     -- init components (should have minimal side effects)
     self.Core = WoWForeverRace.Core(self.Config, player, realm)
@@ -79,8 +79,8 @@ function WoWForeverRace:OnEnable()
     self:RegisterOptions()
     self:RegisterChatCommand("wfr", "slashwfr")
 
-    -- determine who we are
-    local player, realm = UnitFullName("player")
+    -- determine who we are (the realm is only known from now on)
+    local player, realm = WoWForeverRace.Core.PlayerIdentity()
     self.Core:InitMe(player, realm)
     self:DebugPrint("me: " .. self.Core:RealMe())
 

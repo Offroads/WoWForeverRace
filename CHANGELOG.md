@@ -15,6 +15,11 @@ file in the release zip and posts it as the CurseForge release notes.
 - Dev command `/wfr roster` reads the guild roster and group into the
   leaderboards on demand.
 
+### Fixed
+- Your own character was tracked under its first name only, next to the full
+  "First Surname" entry everyone else sees. Your own dings, the "you" marker
+  in the leaderboard window and the chat announcements now use the full name.
+
 ## v0.1.0-beta8 - 2026-09-22
 
 ### Added
