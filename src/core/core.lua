@@ -151,6 +151,28 @@ function WoWForeverRaceCore:RaceIndexByName(raceStr)
     return self.raceIndexByName[raceStr]
 end
 
+-- The race behind its client file string ("NightElf", "Scourge", "Skyborne"), the
+-- English race GetPlayerInfoByGUID returns. Only the races of our faction resolve,
+-- which also picks the right Skyborne (both share the file string). nil when unknown.
+function WoWForeverRaceCore:RaceIndexByFileString(fileString)
+    if type(fileString) ~= "string" then
+        return nil
+    end
+
+    if self.raceIndexByFileString == nil then
+        self.raceIndexByFileString = {}
+        local creatureInfo = _G.C_CreatureInfo
+        for _, raceIndex in ipairs(self:MyRaceIndexes()) do
+            local info = creatureInfo and creatureInfo.GetRaceInfo and creatureInfo.GetRaceInfo(raceIndex)
+            if type(info) == "table" and type(info.clientFileString) == "string" then
+                self.raceIndexByFileString[info.clientFileString] = raceIndex
+            end
+        end
+    end
+
+    return self.raceIndexByFileString[fileString]
+end
+
 function WoWForeverRaceCore:SplitFullPlayer(fullPlayer)
     local splt = WoWForeverRace.SplitString(fullPlayer, "-")
 

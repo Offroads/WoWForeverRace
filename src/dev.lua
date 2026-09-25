@@ -177,6 +177,7 @@ local PROBES = {
     { "Guild", {
         'C_GameRules.IsGameRuleActive(Enum.GameRule.GuildsDisabled)', 'IsInGuild()', 'GetGuildInfo("player")',
         'GetNumGuildMembers()', 'GetGuildRosterInfo(1)', 'GetGuildRosterInfo(2)',
+        'GetPlayerInfoByGUID(select(17, GetGuildRosterInfo(1)))',
     } },
     { "Group", {
         'IsInGroup()', 'IsInRaid()', 'IsInGroup(LE_PARTY_CATEGORY_INSTANCE)', 'GetNumGroupMembers()',

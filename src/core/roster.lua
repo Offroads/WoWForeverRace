@@ -4,9 +4,10 @@ local WoWForeverRace = _G.WoWForeverRace
 -- WoW API
 local CreateFrame, C_Timer = _G.CreateFrame, _G.C_Timer
 local IsInGuild, GetNumGuildMembers, GetGuildRosterInfo = _G.IsInGuild, _G.GetNumGuildMembers, _G.GetGuildRosterInfo
+local GetPlayerInfoByGUID = _G.GetPlayerInfoByGUID
 local IsInRaid, GetNumGroupMembers = _G.IsInRaid, _G.GetNumGroupMembers
-local UnitName, UnitLevel, UnitClass, UnitRace, UnitFactionGroup =
-    _G.UnitName, _G.UnitLevel, _G.UnitClass, _G.UnitRace, _G.UnitFactionGroup
+local GetUnitName, UnitLevel, UnitClass, UnitRace, UnitFactionGroup =
+    _G.GetUnitName, _G.UnitLevel, _G.UnitClass, _G.UnitRace, _G.UnitFactionGroup
 
 -- how often the guild roster is requested from the server (which ignores requests
 -- that come in closer than 10s apart); the client also refreshes it on its own
@@ -93,10 +94,17 @@ function WoWForeverRaceRoster:OnGuildRosterUpdate()
 
     local batch = {}
     for i = 1, GetNumGuildMembers() or 0 do
-        -- name, rankName, rankIndex, level, classDisplayName, zone, publicNote, officerNote, isOnline, status, class
-        local fullName, _, _, level, _, _, _, _, _, _, class = GetGuildRosterInfo(i)
-        -- the roster has no race; the tracker falls back to the one it remembers
-        self:Collect(batch, fullName, level, class, nil)
+        -- name, rankName, rankIndex, level, classDisplayName, zone, publicNote, officerNote,
+        -- isOnline, status, class, achievementPoints, achievementRank, isMobile, canSoR, repStanding, guid
+        local fullName, _, _, level, _, _, _, _, _, _, class, _, _, _, _, _, guid = GetGuildRosterInfo(i)
+        -- the roster row has no race, but the client resolves the member's GUID to one
+        -- (nil until it has that player's info; the next roster event tries again)
+        local raceIndex = nil
+        if guid ~= nil and GetPlayerInfoByGUID ~= nil then
+            local _, _, _, englishRace = GetPlayerInfoByGUID(guid)
+            raceIndex = self.Core:RaceIndexByFileString(englishRace)
+        end
+        self:Collect(batch, fullName, level, class, raceIndex)
     end
     self:Publish(batch)
 end
@@ -114,12 +122,11 @@ function WoWForeverRaceRoster:OnGroupUpdate()
     end
     for i = first, last do
         local unit = prefix .. i
-        local name, realm = UnitName(unit)
+        -- UnitName splits "First Surname" into two returns on this client, so we take
+        -- the full name (with the realm appended for a cross realm unit)
+        local name = GetUnitName(unit, true)
         -- cross faction groups exist on the retail family API: only our own race counts
         if name ~= nil and UnitFactionGroup(unit) == myFaction then
-            if realm ~= nil and realm ~= "" then
-                name = name .. "-" .. realm
-            end
             local _, class = UnitClass(unit)
             local _, _, raceIndex = UnitRace(unit)
             self:Collect(batch, name, UnitLevel(unit), class, raceIndex)
@@ -129,7 +136,8 @@ function WoWForeverRaceRoster:OnGroupUpdate()
 end
 
 -- Adds one roster row to the batch when it is worth the tracker's time: a player
--- of our realm at a level we haven't forwarded yet (or not for a while).
+-- of our realm at a level we haven't forwarded yet (or not for a while), or whose
+-- race we only know now.
 function WoWForeverRaceRoster:Collect(batch, fullName, level, class, raceIndex)
     if type(fullName) ~= "string" or fullName == "" then return end
     level = tonumber(level)
@@ -139,16 +147,21 @@ function WoWForeverRaceRoster:Collect(batch, fullName, level, class, raceIndex)
     local name, realm = self.Core:SplitFullPlayer(fullName)
     if not self.Core:IsMyRealm(realm) then return end
 
+    raceIndex = self.Core:IsValidRaceIndex(raceIndex) and raceIndex or nil
+
     local now = self.Core:Now()
     local seen = self.seen[name]
-    if seen ~= nil and level <= seen.level and now - seen.at < RESEND_TTL then return end
-    self.seen[name] = {level = level, at = now}
+    if seen ~= nil and level <= seen.level and now - seen.at < RESEND_TTL
+            and (raceIndex == nil or seen.raceIndex ~= nil) then
+        return
+    end
+    self.seen[name] = {level = level, at = now, raceIndex = raceIndex or (seen and seen.raceIndex)}
 
     batch[#batch + 1] = {
         name = name,
         level = level,
         class = type(class) == "string" and string.upper(class) or nil,
-        raceIndex = self.Core:IsValidRaceIndex(raceIndex) and raceIndex or nil,
+        raceIndex = raceIndex,
     }
 end
 

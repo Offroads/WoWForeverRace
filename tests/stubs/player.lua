@@ -82,6 +82,15 @@ _G.UnitName = function(unit)
     return "Nub"
 end
 
+-- the full name, with the realm appended for a cross realm unit when asked
+_G.GetUnitName = function(unit, showServer)
+    local name, realm = _G.UnitName(unit)
+    if showServer and realm ~= nil and realm ~= "" then
+        return name .. "-" .. realm
+    end
+    return name
+end
+
 _G.UnitClass = function(unit)
     local member = groupMember(unit)
     if member ~= nil then
@@ -166,7 +175,9 @@ _G.SetIsInGuild = function(inGuild)
 end
 
 -- the guild roster, see SetGuildRoster(members): each member is
--- {name (Name-Realm), level, class (file name), online}
+-- {name (Name-Realm), level, class (file name), online, race (client file string,
+-- nil when the client doesn't know the player yet)}; GetPlayerInfoByGUID resolves
+-- the member's guid ("Player-<index>") to it
 local guildRoster = {}
 local guildRosterRequests = 0
 _G.GetNumGuildMembers = function()
@@ -180,7 +191,13 @@ _G.GetGuildRosterInfo = function(i)
     local member = guildRoster[i]
     if member == nil then return nil end
     return member.name, "Member", 1, member.level, member.class, "Zone", "", "", member.online or false,
-        0, member.class
+        0, member.class, 0, 0, false, false, 0, "Player-" .. i
+end
+_G.GetPlayerInfoByGUID = function(guid)
+    local index = tonumber(string.match(tostring(guid), "^Player%-(%d+)$"))
+    local member = index and guildRoster[index]
+    if member == nil or member.race == nil then return nil end
+    return member.class, member.class, member.race, member.race, 2, member.name, "", member.level
 end
 _G.C_GuildInfo = {
     GuildRoster = function()

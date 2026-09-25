@@ -6,9 +6,10 @@ file in the release zip and posts it as the CurseForge release notes.
 ## Unreleased
 
 ### Added
-- The guild roster and your party or raid feed the leaderboards too. Their
-  levels are exact, cost no `/who` query and include guild members who are
-  offline, so a guild ding shows up right away instead of on the next scan.
+- The guild roster and your party or raid feed the leaderboards too, race
+  boards included. Their levels are exact, cost no `/who` query and include
+  guild members who are offline, so a guild ding shows up right away instead
+  of on the next scan.
 - Your own level-ups now carry your player race, so you land on your race
   leaderboard without waiting for a scan.
 - Dev command `/wfr roster` reads the guild roster and group into the

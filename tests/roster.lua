@@ -64,6 +64,38 @@ describe("Roster", function()
             assert.same({name = "Bob", level = 34, class = "MAGE"}, players["Bob"])
         end)
 
+        it("resolves a member's race through the GUID", function()
+            SetGuildRoster({
+                {name = "Alice-NubVille", level = 12, class = "WARRIOR", online = true, race = "NightElf"},
+                {name = "Wings-NubVille", level = 20, class = "MAGE", online = true, race = "Skyborne"},
+                {name = "Orcish-NubVille", level = 30, class = "SHAMAN", online = true, race = "Orc"},
+            })
+
+            roster.Thread:FireEvent("GUILD_ROSTER_UPDATE")
+
+            local players = published()
+            assert.equals(4, players["Alice"].raceIndex)
+            -- the Alliance Skyborne, both share the file string
+            assert.equals(95, players["Wings"].raceIndex)
+            -- not a race of our faction
+            assert.is_nil(players["Orcish"].raceIndex)
+        end)
+
+        it("forwards a member again once the client knows the race", function()
+            SetGuildRoster({{name = "Alice-NubVille", level = 12, class = "WARRIOR", online = true}})
+            roster.Thread:FireEvent("GUILD_ROSTER_UPDATE")
+            assert.is_nil(batches[1][1].raceIndex)
+
+            SetGuildRoster({{name = "Alice-NubVille", level = 12, class = "WARRIOR", online = true, race = "NightElf"}})
+            roster.Thread:FireEvent("GUILD_ROSTER_UPDATE")
+            assert.equals(2, #batches)
+            assert.equals(4, batches[2][1].raceIndex)
+
+            -- known now, no third time
+            roster.Thread:FireEvent("GUILD_ROSTER_UPDATE")
+            assert.equals(2, #batches)
+        end)
+
         it("skips level 1 characters and members of other realms", function()
             SetGuildRoster({
                 {name = "Fresh-NubVille", level = 1, class = "WARRIOR", online = true},
@@ -155,6 +187,14 @@ describe("Roster", function()
             assert.same({name = "Bob", level = 35, class = "MAGE", raceIndex = 7}, players["Bob"])
         end)
 
+        it("keeps the full name of a member", function()
+            SetGroupMembers({{name = "Alice Wanderer", level = 22, class = "WARRIOR", raceIndex = 1}})
+
+            roster.Thread:FireEvent("GROUP_ROSTER_UPDATE")
+
+            assert.equals(22, published()["Alice Wanderer"].level)
+        end)
+
         it("forwards raid members", function()
             SetGroupMembers({
                 {name = "Alice", level = 22, class = "WARRIOR", raceIndex = 1},
@@ -207,7 +247,7 @@ describe("Roster", function()
         local network = {SendObject = function() end}
         local tracker = WoWForeverRace.Tracker(WoWForeverRace.Config, core, db, eventbus, network)
 
-        SetGuildRoster({{name = "Alice-NubVille", level = 12, class = "WARRIOR", online = true}})
+        SetGuildRoster({{name = "Alice-NubVille", level = 12, class = "WARRIOR", online = true, race = "Human"}})
         SetGroupMembers({{name = "Bob", level = 35, class = "MAGE", raceIndex = 7}})
         roster.Thread:FireEvent("GUILD_ROSTER_UPDATE")
         roster.Thread:FireEvent("GROUP_ROSTER_UPDATE")
@@ -221,6 +261,7 @@ describe("Roster", function()
         assert.equals("Alice", overall[2].name)
         assert.equals(WARRIORIDX, overall[2].classIndex)
         assert.equals("Alice", db.factionrealm.leaderboard[WARRIORIDX].players[1].name)
+        assert.equals("Alice", db.factionrealm.leaderboard[WoWForeverRace.Config.RaceBoardOffset + 1].players[1].name)
         assert.equals("Bob", db.factionrealm.leaderboard[WoWForeverRace.Config.RaceBoardOffset + 7].players[1].name)
         assert.equals(12, tracker.lbGlobal.lbdb.players[2].level)
     end)
