@@ -3,22 +3,28 @@
 All user-visible changes to WoWForeverRace. The BigWigs packager ships this
 file in the release zip and posts it as the CurseForge release notes.
 
-## Unreleased
+## v0.1.0-beta9 - 2026-09-25
+
+The leaderboards now fill from data the client already has, not just from
+`/who` scans.
 
 ### Added
-- The guild roster and your party or raid feed the leaderboards too, race
-  boards included. Their levels are exact, cost no `/who` query and include
-  guild members who are offline, so a guild ding shows up right away instead
-  of on the next scan.
-- Your own level-ups now carry your player race, so you land on your race
+- Your guild roster feeds the leaderboards. Every guild member lands on the
+  overall, class and race boards at their exact level, offline members
+  included, the moment you log in. A guildie's ding shows up right away
+  instead of on the next scan that happens to cover their class.
+- Your party and raid members feed the leaderboards the same way, with their
+  class and player race, and a level-up in the group is picked up on the spot.
+- Your own level-ups carry your player race, so you land on your race
   leaderboard without waiting for a scan.
-- Dev command `/wfr roster` reads the guild roster and group into the
-  leaderboards on demand.
+- Dev command `/wfr roster` reads the guild roster and your group into the
+  leaderboards on demand, and `/wfr status` opens in a copyable window.
 
 ### Fixed
-- Your own character was tracked under its first name only, next to the full
-  "First Surname" entry everyone else sees. Your own dings, the "you" marker
-  in the leaderboard window and the chat announcements now use the full name.
+- Your own character was tracked under its first name only ("Offroad"),
+  next to the full "Offroad Hunt" entry everyone else sees. Your own dings,
+  the "you" marker in the leaderboard window and the chat announcements now
+  use the full name. Existing data keeps the old entry until a reset.
 
 ## v0.1.0-beta8 - 2026-09-22
 
