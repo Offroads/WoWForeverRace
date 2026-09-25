@@ -28,9 +28,11 @@ CI (`.github/workflows/ci.yml`) runs lint + tests in the same image on every PR 
 
 Coverage report: `luacov.report.out`. Files not exercised by tests (WoW API dependent): `main.lua`, `options.lua`, `gui/*.lua`, `dev.lua`, `updater.lua`.
 
+`CHANGELOG.md` is the release notes: the BigWigs packager ships it in the zip and posts it on CurseForge, so add every user-visible change under `Unreleased` in the PR that makes it, and rename that section to the version when tagging.
+
 `tests/sync-e2e.lua` exercises every sync flow (login zone sync, guild sync, buddy ping, group sync, discovery beacon, ding push, faction lock) between two complete addon stacks wired together through the real network envelope, one of them seeded with `tests/fixtures/horde-pve-factionrealm.lua`: real beta data, the `factionrealm` block of a SavedVariables file with `playerHistory` trimmed to the players on a leaderboard. Regenerate it the same way when the DB layout changes; data fixtures are excluded from busted's file discovery (`.busted`) and from luacheck (`.luacheckrc`).
 
-Test output silences the addon's debug prints; set `WFR_TEST_DEBUG=1` to see them. The stubs in `tests/stubs/` expose `Set*` helpers (`SetTime`, `SetWhoResults(results, total)`, `SetIsInGuild`, `SetFaction(faction)`, `SetGroupState(members, inRaid, inInstanceGroup)`, `SetWhoPanelVisible(visible)`, `SetChatLockdown(lockedDown)`, `SetFaction(faction)`, `SetRaceNames(names)`, `C_Timer.Advance`) to drive the world state; extend them rather than mocking inside individual tests. When the Ace3 libraries start using a new WoW global, stub it in `tests/stubs/misc.lua`; when addon code starts using a WoW API as a bare global, add it to `read_globals` in `.luacheckrc` (access through `_G.Name` needs no entry).
+Test output silences the addon's debug prints; set `WFR_TEST_DEBUG=1` to see them. The stubs in `tests/stubs/` expose `Set*` helpers (`SetTime`, `SetWhoResults(results, total)`, `SetIsInGuild`, `SetFaction(faction)`, `SetGroupState(members, inRaid, inInstanceGroup)`, `SetGroupMembers(members, inRaid)`, `SetGuildRoster(members)`, `SetWhoPanelVisible(visible)`, `SetChatLockdown(lockedDown)`, `SetFaction(faction)`, `SetRaceNames(names)`, `C_Timer.Advance`) to drive the world state; extend them rather than mocking inside individual tests. When the Ace3 libraries start using a new WoW global, stub it in `tests/stubs/misc.lua`; when addon code starts using a WoW API as a bare global, add it to `read_globals` in `.luacheckrc` (access through `_G.Name` needs no entry).
 
 ## Architecture
 
@@ -41,6 +43,7 @@ All components are attached to the `WoWForeverRace` global addon object. No othe
 **Data flow:**
 1. `Scanner` -> issues protected `/who` queries from hardware-event hooks
 2. `Scanner` -> publishes `WHO_RESULT` on EventBus
+2b. `Roster` -> publishes guild roster and party / raid member levels as `WHO_RESULT` too (exact levels, no `/who` cost); `Updater` does the same for our own level-ups
 3. `Tracker` -> listens for `WHO_RESULT`, updates Leaderboard
 4. `Leaderboard` -> detects new players/level-ups, publishes `DING` (player info, overall rank, class rank, race rank)
 5. `ChatNotifier` -> listens for `DING`, sends chat messages
@@ -86,6 +89,7 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 - The who list is `LFGWhoListFrame` (load-on-demand `Blizzard_GroupFinder_VanillaStyle`), not `FriendsFrame`; it opens the group finder on every `WHO_LIST_UPDATE`. `Scanner:SuppressWhoUi` / `RestoreWhoUi` unregister and restore the event on whichever who frames exist, looked up at scan time
 - `C_FriendList.GetNumWhoResults()` returns `(numWhos, totalNumWhos)`, but the client caps the total at the 50 row cap as well ("50 People Found" for any larger result), so it can't tell a cut off result from a complete one; `C_FriendList.SendWho` is restricted, so scans stay wired to hardware events
 - The chat messaging lockdown (`C_ChatInfo.InChatMessagingLockdown()`) covers encounters, PvP matches and whole dungeon/raid maps. `Network:SendObject` holds messages in an outbox (latest only for non-payload events, capped) and `FlushOutbox` sends them once the lockdown ended; `Sync:InitSync` postpones itself the same way
+- `Roster` (`src/core/roster.lua`) reads levels the client already has: the guild roster on `GUILD_ROSTER_UPDATE` (requested every 60s by `Roster:InitGuildRosterTicker`, offline members included; the row has no race, so it is resolved from the member's GUID with `GetPlayerInfoByGUID` and `Core:RaceIndexByFileString`, nil until the client knows that player) and party / raid units on `GROUP_ROSTER_UPDATE` / `UNIT_LEVEL` (name from `GetUnitName(unit, true)`, since `UnitName` returns the surname in its realm slot on this client; class and race from `UnitClass` / `UnitRace`; only units of the own faction and realm). A level is forwarded once, again when it rises, when its race turns up, or after 15 min (`RESEND_TTL`); `Roster:Refresh` (from `OnDatabaseReset` and `/wfr roster`) forgets that and reads both again right away. Rows travel as `WHO_RESULT`, so they get the same validation, leaderboard update and ding push as a scan
 - Scans hang on the world clicks (`WorldFrame` `OnMouseDown`) and the minimap icon. With the option `keypressScanning` (default on) a keyboard frame that propagates its input (`Scanner:UpdateKeypressScanning`) triggers them on key presses too. `SetPropagateKeyboardInput` is protected in combat and a keyboard frame without it swallows every key, so the frame is only created out of combat (else on `PLAYER_REGEN_ENABLED`) and never touched again: turning the option off only silences its handler
 - A pending scan is abandoned by a `C_Timer` after `SCAN_TIMEOUT` (`Scanner:AbandonScan`), so the who UI is handed back without a click, also when the race finished meanwhile. After a foreign `C_FriendList.SendWho` (hooked, `Scanner:OnSendWho`) an empty result is not attributed to the scan
 - Player races: the 8 classic races have the client's race IDs 1-8; the new race Skyborne exists once per faction, ID 95 "High Order Skyborne" (Alliance) and ID 96 "Windshaper Skyborne" (Horde), both with the internal name `Skyborne`. The client's race table also lists every retail race and `C_CreatureInfo.GetFactionInfo` is unreliable here, so the races per faction are fixed in `Config.FactionRaceIndexes`
@@ -134,6 +138,7 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 | `src/config.lua` | Global constants, colors, class mappings, expansion data |
 | `src/core/event-bus.lua` | Pub/sub event system |
 | `src/core/scanner.lua` | Protected `/who` queries and result filtering |
+| `src/core/roster.lua` | Guild roster and group member levels as a second data source |
 | `src/core/tracker.lua` | Applies player info to the leaderboards, pioneers, history; discovery beacons |
 | `src/core/leaderboard.lua` | Leaderboard model |
 | `src/core/sync.lua` | Login / guild / buddy / group sync negotiation |
@@ -151,3 +156,4 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 | `Dockerfile`, `docker-compose.yml` | Dev toolchain image |
 | `scripts/dev.ps1` | Windows wrapper: docker targets + deploy into WoW AddOns |
 | `.github/workflows/` | CI (lint + tests) and tag-triggered release packaging |
+| `CHANGELOG.md` | Release notes, shipped in the zip and posted on CurseForge by the packager |

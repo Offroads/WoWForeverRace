@@ -22,6 +22,8 @@ local LibStub = _G.LibStub
 ---@field ChatNotifier  WoWForeverRaceChatNotifier
 ---       writes notifications in chat window based on events
 ---@field updater       WoWForeverRaceUpdater
+---@field Roster        WoWForeverRaceRoster
+---       feeds guild roster and group member levels into the tracker
 ---@field Sync          WoWForeverRaceSync
 ---       handles syncing when coming online
 ---@field StatusFrame   WoWForeverRaceStatusFrame
@@ -47,6 +49,7 @@ function WoWForeverRace:OnInitialize()
     self.ChatNotifier = WoWForeverRace.ChatNotifier(self.Config, self.Core, self.DB, self.EventBus)
     self.Sync = WoWForeverRace.Sync(self.Config, self.Core, self.DB, self.EventBus, self.Network)
     self.updater = WoWForeverRace.Updater(self.Core, self.EventBus)
+    self.Roster = WoWForeverRace.Roster(self.Core, self.DB, self.EventBus)
     self.StatusFrame = WoWForeverRace.StatusFrame(self.Config, self.Core, self.DB, self.EventBus)
     self.DebugFrame = WoWForeverRace.DebugFrame(self.Config, self.Core, self.DB, self.EventBus)
 
@@ -86,6 +89,7 @@ function WoWForeverRace:OnEnable()
     self.Tracker:InitDiscoveryTicker()
     self.Sync:InitGuildTicker()
     self.Sync:InitBuddyTicker()
+    self.Roster:InitGuildRosterTicker()
 
     local groupEventFrame = CreateFrame("Frame")
     groupEventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
@@ -158,6 +162,9 @@ function WoWForeverRace:OnDatabaseReset()
     end
     if self.scanner then
         self.scanner:ResetState()
+    end
+    if self.Roster then
+        self.Roster:Refresh()
     end
     if self.StatusFrame then
         if self.StatusFrame.frame then

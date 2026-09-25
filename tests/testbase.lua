@@ -44,6 +44,7 @@ require("core.leaderboard")
 require("core.sync")
 require("core.serializer")
 require("core.chat-notifier")
+require("core.roster")
 require("networking.network")
 
 return WoWForeverRace
