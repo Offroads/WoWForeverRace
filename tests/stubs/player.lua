@@ -84,6 +84,9 @@ _G.UnitName = function(unit)
     return "Nub", "Nubson"
 end
 
+-- the current AceDB keys the char by it; same returns as UnitName on this client
+_G.UnitNameUnmodified = _G.UnitName
+
 -- the full name, with the realm appended for a cross realm unit when asked
 _G.GetUnitName = function(unit, showServer)
     local member = groupMember(unit)
