@@ -8,9 +8,10 @@ return {
         ROOT = {"tests"},
         -- every .lua file under tests/ is a test file ...
         pattern = {"%.lua$"},
-        -- ... except the bootstrap and the WoW API stubs it loads
+        -- ... except the bootstrap, the WoW API stubs it loads and the data fixtures
         ["exclude-pattern"] = {
             "^testbase%.lua$",
+            "^horde%-pve%-factionrealm%.lua$",
             "^misc%.lua$",
             "^player%.lua$",
             "^createframe%.lua$",
