@@ -11,7 +11,7 @@ local HELP = {
     "/wfr show           show the leaderboard window",
     "/wfr debug          show the debug window (message stats, hash log, buddies)",
     "/wfr render         re-render the leaderboard window",
-    "/wfr status         print scanner / sync / leaderboard state",
+    "/wfr status         scanner / sync / leaderboard / roster state in a copyable window",
     "/wfr scan           trigger a /who scan now (must be typed, needs a hardware event)",
     "/wfr update         re-run the login sync",
     "/wfr roster         read the guild roster and group members into the leaderboards now",
@@ -56,7 +56,7 @@ function WoWForeverRace:slashwfr(input)
 
     --[[STATUS]]--
     elseif action == "status" then
-        self:PrintDevStatus()
+        self:ShowDevStatus()
 
     --[[ROSTER]]--
     elseif action == "roster" then
@@ -99,40 +99,122 @@ function WoWForeverRace:slashwfr(input)
 end
 
 -- Dumps the in-memory state that is otherwise only visible through debug prints.
-function WoWForeverRace:PrintDevStatus()
+function WoWForeverRace:BuildDevStatus()
     local db = self.DB.factionrealm
     local scanner = self.scanner
     local sync = self.Sync
+    local lines = {}
+    local function add(line) lines[#lines + 1] = line end
 
-    self:PPrint("version " .. tostring(self.Config.Version) .. ", me: " .. tostring(self.Core:FullRealMe())
+    add("version " .. tostring(self.Config.Version) .. ", me: " .. tostring(self.Core:FullRealMe())
             .. ", expansion max level " .. tostring(self.Config.MaxLevel))
-    self:PPrint("db version " .. tostring(db.dbversion) .. ", finished: " .. tostring(db.finished)
+    add("db version " .. tostring(db.dbversion) .. ", finished: " .. tostring(db.finished)
             .. ", realm opened " .. tostring(db.realmOpenedAt))
+    add("")
 
+    add("== Leaderboards")
     for _, boardIndex in ipairs(self.Core:BoardIndexes()) do
         local lb = db.leaderboard[boardIndex]
         if lb and #lb.players > 0 then
             -- a leaderboard index that is no class index belongs to a race
             local label = self.Config.Classes[boardIndex] or boardIndex == 0 and self.Core:ClassByIndex(0)
                     or self.Core:RaceName(boardIndex - self.Config.RaceBoardOffset)
-            self:PPrint(string.format("  board %3d (%s): %d players, min lvl %d, max lvl %d",
+            add(string.format("board %3d (%s): %d players, min lvl %d, max lvl %d",
                     boardIndex, tostring(label), #lb.players, lb.minLevel, lb.highestLevel))
         end
     end
+    add("")
 
-    self:PPrint("scanner: pending=" .. tostring(scanner.scanPending)
+    add("== Scanner / sync")
+    add("scanner: pending=" .. tostring(scanner.scanPending)
             .. " pendingMin=" .. tostring(scanner.pendingScanMin)
             .. " lastClass=" .. tostring(scanner.lastScanClassIndex)
             .. " nextClassSlot=" .. tostring(scanner.nextScanClassIdx)
             .. " lastScan=" .. tostring(scanner.lastScanTime))
-    self:PPrint("sync: ready=" .. tostring(sync.isReady)
+    add("sync: ready=" .. tostring(sync.isReady)
             .. " offers=" .. tostring(#sync.offers)
             .. " partner=" .. tostring(sync.syncPartner and sync.syncPartner.name)
             .. " lastSync=" .. tostring(sync.lastSync))
-
-    self:PPrint("roster: " .. WoWForeverRace.table.cnt(self.Roster.seen) .. " guild / group members forwarded")
-    self:PPrint("buddies: " .. WoWForeverRace.table.cnt(db.buddies)
+    add("buddies: " .. WoWForeverRace.table.cnt(db.buddies)
             .. ", players with history: " .. WoWForeverRace.table.cnt(db.playerHistory))
+    add("")
+
+    add("== Roster")
+    local withRace = 0
+    for _, seen in pairs(self.Roster.seen) do
+        if seen.raceIndex ~= nil then withRace = withRace + 1 end
+    end
+    add("forwarded: " .. WoWForeverRace.table.cnt(self.Roster.seen) .. " guild / group members, "
+            .. withRace .. " with a race")
+    local numGuild, numOnline = _G.GetNumGuildMembers()
+    add("guild: inGuild=" .. tostring(_G.IsInGuild()) .. " members=" .. tostring(numGuild)
+            .. " online=" .. tostring(numOnline))
+    local numGroup = _G.GetNumGroupMembers() or 0
+    add("group: members=" .. tostring(numGroup) .. " raid=" .. tostring(_G.IsInRaid()))
+    if numGroup > 0 then
+        local prefix, first, last = "party", 1, numGroup - 1
+        if _G.IsInRaid() then
+            prefix, first, last = "raid", 1, numGroup
+        end
+        for i = first, last do
+            local unit = prefix .. i
+            local name = _G.GetUnitName(unit, true)
+            local _, class = _G.UnitClass(unit)
+            local _, raceFile, raceIndex = _G.UnitRace(unit)
+            local seen = name and self.Roster.seen[name]
+            add(string.format("  %s: %s lvl %s %s %s(%s) %s -> %s", unit, tostring(name),
+                    tostring(_G.UnitLevel(unit)), tostring(class), tostring(raceFile), tostring(raceIndex),
+                    tostring(_G.UnitFactionGroup(unit)),
+                    seen and ("forwarded lvl " .. seen.level .. " race " .. tostring(seen.raceIndex)) or "not forwarded"))
+        end
+    end
+
+    return lines
+end
+
+-- click into the box, Ctrl+A / Ctrl+C to copy
+function WoWForeverRace:ShowDevStatus()
+    local AceGUI = LibStub("AceGUI-3.0")
+
+    if self.statusDevFrame then
+        self.statusDevFrame:Hide()
+        self.statusDevFrame:Release()
+    end
+
+    local _self = self
+
+    local frame = AceGUI:Create("Window")
+    frame:SetTitle(self.Config.Name .. " Status")
+    frame:SetWidth(720)
+    frame:SetHeight(520)
+    frame:SetLayout("Flow")
+    frame:SetCallback("OnClose", function(widget)
+        widget:Release()
+        _self.statusDevFrame = nil
+        _self.statusDevBox = nil
+    end)
+    self.statusDevFrame = frame
+
+    local refreshBtn = AceGUI:Create("Button")
+    refreshBtn:SetText("Refresh")
+    refreshBtn:SetWidth(150)
+    refreshBtn:SetCallback("OnClick", function() _self:RenderDevStatus() end)
+    frame:AddChild(refreshBtn)
+
+    local box = AceGUI:Create("MultiLineEditBox")
+    box:SetLabel("")
+    box:DisableButton(true)
+    box:SetFullWidth(true)
+    box:SetFullHeight(true)
+    frame:AddChild(box)
+    self.statusDevBox = box
+
+    self:RenderDevStatus()
+end
+
+function WoWForeverRace:RenderDevStatus()
+    if not self.statusDevBox then return end
+    self.statusDevBox:SetText(table.concat(self:BuildDevStatus(), "\n"))
 end
 
 --[[
