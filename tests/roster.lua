@@ -151,6 +151,22 @@ describe("Roster", function()
             assert.equals(2, #batches)
         end)
 
+        it("re-reads the guild and the group right away on a refresh", function()
+            SetGuildRoster({{name = "Alice-NubVille", level = 12, class = "WARRIOR", online = true}})
+            SetGroupMembers({{name = "Bob", level = 35, class = "MAGE", raceIndex = 7}})
+            roster.Thread:FireEvent("GUILD_ROSTER_UPDATE")
+            roster.Thread:FireEvent("GROUP_ROSTER_UPDATE")
+            assert.equals(2, #batches)
+
+            roster:Refresh()
+
+            assert.equals(4, #batches)
+            assert.equals(1, GetGuildRosterRequests())
+            local players = published()
+            assert.equals(12, players["Alice"].level)
+            assert.equals(35, players["Bob"].level)
+        end)
+
         it("stays quiet once the race is finished", function()
             db.factionrealm.finished = true
             SetGuildRoster({{name = "Alice-NubVille", level = 60, class = "WARRIOR", online = true}})

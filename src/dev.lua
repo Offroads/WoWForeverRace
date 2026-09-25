@@ -60,10 +60,7 @@ function WoWForeverRace:slashwfr(input)
 
     --[[ROSTER]]--
     elseif action == "roster" then
-        self.Roster:ResetState()
-        self.Roster:RequestGuildRoster()
-        self.Roster:OnGuildRosterUpdate()
-        self.Roster:OnGroupUpdate()
+        self.Roster:Refresh()
 
     --[[API PROBE]]--
     elseif action == "probe" then

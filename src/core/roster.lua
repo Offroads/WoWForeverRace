@@ -68,6 +68,14 @@ function WoWForeverRaceRoster:ResetState()
     self.seen = {}
 end
 
+-- Feeds everything the client knows right now again, e.g. after the data was reset.
+function WoWForeverRaceRoster:Refresh()
+    self:ResetState()
+    self:RequestGuildRoster()
+    self:OnGuildRosterUpdate()
+    self:OnGroupUpdate()
+end
+
 -- Ask the server for the guild roster now and then; GUILD_ROSTER_UPDATE follows.
 function WoWForeverRaceRoster:InitGuildRosterTicker()
     local _self = self

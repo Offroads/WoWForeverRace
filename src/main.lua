@@ -164,7 +164,7 @@ function WoWForeverRace:OnDatabaseReset()
         self.scanner:ResetState()
     end
     if self.Roster then
-        self.Roster:ResetState()
+        self.Roster:Refresh()
     end
     if self.StatusFrame then
         if self.StatusFrame.frame then
