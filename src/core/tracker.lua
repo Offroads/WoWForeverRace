@@ -65,15 +65,16 @@ function WoWForeverRaceTracker.new(Config, Core, DB, EventBus, Network)
 end
 
 function WoWForeverRaceTracker:ReinitLeaderboards()
-    self.lbGlobal = WoWForeverRace.Leaderboard(self.Config, self.DB.factionrealm.leaderboard[0])
+    self.lbGlobal = WoWForeverRace.Leaderboard(self.Config, self.DB.factionrealm.leaderboard[0], "overall")
     self.lbPerClass = {}
     for _, classIndex in ipairs(self.Config.MopClassIndexes) do
-        self.lbPerClass[classIndex] = WoWForeverRace.Leaderboard(self.Config, self.DB.factionrealm.leaderboard[classIndex])
+        self.lbPerClass[classIndex] = WoWForeverRace.Leaderboard(self.Config, self.DB.factionrealm.leaderboard[classIndex],
+                self.Config.Classes[classIndex])
     end
     self.lbPerRace = {}
     for _, raceIndex in ipairs(self.Core:MyRaceIndexes()) do
         self.lbPerRace[raceIndex] = WoWForeverRace.Leaderboard(self.Config,
-                self.DB.factionrealm.leaderboard[self.Config:RaceBoardIndex(raceIndex)])
+                self.DB.factionrealm.leaderboard[self.Config:RaceBoardIndex(raceIndex)], self.Config.RaceNames[raceIndex])
     end
 end
 

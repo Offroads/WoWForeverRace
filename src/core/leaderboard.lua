@@ -8,6 +8,7 @@ to us through the EventBus.
 ---@class WoWForeverRaceLeaderboard
 ---@field Config WoWForeverRaceConfig
 ---@field leaderboard table<string, table>
+---@field debugTag string
 local WoWForeverRaceLeaderboard = {}
 WoWForeverRaceLeaderboard.__index = WoWForeverRaceLeaderboard
 WoWForeverRace.Leaderboard = WoWForeverRaceLeaderboard
@@ -52,11 +53,13 @@ function WoWForeverRaceLeaderboard.ComputeHash(lbdb)
     return hash
 end
 
-function WoWForeverRaceLeaderboard.new(Config, leaderboardDB)
+-- label names the board in debug output ("overall", "SHAMAN", "Orc"), optional
+function WoWForeverRaceLeaderboard.new(Config, leaderboardDB, label)
     local self = setmetatable({}, WoWForeverRaceLeaderboard)
 
     self.Config = Config
     self.lbdb = leaderboardDB
+    self.debugTag = label ~= nil and "[LB " .. label .. "] " or "[LB] "
 
     return self
 end
@@ -65,11 +68,11 @@ end
 ProcessPlayerInfo updates the leaderboard and triggers notifications accordingly
 ]]--
 function WoWForeverRaceLeaderboard:ProcessPlayerInfo(playerInfo)
-    WoWForeverRace:DebugPrint("[LB] ProcessPlayerInfo: " .. playerInfo.name .. " lvl" .. playerInfo.level)
+    WoWForeverRace:DebugPrint(self.debugTag .. "ProcessPlayerInfo: " .. playerInfo.name .. " lvl" .. playerInfo.level)
 
     -- ignore players below our lower bound threshold
     if playerInfo.level < self.lbdb.minLevel then
-        WoWForeverRace:DebugPrint("Ignored player info < lvl" .. self.lbdb.minLevel)
+        WoWForeverRace:DebugPrint(self.debugTag .. "Ignored player info < lvl" .. self.lbdb.minLevel)
         return
     end
 
