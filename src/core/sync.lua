@@ -3,7 +3,10 @@ local WoWForeverRace = _G.WoWForeverRace
 
 -- WoW API
 local C_Timer, IsInGuild, math = _G.C_Timer, _G.IsInGuild, _G.math
-local GetNumGroupMembers = _G.GetNumGroupMembers
+local GetNumGroupMembers, IsInRaid, GetUnitName = _G.GetNumGroupMembers, _G.IsInRaid, _G.GetUnitName
+
+-- addon channels that reach the whole group at once, see Network:ResolveGroupChannel
+local GROUP_DISTRIBUTIONS = {PARTY = true, RAID = true, INSTANCE_CHAT = true}
 
 -- The class filters of firstToLevel (pioneers have no race filter); the leaderboards
 -- themselves, classes and races, are listed by Config:BoardIndexes.
@@ -299,6 +302,9 @@ function WoWForeverRaceSync:SetReady()
         self.isReady = true
         WoWForeverRace:DebugPrint("Sync done", true)
         self:SendBuddyPings()
+        -- already grouped at login or /reload: GROUP_ROSTER_UPDATE came before we
+        -- were ready, so compare with the group now instead of on its next change
+        self:ScheduleGroupSync()
     end
 end
 
@@ -553,15 +559,40 @@ function WoWForeverRaceSync:AddBuddy(name)
     self.EventBus:PublishEvent(self.Config.Events.BuddyUpdate)
 end
 
+-- The other members of our group, keyed like buddies (short name on our realm).
+function WoWForeverRaceSync:GroupMemberNames()
+    local names = {}
+    local numMembers = GetNumGroupMembers() or 0
+    if numMembers == 0 then return names end
+
+    -- raid tokens include ourselves, party tokens don't
+    local prefix, last = "party", numMembers - 1
+    if IsInRaid() then
+        prefix, last = "raid", numMembers
+    end
+    for i = 1, last do
+        local fullName = GetUnitName(prefix .. i, true)
+        if fullName ~= nil then
+            local name, realm = self.Core:SplitFullPlayer(fullName)
+            names[self.Core:IsMyRealm(realm) and name or fullName] = true
+        end
+    end
+    return names
+end
+
 -- Send BPING to up to BuddyPingBatchSize buddies (random sample if more).
 function WoWForeverRaceSync:SendBuddyPings()
     if not self.isReady then return end
     if self.DB.factionrealm.finished then return end
     if not self.DB.profile.options.networking then return end
 
+    -- group members get the group ping (ScheduleGroupSync, same gates) instead
+    local inGroup = self:GroupMemberNames()
     local names = {}
     for name, _ in pairs(self.DB.factionrealm.buddies) do
-        names[#names + 1] = name
+        if not inGroup[name] then
+            names[#names + 1] = name
+        end
     end
     if #names == 0 then return end
 
@@ -593,7 +624,7 @@ end
 
 -- Received BPING from a buddy: update their last-seen, push leaderboards they're missing, ack with BPONG.
 -- BPONG includes our own hashes so the sender can also push what we're missing (bidirectional in one round trip).
-function WoWForeverRaceSync:OnNetBuddyPing(payload, sender)
+function WoWForeverRaceSync:OnNetBuddyPing(payload, sender, distribution)
     if not self.DB.profile.options.networking then return end
     self:AddBuddy(sender)
 
@@ -605,12 +636,6 @@ function WoWForeverRaceSync:OnNetBuddyPing(payload, sender)
     end
     local myFTLHash = computeFTLHash(self.DB, self.Config)
 
-    -- always ack with our hashes so the sender knows we're online and can push back
-    self.Network:SendObject(self.Config.Network.Events.BuddyPong,
-            {myFullHash, myPerClassHashes, myFTLHash}, "WHISPER", sender)
-
-    if not self.isReady then return end
-
     local senderFullHash = payload[1]
     local senderFTLHash = payload[3]
 
@@ -619,6 +644,17 @@ function WoWForeverRaceSync:OnNetBuddyPing(payload, sender)
     local ftlDiffers = senderFTLHash == nil
             or senderFTLHash ~= computeFTLHash(self.DB, self.Config, payload[2])
 
+    -- ack with our hashes so the sender knows we're online and can push back. A group
+    -- ping reaches every member at once: when we already agree, a pong tells the
+    -- sender nothing and a raid would answer every periodic ping with N-1 whispers.
+    local inSyncGroupPing = GROUP_DISTRIBUTIONS[distribution] and self.isReady
+            and not leaderboardsDiffer and not ftlDiffers
+    if not inSyncGroupPing then
+        self.Network:SendObject(self.Config.Network.Events.BuddyPong,
+                {myFullHash, myPerClassHashes, myFTLHash}, "WHISPER", sender)
+    end
+
+    if not self.isReady then return end
     if not leaderboardsDiffer and not ftlDiffers then return end
 
     local diffClasses = {}
@@ -752,10 +788,14 @@ function WoWForeverRaceSync:OnNetPHSync(payload, sender)
     self:SetReady()
 end
 
--- Called when the party roster changes. Debounced to avoid firing multiple times
--- in quick succession. Sends BPING to GROUP so all members can exchange hashes
--- and push any missing leaderboards.
+-- Called when the party roster changes.
 function WoWForeverRaceSync:OnGroupRosterUpdate()
+    self:ScheduleGroupSync()
+end
+
+-- Sends BPING to GROUP so all members can exchange hashes and push any missing
+-- leaderboards. Debounced to avoid firing multiple times in quick succession.
+function WoWForeverRaceSync:ScheduleGroupSync()
     if not self.isReady then return end
     if not self.DB.profile.options.networking then return end
     if self.DB.factionrealm.finished then return end
@@ -783,6 +823,15 @@ function WoWForeverRaceSync:SendGroupSync()
     end
     local myFTLHash = computeFTLHash(self.DB, self.Config)
     self.Network:SendObject(self.Config.Network.Events.BuddyPing, {myFullHash, myPerClassHashes, myFTLHash}, "GROUP")
+end
+
+-- Start the periodic group sync ticker: members who stay in the same group are
+-- compared again now and then, not only when someone joins or leaves.
+function WoWForeverRaceSync:InitGroupTicker()
+    local _self = self
+    C_Timer.NewTicker(self.Config.GroupSyncInterval, function()
+        _self:ScheduleGroupSync()
+    end)
 end
 
 -- Start the periodic buddy ping ticker.

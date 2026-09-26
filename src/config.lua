@@ -171,6 +171,8 @@ local WoWForeverRaceConfig = {
     BuddySyncInterval = 600,   -- buddy ping every 10 minutes
     BuddyPingBatchSize = 50,   -- max buddies to ping per cycle (random sample if more)
 
+    GroupSyncInterval = 300,   -- group sync every 5 minutes while grouped (members already in sync don't answer)
+
     DingPushDelay = 10,        -- seconds to batch dings before pushing to guild + buddies
 
     -- playerHistory sync: potentially large (hundreds of players x dozens of levels),
@@ -212,6 +214,12 @@ local WoWForeverRaceConfig = {
         RefreshGUI = "REFRESH_GUI",
         MsgStats = "MSG_STATS",
         BuddyUpdate = "BUDDY_UPDATE",
+    },
+    -- optional second argument of a WHO_RESULT: where the batch came from, when
+    -- that matters to the tracker (nil for /who scans and everything else)
+    WhoResultSources = {
+        -- party / raid unit levels, which every group member reads itself
+        Group = "group",
     },
 }
 WoWForeverRace.Config = WoWForeverRaceConfig

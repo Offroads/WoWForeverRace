@@ -76,8 +76,9 @@ describe("Tracker", function()
     end)
 
     after_each(function()
-        -- reset any mocking of IsInGuild we did
+        -- reset any mocking of IsInGuild and the group we did
         _G.SetIsInGuild(nil)
+        _G.SetGroupState(nil)
     end)
 
     describe("leaderboard", function()
@@ -272,6 +273,47 @@ describe("Tracker", function()
 
             _G.C_Timer.Advance(config.DingPushDelay)
             assert.spy(networkSpy).called_at_most(1)
+        end)
+
+        it("should push a ding to the group right away when grouped", function()
+            local networkSpy = spy.on(network, "SendObject")
+
+            _G.SetIsInGuild(false)
+            _G.SetGroupState(2, false, false)
+
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+
+            assert.spy(networkSpy).was_called_with(match.is_ref(network), config.Network.Events.PlayerInfoBatch,
+                    match.is_table(), "YELL")
+            assert.spy(networkSpy).was_called_with(match.is_ref(network), config.Network.Events.PlayerInfoBatch,
+                    match.is_table(), "GROUP")
+            assert.spy(networkSpy).called_at_most(2)
+        end)
+
+        it("should not push the group's own levels back to the group", function()
+            local networkSpy = spy.on(network, "SendObject")
+
+            _G.SetIsInGuild(false)
+            _G.SetGroupState(2, false, false)
+
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), }, config.WhoResultSources.Group)
+
+            -- every member read the same unit level itself; the zone still hears of it
+            assert.spy(networkSpy).was_called_with(match.is_ref(network), config.Network.Events.PlayerInfoBatch,
+                    match.is_table(), "YELL")
+            assert.spy(networkSpy).was_not_called_with(match.is_ref(network), config.Network.Events.PlayerInfoBatch,
+                    match.is_table(), "GROUP")
+        end)
+
+        it("should not push a ding to the group when not grouped", function()
+            local networkSpy = spy.on(network, "SendObject")
+
+            _G.SetIsInGuild(false)
+
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+
+            assert.spy(networkSpy).was_not_called_with(match.is_ref(network), config.Network.Events.PlayerInfoBatch,
+                    match.is_table(), "GROUP")
         end)
     end)
 
