@@ -140,7 +140,8 @@ function WoWForeverRaceRoster:OnGroupUpdate()
             self:Collect(batch, name, UnitLevel(unit), class, raceIndex)
         end
     end
-    self:Publish(batch)
+    -- every member reads these units itself, so the tracker doesn't push them to the group
+    self:Publish(batch, WoWForeverRace.Config.WhoResultSources.Group)
 end
 
 -- Adds one roster row to the batch when it is worth the tracker's time: a player
@@ -173,10 +174,11 @@ function WoWForeverRaceRoster:Collect(batch, fullName, level, class, raceIndex)
     }
 end
 
-function WoWForeverRaceRoster:Publish(batch)
+-- source: optional, see Config.WhoResultSources
+function WoWForeverRaceRoster:Publish(batch, source)
     if #batch == 0 then return end
     if self.DB.factionrealm.finished then return end
 
     WoWForeverRace:DebugPrint("[R] roster: " .. #batch .. " players")
-    self.EventBus:PublishEvent(WoWForeverRace.Config.Events.SlashWhoResult, batch)
+    self.EventBus:PublishEvent(WoWForeverRace.Config.Events.SlashWhoResult, batch, source)
 end

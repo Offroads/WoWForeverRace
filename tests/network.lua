@@ -162,7 +162,7 @@ describe("Network", function()
                 "WHISPER", "Dude-NubVille")
 
         assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus),
-                NetworkEvents.SyncPayload, {"data"}, "Dude-NubVille")
+                NetworkEvents.SyncPayload, {"data"}, "Dude-NubVille", "WHISPER")
     end)
 
     describe("faction lock", function()
@@ -240,7 +240,7 @@ describe("Network", function()
             receive({NetworkEvents.SyncPayload, {"data"}, "Alliance"})
 
             assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus),
-                    NetworkEvents.SyncPayload, {"data"}, "Dude")
+                    NetworkEvents.SyncPayload, {"data"}, "Dude", "WHISPER")
         end)
 
         it("drops a message from the other faction", function()

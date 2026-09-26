@@ -756,6 +756,114 @@ describe("Sync", function()
             assert.equals(2, #groupPings)
         end)
 
+        it("merges the login sync and a roster change close together into one ping", function()
+            _G.SetGroupState(2, false, false)
+
+            sync:SetReady()
+            sync:OnGroupRosterUpdate()
+            AdvanceClock(2)
+
+            assert.equals(1, #groupPings)
+        end)
+
+        it("does not ping the group from the ticker once the race is finished", function()
+            _G.SetGroupState(2, false, false)
+            sync.isReady = true
+            db.factionrealm.finished = true
+            sync:InitGroupTicker()
+
+            AdvanceClock(WoWForeverRace.Config.GroupSyncInterval)
+            AdvanceClock(2)
+
+            assert.equals(0, #groupPings)
+        end)
+
+        it("does not whisper a buddy ping to group members, who get the group ping", function()
+            local whispered = {}
+            network.SendObject = function(_, event, _, channel, target)
+                if event == NetEvents.BuddyPing and channel == "WHISPER" then
+                    whispered[#whispered + 1] = target
+                end
+            end
+            db.factionrealm.buddies = {["Alice Wanderer"] = {lastSeen = time}, ["Bob Faraway"] = {lastSeen = time}}
+            _G.SetGroupMembers({{name = "Alice Wanderer", level = 22, class = "WARRIOR", raceIndex = 1}})
+
+            sync.isReady = true
+            sync:SendBuddyPings()
+            _G.SetGroupMembers(nil)
+
+            assert.same({"Bob Faraway"}, whispered)
+        end)
+
+        it("does not whisper a buddy ping to raid members either", function()
+            local whispered = {}
+            network.SendObject = function(_, event, _, channel, target)
+                if event == NetEvents.BuddyPing and channel == "WHISPER" then
+                    whispered[#whispered + 1] = target
+                end
+            end
+            db.factionrealm.buddies = {
+                ["Alice Wanderer"] = {lastSeen = time},
+                ["Carl Raider"] = {lastSeen = time},
+                ["Bob Faraway"] = {lastSeen = time},
+            }
+            _G.SetGroupMembers({
+                {name = "Alice Wanderer", level = 22, class = "WARRIOR", raceIndex = 1},
+                {name = "Carl Raider", level = 23, class = "MAGE", raceIndex = 1},
+            }, true)
+
+            sync.isReady = true
+            sync:SendBuddyPings()
+            _G.SetGroupMembers(nil)
+
+            assert.same({"Bob Faraway"}, whispered)
+        end)
+
+        it("does not pong a group ping when already in sync", function()
+            local pongs = 0
+            network.SendObject = function(_, event)
+                if event == NetEvents.BuddyPong then pongs = pongs + 1 end
+            end
+            local myHashes = {}
+            for _, boardIndex in ipairs(boardIndexes()) do
+                myHashes[boardIndex + 1] = WoWForeverRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[boardIndex])
+            end
+            sync.isReady = true
+
+            sync:OnNetBuddyPing({myFullHash, myHashes, myFTLHash}, "Dude", "PARTY")
+            sync:OnNetBuddyPing({myFullHash, myHashes, myFTLHash}, "Dude", "RAID")
+            sync:OnNetBuddyPing({myFullHash, myHashes, myFTLHash}, "Dude", "INSTANCE_CHAT")
+            assert.equals(0, pongs)
+
+            -- a whispered buddy ping is always answered: the pong is how the sender
+            -- learns we're online
+            sync:OnNetBuddyPing({myFullHash, myHashes, myFTLHash}, "Dude", "WHISPER")
+            assert.equals(1, pongs)
+        end)
+
+        it("pongs a group ping when the data differs, so the pinger can push back", function()
+            local pongs = 0
+            network.SendObject = function(_, event)
+                if event == NetEvents.BuddyPong then pongs = pongs + 1 end
+            end
+            sync.isReady = true
+
+            sync:OnNetBuddyPing({myFullHash + 1, {}, myFTLHash}, "Dude", "PARTY")
+
+            assert.equals(1, pongs)
+        end)
+
+        it("pongs a group ping before the login sync is done", function()
+            local pongs = 0
+            network.SendObject = function(_, event)
+                if event == NetEvents.BuddyPong then pongs = pongs + 1 end
+            end
+
+            sync:OnNetBuddyPing({myFullHash, {}, myFTLHash}, "Dude", "PARTY")
+
+            assert.equals(1, pongs)
+        end)
+
         it("does not ping the group from the ticker with networking disabled", function()
             _G.SetGroupState(2, false, false)
             sync.isReady = true

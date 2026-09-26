@@ -294,7 +294,8 @@ function WoWForeverRaceTracker:OnNetPlayerInfoBatch(payload)
     self:ProcessPlayerInfoBatch(batch)
 end
 
-function WoWForeverRaceTracker:OnSlashWhoResult(playerInfoBatch)
+-- source: optional, see Config.WhoResultSources
+function WoWForeverRaceTracker:OnSlashWhoResult(playerInfoBatch, source)
     local changed = {}
     for _, playerInfo in ipairs(playerInfoBatch) do
         local normalizedInfo, isChanged = self:ProcessPlayerInfo(playerInfo)
@@ -303,7 +304,7 @@ function WoWForeverRaceTracker:OnSlashWhoResult(playerInfoBatch)
         end
     end
     if #changed > 0 then
-        self:ScheduleDingPush(changed)
+        self:ScheduleDingPush(changed, source ~= self.Config.WhoResultSources.Group)
     end
 end
 
@@ -311,7 +312,8 @@ function WoWForeverRaceTracker:OnSyncResult(playerInfoBatch)
     self:ProcessPlayerInfoBatch(playerInfoBatch)
 end
 
-function WoWForeverRaceTracker:ScheduleDingPush(changedPlayers)
+-- toGroup: also push to our group; not for levels every group member reads itself
+function WoWForeverRaceTracker:ScheduleDingPush(changedPlayers, toGroup)
     if not self.DB.profile.options.networking then return end
     if self.DB.factionrealm.finished then return end
 
@@ -320,7 +322,7 @@ function WoWForeverRaceTracker:ScheduleDingPush(changedPlayers)
     self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, {batchstr, false, 0}, "YELL")
     -- and to the group right away: a party member outside yell range would otherwise
     -- only hear of it on the next group sync
-    if GetNumGroupMembers() > 0 then
+    if toGroup and GetNumGroupMembers() > 0 then
         self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, {batchstr, false, 0}, "GROUP")
     end
 
