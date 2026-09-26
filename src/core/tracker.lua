@@ -3,6 +3,7 @@ local WoWForeverRace = _G.WoWForeverRace
 
 -- WoW API
 local C_Timer, IsInGuild, math = _G.C_Timer, _G.IsInGuild, _G.math
+local GetNumGroupMembers = _G.GetNumGroupMembers
 
 --[[
 Tracker is responsible for maintaining our leaderboard data based on data provided by other parts of the system
@@ -317,6 +318,11 @@ function WoWForeverRaceTracker:ScheduleDingPush(changedPlayers)
     -- YELL immediately so zone players get real-time updates
     local batchstr = WoWForeverRace.Serializer.SerializePlayerInfoBatch(changedPlayers)
     self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, {batchstr, false, 0}, "YELL")
+    -- and to the group right away: a party member outside yell range would otherwise
+    -- only hear of it on the next group sync
+    if GetNumGroupMembers() > 0 then
+        self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, {batchstr, false, 0}, "GROUP")
+    end
 
     -- accumulate into pending set (keyed by name to deduplicate across rapid scans)
     for _, p in ipairs(changedPlayers) do

@@ -692,6 +692,83 @@ describe("Sync", function()
         end)
     end)
 
+    describe("group sync", function()
+        local groupPings
+
+        before_each(function()
+            groupPings = {}
+            network.SendObject = function(_, event, _, channel)
+                if event == NetEvents.BuddyPing and channel == "GROUP" then
+                    groupPings[#groupPings + 1] = event
+                end
+            end
+        end)
+
+        after_each(function()
+            _G.SetGroupState(nil)
+        end)
+
+        it("pings the group once the login sync is done when already grouped", function()
+            _G.SetGroupState(2, false, false)
+
+            sync:SetReady()
+            assert.equals(0, #groupPings, "debounced")
+            AdvanceClock(2)
+
+            assert.equals(1, #groupPings)
+        end)
+
+        it("does not ping a group after the login sync when not grouped", function()
+            sync:SetReady()
+            AdvanceClock(2)
+
+            assert.equals(0, #groupPings)
+        end)
+
+        it("does not ping the group on a roster change before the login sync is done", function()
+            _G.SetGroupState(2, false, false)
+
+            sync:OnGroupRosterUpdate()
+            AdvanceClock(2)
+
+            assert.equals(0, #groupPings)
+        end)
+
+        it("pings the group again every GroupSyncInterval while grouped", function()
+            _G.SetGroupState(2, false, false)
+            sync.isReady = true
+            sync:InitGroupTicker()
+
+            -- each tick schedules the debounced ping 2s later
+            local interval = WoWForeverRace.Config.GroupSyncInterval
+            AdvanceClock(interval)
+            AdvanceClock(2)
+            assert.equals(1, #groupPings)
+
+            AdvanceClock(interval - 2)
+            AdvanceClock(2)
+            assert.equals(2, #groupPings)
+
+            -- left the group: the ticker keeps running but has nobody to ping
+            _G.SetGroupState(nil)
+            AdvanceClock(interval - 2)
+            AdvanceClock(2)
+            assert.equals(2, #groupPings)
+        end)
+
+        it("does not ping the group from the ticker with networking disabled", function()
+            _G.SetGroupState(2, false, false)
+            sync.isReady = true
+            db.profile.options.networking = false
+            sync:InitGroupTicker()
+
+            AdvanceClock(WoWForeverRace.Config.GroupSyncInterval)
+            AdvanceClock(2)
+
+            assert.equals(0, #groupPings)
+        end)
+    end)
+
     it("produces proper payload for global leaderboard", function()
         local networkSpy = spy.on(network, "SendObject")
 

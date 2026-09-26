@@ -89,6 +89,7 @@ function WoWForeverRace:OnEnable()
     self.Tracker:InitDiscoveryTicker()
     self.Sync:InitGuildTicker()
     self.Sync:InitBuddyTicker()
+    self.Sync:InitGroupTicker()
     self.Roster:InitGuildRosterTicker()
 
     local groupEventFrame = CreateFrame("Frame")

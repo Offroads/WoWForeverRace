@@ -299,6 +299,9 @@ function WoWForeverRaceSync:SetReady()
         self.isReady = true
         WoWForeverRace:DebugPrint("Sync done", true)
         self:SendBuddyPings()
+        -- already grouped at login or /reload: GROUP_ROSTER_UPDATE came before we
+        -- were ready, so compare with the group now instead of on its next change
+        self:ScheduleGroupSync()
     end
 end
 
@@ -752,10 +755,14 @@ function WoWForeverRaceSync:OnNetPHSync(payload, sender)
     self:SetReady()
 end
 
--- Called when the party roster changes. Debounced to avoid firing multiple times
--- in quick succession. Sends BPING to GROUP so all members can exchange hashes
--- and push any missing leaderboards.
+-- Called when the party roster changes.
 function WoWForeverRaceSync:OnGroupRosterUpdate()
+    self:ScheduleGroupSync()
+end
+
+-- Sends BPING to GROUP so all members can exchange hashes and push any missing
+-- leaderboards. Debounced to avoid firing multiple times in quick succession.
+function WoWForeverRaceSync:ScheduleGroupSync()
     if not self.isReady then return end
     if not self.DB.profile.options.networking then return end
     if self.DB.factionrealm.finished then return end
@@ -783,6 +790,15 @@ function WoWForeverRaceSync:SendGroupSync()
     end
     local myFTLHash = computeFTLHash(self.DB, self.Config)
     self.Network:SendObject(self.Config.Network.Events.BuddyPing, {myFullHash, myPerClassHashes, myFTLHash}, "GROUP")
+end
+
+-- Start the periodic group sync ticker: members who stay in the same group are
+-- compared again now and then, not only when someone joins or leaves.
+function WoWForeverRaceSync:InitGroupTicker()
+    local _self = self
+    C_Timer.NewTicker(self.Config.GroupSyncInterval, function()
+        _self:ScheduleGroupSync()
+    end)
 end
 
 -- Start the periodic buddy ping ticker.

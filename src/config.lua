@@ -171,6 +171,8 @@ local WoWForeverRaceConfig = {
     BuddySyncInterval = 600,   -- buddy ping every 10 minutes
     BuddyPingBatchSize = 50,   -- max buddies to ping per cycle (random sample if more)
 
+    GroupSyncInterval = 300,   -- group sync every 5 minutes while grouped (party messages cost nothing)
+
     DingPushDelay = 10,        -- seconds to batch dings before pushing to guild + buddies
 
     -- playerHistory sync: potentially large (hundreds of players x dozens of levels),
