@@ -13,6 +13,8 @@
       tests      run the busted test suite, extra args are passed to make
                  (e.g. INCLUDES=scanner TESTS='.*binary.*')
       check      lint + tests
+      sim        simulate the addon's traffic in a party and a raid, extra
+                 args are passed to make (e.g. SCENARIO=drift SIZES=40)
       libs       download the external libraries into .\libs (needed once,
                  and before deploy)
       release    build a release zip into .\.release (no upload)
@@ -40,7 +42,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("build", "lint", "tests", "check", "libs", "release", "shell", "deploy", "help")]
+    [ValidateSet("build", "lint", "tests", "check", "sim", "libs", "release", "shell", "deploy", "help")]
     [string]$Command = "help",
 
     [Parameter(Position = 1, ValueFromRemainingArguments = $true)]
@@ -135,6 +137,7 @@ switch ($Command) {
     "lint"    { Invoke-Dev @("make", "lint") }
     "tests"   { Invoke-Dev (@("make", "tests") + $Rest) }
     "check"   { Invoke-Dev @("make", "check") }
+    "sim"     { Invoke-Dev (@("make", "sim") + $Rest) }
     "libs"    { Invoke-Dev @("make", "fetch-libs") }
     "release" { Invoke-Dev @("make", "release") }
     "shell"   { Invoke-Dev @("bash") }

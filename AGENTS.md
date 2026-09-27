@@ -18,11 +18,12 @@ docker compose run --rm dev make tests            # busted with coverage (fetche
 docker compose run --rm dev make tests INCLUDES=scanner        # only test files matching a Lua pattern
 docker compose run --rm dev make tests TESTS='.*binary.*'     # only test names matching a Lua pattern
 docker compose run --rm dev make tests BUSTED_RUN=quick       # skip coverage
+docker compose run --rm dev make sim              # simulate addon traffic in a party and a raid (SCENARIO=, SIZES=, SV=)
 docker compose run --rm dev make fetch-libs       # re-download external libraries into ./libs
 docker compose run --rm dev make release          # build a release zip into ./.release
 ```
 
-Windows: `.\scripts\dev.ps1 <build|lint|tests|check|libs|release|shell|deploy>` wraps the same commands; `deploy` junctions the checkout into a WoW `AddOns` folder (the `_classic_beta_` install that serves the WoW Forever beta, or `-AddOnsPath`). macOS/Linux: `make docker-*` targets. With a native Lua 5.1 toolchain the plain `make lint tests` also works (`make setup-dev` installs the rocks).
+Windows: `.\scripts\dev.ps1 <build|lint|tests|check|sim|libs|release|shell|deploy>` wraps the same commands; `deploy` junctions the checkout into a WoW `AddOns` folder (the `_classic_beta_` install that serves the WoW Forever beta, or `-AddOnsPath`). macOS/Linux: `make docker-*` targets. With a native Lua 5.1 toolchain the plain `make lint tests` also works (`make setup-dev` installs the rocks).
 
 CI (`.github/workflows/ci.yml`) runs lint + tests in the same image on every PR and on pushes to `main`. Tagging `v*` runs `.github/workflows/release.yml`: the BigWigs packager (v2.6.0+ maps interface 16xxx to game type `forever`) builds the zip, creates the GitHub release and uploads to CurseForge (`X-Curse-Project-ID` in the TOC, `CF_API_KEY` secret). No WoWInterface upload: it has no WoW Forever game type and the packager fails the run.
 
@@ -156,5 +157,6 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 | `.luarc.json` | Lua Language Server config (editor completion / diagnostics) |
 | `Dockerfile`, `docker-compose.yml` | Dev toolchain image |
 | `scripts/dev.ps1` | Windows wrapper: docker targets + deploy into WoW AddOns |
+| `scripts/groupsim.lua` | Traffic simulation (`make sim`): 5 / 40 complete addon stacks in one group over the real network envelope, paced like ChatThrottleLib; reports messages, bytes, queueing and time to get back in sync per scenario. Runs against older checkouts too, to compare versions |
 | `.github/workflows/` | CI (lint + tests) and tag-triggered release packaging |
 | `CHANGELOG.md` | Release notes, shipped in the zip and posted on CurseForge by the packager |
