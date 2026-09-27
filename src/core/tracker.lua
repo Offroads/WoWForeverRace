@@ -358,10 +358,15 @@ function WoWForeverRaceTracker:FlushDingPush()
         self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, payload, "GUILD")
     end
 
-    -- whisper a random sample of buddies (capped at BuddyPingBatchSize)
+    -- whisper a random sample of buddies (capped at BuddyPingBatchSize); group members
+    -- got the group push or read the level themselves, and after one group sync every
+    -- member is a buddy: a raid level-up would otherwise cost 40 x 39 whispers
+    local inGroup = self.Core:GroupMemberNames()
     local names = {}
     for name, _ in pairs(self.DB.factionrealm.buddies) do
-        names[#names + 1] = name
+        if not inGroup[name] then
+            names[#names + 1] = name
+        end
     end
     local batchSize = self.Config.BuddyPingBatchSize
     if #names > batchSize then

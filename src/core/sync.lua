@@ -3,7 +3,7 @@ local WoWForeverRace = _G.WoWForeverRace
 
 -- WoW API
 local C_Timer, IsInGuild, math = _G.C_Timer, _G.IsInGuild, _G.math
-local GetNumGroupMembers, IsInRaid, GetUnitName = _G.GetNumGroupMembers, _G.IsInRaid, _G.GetUnitName
+local GetNumGroupMembers = _G.GetNumGroupMembers
 
 -- addon channels that reach the whole group at once, see Network:ResolveGroupChannel
 local GROUP_DISTRIBUTIONS = {PARTY = true, RAID = true, INSTANCE_CHAT = true}
@@ -559,27 +559,6 @@ function WoWForeverRaceSync:AddBuddy(name)
     self.EventBus:PublishEvent(self.Config.Events.BuddyUpdate)
 end
 
--- The other members of our group, keyed like buddies (short name on our realm).
-function WoWForeverRaceSync:GroupMemberNames()
-    local names = {}
-    local numMembers = GetNumGroupMembers() or 0
-    if numMembers == 0 then return names end
-
-    -- raid tokens include ourselves, party tokens don't
-    local prefix, last = "party", numMembers - 1
-    if IsInRaid() then
-        prefix, last = "raid", numMembers
-    end
-    for i = 1, last do
-        local fullName = GetUnitName(prefix .. i, true)
-        if fullName ~= nil then
-            local name, realm = self.Core:SplitFullPlayer(fullName)
-            names[self.Core:IsMyRealm(realm) and name or fullName] = true
-        end
-    end
-    return names
-end
-
 -- Send BPING to up to BuddyPingBatchSize buddies (random sample if more).
 function WoWForeverRaceSync:SendBuddyPings()
     if not self.isReady then return end
@@ -587,7 +566,7 @@ function WoWForeverRaceSync:SendBuddyPings()
     if not self.DB.profile.options.networking then return end
 
     -- group members get the group ping (ScheduleGroupSync, same gates) instead
-    local inGroup = self:GroupMemberNames()
+    local inGroup = self.Core:GroupMemberNames()
     local names = {}
     for name, _ in pairs(self.DB.factionrealm.buddies) do
         if not inGroup[name] then
