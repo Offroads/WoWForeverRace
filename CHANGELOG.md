@@ -3,6 +3,11 @@
 All user-visible changes to WoWForeverRace. The BigWigs packager ships this
 file in the release zip and posts it as the CurseForge release notes.
 
+## Unreleased
+
+### Fixed
+- Turning off Debug Mode in the addon settings no longer throws a Lua error.
+
 ## v0.1.0-beta10 - 2026-09-29
 
 Party and raid members now keep their leaderboards in step with each other.
