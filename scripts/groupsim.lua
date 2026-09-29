@@ -9,7 +9,7 @@
 --     sizes           comma separated group sizes, default 5,40
 --     savedvariables  optional SavedVariables file (a path inside the checkout) to
 --                     seed every client with, instead of tests/fixtures/horde-pve-factionrealm.lua;
---                     its first Horde factionrealm block is used
+--                     its "Horde - PvE" factionrealm block is used (FACTION and REALM below)
 --
 -- The model: every client stays online, in yell range of the others and in the same
 -- group, with no guild. Message sizes are the serialized envelope times the
@@ -55,10 +55,15 @@ local function loadFactionRealm()
     end
     local env = {}
     setfenv(assert(loadfile(SAVED_VARIABLES)), env)()
-    for key, block in pairs(env.WoWForeverRace_DB.factionrealm) do
-        if string.find(key, "^Horde") then return block end
-    end
-    error("no Horde factionrealm block in " .. SAVED_VARIABLES)
+    local blocks = env.WoWForeverRace_DB and env.WoWForeverRace_DB.factionrealm or {}
+    local key = FACTION .. " - " .. REALM
+    if blocks[key] ~= nil then return blocks[key] end
+
+    local found = {}
+    for name in pairs(blocks) do found[#found + 1] = "\"" .. name .. "\"" end
+    table.sort(found)
+    error(string.format("no factionrealm block \"%s\" in %s (found: %s)", key, SAVED_VARIABLES,
+            #found > 0 and table.concat(found, ", ") or "none"))
 end
 
 -- the clock starts right after the newest ding in the data: a record from the
