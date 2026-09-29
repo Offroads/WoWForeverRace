@@ -40,9 +40,12 @@ end
 -- to the other stacks' Network:HandleAddonMessage like the addon channel would
 -- ---------------------------------------------------------------------------
 local stacks, queue, activeStack, log, undelivered, now
+-- false: the stacks are out of yell range of each other
+local yellReaches
 
 local function resetWorld()
     stacks, queue, log, undelivered = {}, {}, {}, {}
+    yellReaches = true
     activeStack = nil
     now = START
     _G.SetTime(now)
@@ -75,6 +78,8 @@ local function pump()
                     wanted = stack.name == msg.target
                 elseif msg.channel == "GUILD" then
                     wanted = _G.IsInGuild()
+                elseif msg.channel == "YELL" then
+                    wanted = yellReaches
                 end
                 if wanted then
                     delivered = true
@@ -350,6 +355,22 @@ describe("Sync end to end with real data", function()
         assert.is_nil(after[NetEvents.FTLSync], "converged peers must not resend pioneers")
     end)
 
+    -- the SYNC / FTLSYNC messages sent since log entry `since`
+    local function dataMessages(since)
+        local out = {}
+        for i = since or 1, #log do
+            local e = log[i]
+            if e.event == NetEvents.SyncPayload or e.event == NetEvents.FTLSync then out[#out + 1] = e end
+        end
+        return out
+    end
+
+    -- a player only s knows, high enough for the overall, class and race boards
+    local function addOwnPlayer(s, name, level)
+        s.tracker:ProcessPlayerInfo({name = name, level = level, classIndex = 1, raceIndex = 2, dingedAt = now - 100})
+        assert.equals(name, s.db.factionrealm.leaderboard[0].players[1].name)
+    end
+
     it("group sync: a BPING to the party converges the members", function()
         _G.SetGroupState(2, false, false)
         local a = stack("Alpha Tester", realSavedVariables())
@@ -357,10 +378,73 @@ describe("Sync end to end with real data", function()
         a.sync.isReady, b.sync.isReady = true, true
 
         b.sync:OnGroupRosterUpdate()
-        advance(3)
+        -- debounce, the pinger's round, then the picked member's answer
+        advance(2 + Config.GroupSyncWait + 2)
 
         assertAllBoardsEqual(a, b)
         assertFTLEqual(a, b)
+        for _, e in ipairs(dataMessages()) do
+            assert.equals("PARTY", e.channel, "group sync data goes to the group, never by whisper")
+        end
+    end)
+
+    it("group sync: one ping, only one member answers with data, over the group channel", function()
+        _G.SetGroupState(3, true, false)
+        local a = stack("Alpha Tester", realSavedVariables())
+        local b = stack("Beta Tester", realSavedVariables())
+        local c = stack("Gamma Tester", {})
+        a.sync.isReady, b.sync.isReady, c.sync.isReady = true, true, true
+        addOwnPlayer(b, "Zed Tester", 22)
+        local mark = #log + 1
+
+        c.sync:SendGroupSync()
+        advance(Config.GroupSyncWait + 5)
+
+        local senders = {}
+        for _, e in ipairs(dataMessages(mark)) do
+            assert.equals("RAID", e.channel, "group sync data goes to the group, never by whisper")
+            senders[e.from] = true
+        end
+        senders["Gamma Tester"] = nil
+        local answering = {}
+        for name in pairs(senders) do answering[#answering + 1] = name end
+        assert.equals(1, #answering, "exactly one member answers the ping with data")
+
+        -- the empty pinger now holds what the member that answered holds
+        local responder = answering[1] == "Alpha Tester" and a or b
+        assertAllBoardsEqual(responder, c)
+        assertFTLEqual(responder, c)
+    end)
+
+    it("group sync: members out of yell range converge through the group alone", function()
+        yellReaches = false
+        _G.SetGroupState(3, true, false)
+        local a = stack("Alpha Tester", realSavedVariables())
+        local b = stack("Beta Tester", realSavedVariables())
+        local c = stack("Gamma Tester", realSavedVariables())
+        a.sync.isReady, b.sync.isReady, c.sync.isReady = true, true, true
+        addOwnPlayer(a, "Ann Only", 22)
+        addOwnPlayer(b, "Bob Only", 23)
+        addOwnPlayer(c, "Cid Only", 24)
+
+        -- a roster change reaches every member, and every member pings the group
+        for _, s in ipairs(stacks) do s.sync:OnGroupRosterUpdate() end
+        advance(60)
+
+        assertAllBoardsEqual(a, b)
+        assertAllBoardsEqual(b, c)
+        assertFTLEqual(a, b)
+        assertFTLEqual(b, c)
+        assert.equals("Cid Only", a.db.factionrealm.leaderboard[0].players[1].name)
+
+        -- in step now: a further ping draws no answer at all
+        local mark = #log + 1
+        a.sync:SendGroupSync()
+        advance(Config.GroupSyncWait + 2)
+        local after = countEvents(mark)
+        assert.equals(1, after[NetEvents.BuddyPing])
+        assert.is_nil(after[NetEvents.BuddyPong], "members in sync stay silent")
+        assert.is_nil(after[NetEvents.SyncPayload])
     end)
 
     it("discovery beacon: a zone listener with a different hash gets the missing boards", function()

@@ -8,22 +8,23 @@ A World of Warcraft addon written in Lua that tracks the top 50 players racing t
 
 ## Commands
 
-The toolchain (Lua 5.1, busted, luacheck, luacov, git, svn, BigWigs packager) is packaged in a Docker image; nothing else needs to be installed on the host. Run every `make` target through it:
+The toolchain (Lua 5.1, busted, luacheck, luacov, LuaBitOp, git, svn, BigWigs packager) is packaged in a Docker image; nothing else needs to be installed on the host. Rebuild the image (`docker compose build dev`) when the `Dockerfile` changes: LuaBitOp came later, and `make netsize` needs it. Run every `make` target through it:
 
 ```bash
 docker compose build dev                          # build the dev image (once)
 docker compose run --rm dev                       # lint + tests
-docker compose run --rm dev make lint             # luacheck on src/ and tests/
+docker compose run --rm dev make lint             # luacheck on src/, tests/ and scripts/
 docker compose run --rm dev make tests            # busted with coverage (fetches ./libs first if missing)
 docker compose run --rm dev make tests INCLUDES=scanner        # only test files matching a Lua pattern
 docker compose run --rm dev make tests TESTS='.*binary.*'     # only test names matching a Lua pattern
 docker compose run --rm dev make tests BUSTED_RUN=quick       # skip coverage
-docker compose run --rm dev make sim              # simulate addon traffic in a party and a raid (SCENARIO=, SIZES=, SV=)
+docker compose run --rm dev make sim              # simulate addon traffic in a party, raid, guild or zone (SCENARIO=, SIZES=, SV=)
+docker compose run --rm dev make netsize          # message sizes of a full update through the real compression (SV=)
 docker compose run --rm dev make fetch-libs       # re-download external libraries into ./libs
 docker compose run --rm dev make release          # build a release zip into ./.release
 ```
 
-Windows: `.\scripts\dev.ps1 <build|lint|tests|check|sim|libs|release|shell|deploy>` wraps the same commands; `deploy` junctions the checkout into a WoW `AddOns` folder (the `_classic_beta_` install that serves the WoW Forever beta, or `-AddOnsPath`). macOS/Linux: `make docker-*` targets. With a native Lua 5.1 toolchain the plain `make lint tests` also works (`make setup-dev` installs the rocks).
+Windows: `.\scripts\dev.ps1 <build|lint|tests|check|sim|netsize|libs|release|shell|deploy>` wraps the same commands; `deploy` junctions the checkout into a WoW `AddOns` folder (the `_classic_beta_` install that serves the WoW Forever beta, or `-AddOnsPath`). macOS/Linux: `make docker-*` targets. With a native Lua 5.1 toolchain the plain `make lint tests` also works (`make setup-dev` installs the rocks).
 
 CI (`.github/workflows/ci.yml`) runs lint + tests in the same image on every PR and on pushes to `main`. Tagging `v*` runs `.github/workflows/release.yml`: the BigWigs packager (v2.6.0+ maps interface 16xxx to game type `forever`) builds the zip, creates the GitHub release and uploads to CurseForge (`X-Curse-Project-ID` in the TOC, `CF_API_KEY` secret). No WoWInterface upload: it has no WoW Forever game type and the packager fails the run.
 
@@ -31,7 +32,7 @@ Coverage report: `luacov.report.out`. Files not exercised by tests (WoW API depe
 
 `CHANGELOG.md` is the release notes: the BigWigs packager ships it in the zip and posts it on GitHub and CurseForge (`manual-changelog` in `.pkgmeta`, else it posts the raw git log), so add every user-visible change under `Unreleased` in the PR that makes it, and rename that section to the version when tagging.
 
-`tests/sync-e2e.lua` exercises every sync flow (login zone sync, guild sync, buddy ping, group sync, discovery beacon, ding push, faction lock) between two complete addon stacks wired together through the real network envelope, one of them seeded with `tests/fixtures/horde-pve-factionrealm.lua`: real beta data, the `factionrealm` block of a SavedVariables file with `playerHistory` trimmed to the players on a leaderboard. Regenerate it the same way when the DB layout changes; data fixtures are excluded from busted's file discovery (`.busted`) and from luacheck (`.luacheckrc`).
+`tests/sync-e2e.lua` exercises every sync flow (login zone sync, guild sync, buddy ping, group sync, discovery beacon, ding push, faction lock) between two (for the group, three) complete addon stacks wired together through the real network envelope, one of them seeded with `tests/fixtures/horde-pve-factionrealm.lua`: real beta data, the `factionrealm` block of a SavedVariables file with `playerHistory` trimmed to the players on a leaderboard. Regenerate it the same way when the DB layout changes; data fixtures are excluded from busted's file discovery (`.busted`) and from luacheck (`.luacheckrc`).
 
 Test output silences the addon's debug prints; set `WFR_TEST_DEBUG=1` to see them. The stubs in `tests/stubs/` expose `Set*` helpers (`SetTime`, `SetWhoResults(results, total)`, `SetIsInGuild`, `SetFaction(faction)`, `SetGroupState(members, inRaid, inInstanceGroup)`, `SetGroupMembers(members, inRaid)`, `SetGuildRoster(members)`, `SetWhoPanelVisible(visible)`, `SetChatLockdown(lockedDown)`, `SetFaction(faction)`, `SetRaceNames(names)`, `C_Timer.Advance`) to drive the world state; extend them rather than mocking inside individual tests. When the Ace3 libraries start using a new WoW global, stub it in `tests/stubs/misc.lua`; when addon code starts using a WoW API as a bare global, add it to `read_globals` in `.luacheckrc` (access through `_G.Name` needs no entry).
 
@@ -62,7 +63,7 @@ WoWForeverRace_DB.factionrealm = {
   },                                                  -- players[] = { name, level, dingedAt, classIndex, raceIndex }
   firstToLevel = { [classFilter] = { [level] = {name, classIndex, dingedAt} } },
   playerHistory = { [name] = { classIndex, raceIndex, levels = { [level] = dingedAt } } },  -- raceIndex is local only: not hashed, not synced
-  buddies = { [name] = { lastSeen } },
+  buddies = { [name] = { lastSeen } },  -- dropped after Config.BuddyMaxAge without contact (Sync:PruneBuddies at login)
   realmOpenedAt = serverTime,  -- first login with the addon, earliest wins on sync; never before the launch once it passed
   raceStartedAt = serverTime,  -- earliest dingedAt seen (since the launch, once it passed)
 }
@@ -121,6 +122,10 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 - WHO results are validated against the pending query (level range + class filter, or for a race scan: no row of another known race) so manual `/who` results are never misattributed to a scan
 - `Network:SendObject(..., "GROUP")` routes to `INSTANCE_CHAT` in instance groups, else `RAID`/`PARTY`
 - The group is used freely, but a raid multiplies every group message by up to 40 senders and 39 receivers. `Sync:ScheduleGroupSync` (BPING to `GROUP`, debounced 2s) runs on `GROUP_ROSTER_UPDATE`, once the login sync is done (`SetReady`, for a login or `/reload` inside a group) and every `Config.GroupSyncInterval` (`Sync:InitGroupTicker`). A member already in sync does not answer a group BPING (`OnNetBuddyPing` gets the distribution from `Network:HandleAddonMessage`, which publishes every wire event as `(payload, sender, distribution)`), so a converged raid costs one message per member per interval; `SendBuddyPings` skips buddies in the group. A ding push goes to `GROUP` right away next to the zone `YELL`, except for a batch from the group roster (`Config.WhoResultSources.Group`), which every member reads itself
+- A group ping never makes members trade data in pairs. A member that differs only whispers its hashes back (BPONG with `true` as field 4). `Sync:SendGroupSync` opens a round (`self.groupRound`): after `Config.GroupSyncWait` the pinger sends every board any of those members lacks to `GROUP` once (`PushGroupRound`, a late pong only adds boards nobody sent yet that round) and picks one of them at random (`AskGroupResponder`), whose STARTSYNC carries `true` as field 5: that member sends its boards that differ from the pinger's to `GROUP` (`OnNetStartSync`). So a ping has at most two senders of data, heard by every member; what the other members hold goes out on their own ping. Group sync never negotiates player history
+- The guild sync partner is picked at random among the offers (`Sync:DoGuildSync`), so no member serves the whole guild; `loginTime` still rides along in `GUILDSYNC` / `GUILDOFFR` but decides nothing
+- Discovery beacon: a client sends at most one `DATAREQ` per `Config.DataRequestInterval` (`Tracker:OnNetDataAvailable`) and waits for that answer instead of asking every beacon of a crowded zone. A discovery answer (`Tracker:SendBatches`) is `PINFOB` `{batchstr, true, boardIndex, boardHash}`, a ding push `{batchstr, false, 0}`. `Tracker:RecordBoardYell` remembers the discovery yells heard; before each of its own yell chunks an owner skips a board when another player yelled the same data for it (same board hash as ours now) since its window opened (`Tracker:BoardYellTaken`). Different data is always yelled, so listeners keep the earliest ding; of two owners that both started the same data, the lower name finishes it
+- Buddies not heard from for `Config.BuddyMaxAge` (3 days) are dropped at every login (`Sync:PruneBuddies`); there is no cap on the count, pings and ding pushes sample `BuddyPingBatchSize` of them
 - Race leaderboards sync through the per-board hash tables only (discovery beacon, guild sync, buddy ping/pong, group sync); the login handshake (`REQSYNC` / `OFFERSYNC` / zone `STARTSYNC`) still exchanges just the overall and the own class leaderboard
 - Chat announcements: the top N sliders `globalTopN`, `classTopN` and `raceTopN` (default 1: only the first of a race) gate a ding; it is always one chat line, the race rank is appended to the class / overall message or gets its own message when only the race gate passes. With `raceTopN` 0 the output is exactly the class / overall one
 - Peers can track a different class list (other client, older build on the shared `TCRace` prefix). Wherever a peer's per-board hash table (index i+1 = `leaderboard[i]`, classes and races) is available (`GUILDSYNC`, `BPING`, `BPONG`, `DATAREQ`), full, FTL and per-board comparisons only cover the leaderboards that peer reported (`Config:BoardIndexes(faction, peerHashes)`, `Tracker:ComputeNeedSet`); a missing entry means "not tracked", never "differs". The discovery beacon (`DATAAVAIL`) carries only the full hash, so such peers still cost one `DATAREQ` round trip per beacon, which then sends nothing
@@ -147,7 +152,7 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 | `src/core/serializer.lua` | Network encoding/decoding |
 | `src/dev.lua` | Dev-only slash commands (unpackaged checkout only) |
 | `media/icon.tga` | In-game icon, 64x64 (TOC `IconTexture`, minimap button); `icon.svg` is its source, `logo.svg` / `logo.png` the full logo. Only the TGA is packaged |
-| `tests/testbase.lua` | Test bootstrap: stubs, libs, addon sources |
+| `tests/testbase.lua` | Test bootstrap: stubs, libs, addon sources. Loads a pass-through LibCompress, or the real one when `WFR_REAL_LIBCOMPRESS` is set (scripts that measure sizes) |
 | `tests/stubs/` | WoW API stubs with `Set*` helpers |
 | `tests/sync-e2e.lua` | Two addon stacks syncing real data end to end over the network envelope |
 | `tests/fixtures/` | Generated data fixtures (`return {...}`), not test files |
@@ -157,6 +162,7 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 | `.luarc.json` | Lua Language Server config (editor completion / diagnostics) |
 | `Dockerfile`, `docker-compose.yml` | Dev toolchain image |
 | `scripts/dev.ps1` | Windows wrapper: docker targets + deploy into WoW AddOns |
-| `scripts/groupsim.lua` | Traffic simulation (`make sim`): 5 / 40 complete addon stacks in one group over the real network envelope, paced like ChatThrottleLib; reports messages, bytes, queueing and time to get back in sync per scenario. Runs against older checkouts too, to compare versions |
+| `scripts/groupsim.lua` | Traffic simulation (`make sim`): 5 / 40 complete addon stacks in one group over the real network envelope, paced like ChatThrottleLib; reports messages, bytes, queueing and time to get back in sync per scenario. `guild` and `zone` put the stacks in one guild (out of yell range) or in one crowded zone instead. Runs against older checkouts too, to compare versions: copy the script into a checkout of the older version |
+| `scripts/netsize.lua` | Message sizes (`make netsize`): every leaderboard, the pioneers and the login history pull, sent the way the addon sends them through the real serializer, LibCompress and AceComm chunking, with the ChatThrottleLib cost of each. Run it again when the wire format changes |
 | `.github/workflows/` | CI (lint + tests) and tag-triggered release packaging |
 | `CHANGELOG.md` | Release notes, shipped in the zip and posted on CurseForge by the packager |

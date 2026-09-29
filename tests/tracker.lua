@@ -951,6 +951,200 @@ describe("Tracker", function()
         end)
     end)
 
+    describe("Discovery", function()
+        local NetEvents = WoWForeverRace.Config.Network.Events
+        local sent, startTime
+
+        local function sentOf(event)
+            local out = {}
+            for _, s in ipairs(sent) do
+                if s.event == event then out[#out + 1] = s end
+            end
+            return out
+        end
+
+        before_each(function()
+            startTime = time
+            sent = {}
+            network.SendObject = function(_, event, payload, channel, target)
+                sent[#sent + 1] = {event = event, payload = payload, channel = channel, target = target}
+            end
+        end)
+
+        after_each(function()
+            time = startTime
+        end)
+
+        describe("data requests", function()
+            before_each(function()
+                tracker:ProcessPlayerInfo(playerInfo("Nub One", 20, DRUIDIDX))
+            end)
+
+            it("asks at most one beacon per DataRequestInterval", function()
+                local interval = config.DataRequestInterval
+
+                tracker:OnNetDataAvailable(12345, "Ann Wanderer")
+                assert.equals(1, #sentOf(NetEvents.DataRequest))
+                assert.equals("Ann Wanderer", sent[1].target)
+
+                time = time + interval - 1
+                tracker:OnNetDataAvailable(12345, "Bob Faraway")
+                assert.equals(1, #sentOf(NetEvents.DataRequest), "still waiting for Ann's answer")
+
+                time = time + 1
+                tracker:OnNetDataAvailable(12345, "Cid Later")
+                assert.equals(2, #sentOf(NetEvents.DataRequest))
+                assert.equals("Cid Later", sent[2].target)
+            end)
+
+            it("does not start waiting for a beacon that matches our data", function()
+                tracker:OnNetDataAvailable(tracker:ComputeFullHash(), "Ann Wanderer")
+                assert.equals(0, #sent)
+
+                tracker:OnNetDataAvailable(12345, "Bob Faraway")
+                assert.equals(1, #sentOf(NetEvents.DataRequest))
+            end)
+        end)
+
+        describe("answers", function()
+            -- the overall board holds 5 warriors, the druid board adds one player of its own:
+            -- a yell answer is 3 chunks of the overall board and 1 of the druid board
+            local function requesterHashes()
+                local hashes = {}
+                for _, boardIndex in ipairs(core:BoardIndexes()) do
+                    hashes[boardIndex + 1] = 5381
+                end
+                return hashes
+            end
+
+            local function boardHash(boardIndex)
+                return WoWForeverRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[boardIndex])
+            end
+
+            local function yellChunks(boardIndex)
+                local count = 0
+                for _, s in ipairs(sentOf(NetEvents.PlayerInfoBatch)) do
+                    if s.channel == "YELL" and s.payload[3] == boardIndex then count = count + 1 end
+                end
+                return count
+            end
+
+            local function hearYell(sender, payload)
+                tracker:OnNetPlayerInfoBatch(payload, sender, "YELL")
+            end
+
+            before_each(function()
+                config = merge(WoWForeverRace.Config, {MaxLeaderboardSize = 5, YellChunkSize = 2})
+                tracker = WoWForeverRace.Tracker(config, core, db, eventbus, network)
+                for i = 1, 5 do
+                    tracker:ProcessPlayerInfo(playerInfo("Warrior " .. string.char(64 + i), 30 + i, WARRIORIDX))
+                end
+                tracker:ProcessPlayerInfo(playerInfo("Druid Low", 10, DRUIDIDX))
+                sent = {}
+            end)
+
+            -- opens our window and has two players ask, so the answer is yelled
+            local function beaconWithTwoRequesters()
+                tracker:SendDiscoveryBeacon()
+                tracker:OnNetDataRequest(requesterHashes(), "Ann Wanderer")
+                tracker:OnNetDataRequest(requesterHashes(), "Bob Faraway")
+            end
+
+            -- closes the window, then lets every yell chunk go out (the timer stub fires
+            -- a timer scheduled from a callback on the next Advance, unless it is due now)
+            local function answer()
+                _G.C_Timer.Advance(config.RequestSyncWait)
+                _G.C_Timer.Advance(10)
+            end
+
+            it("yells every board, marked as a discovery answer with our board hash", function()
+                beaconWithTwoRequesters()
+                answer()
+
+                assert.equals(3, yellChunks(0))
+                assert.equals(1, yellChunks(DRUIDIDX))
+                for _, s in ipairs(sentOf(NetEvents.PlayerInfoBatch)) do
+                    assert.is_true(s.payload[2])
+                    assert.equals(boardHash(s.payload[3]), s.payload[4])
+                end
+            end)
+
+            it("skips a board another player yelled with the same data since our window opened", function()
+                beaconWithTwoRequesters()
+                hearYell("Zed Other", {"", true, 0, boardHash(0)})
+                answer()
+
+                assert.equals(0, yellChunks(0))
+                assert.equals(1, yellChunks(DRUIDIDX), "a board nobody yelled is still sent")
+            end)
+
+            it("still yells a board another player yelled with different data", function()
+                beaconWithTwoRequesters()
+                hearYell("Zed Other", {"", true, 0, boardHash(0) + 1})
+                answer()
+
+                assert.equals(3, yellChunks(0))
+            end)
+
+            it("never skips a board for a ding push", function()
+                beaconWithTwoRequesters()
+                hearYell("Zed Other", {"", false, 0})
+                answer()
+
+                assert.equals(3, yellChunks(0))
+            end)
+
+            it("ignores a yell heard before our window opened", function()
+                time = time - 10
+                hearYell("Zed Other", {"", true, 0, boardHash(0)})
+                time = time + 10
+                beaconWithTwoRequesters()
+                answer()
+
+                assert.equals(3, yellChunks(0))
+            end)
+
+            it("finishes a board it started when its name is the lower one", function()
+                beaconWithTwoRequesters()
+                _G.C_Timer.Advance(config.RequestSyncWait)
+                assert.equals(1, yellChunks(0), "first chunk out")
+
+                hearYell("Zzz Later", {"", true, 0, boardHash(0)})
+                _G.C_Timer.Advance(10)
+
+                assert.equals(3, yellChunks(0))
+            end)
+
+            it("stops a board it started when the other owner's name is lower", function()
+                beaconWithTwoRequesters()
+                _G.C_Timer.Advance(config.RequestSyncWait)
+                assert.equals(1, yellChunks(0), "first chunk out")
+
+                hearYell("Aaa First", {"", true, 0, boardHash(0)})
+                _G.C_Timer.Advance(10)
+
+                assert.equals(1, yellChunks(0))
+                assert.equals(1, yellChunks(DRUIDIDX))
+            end)
+
+            it("whispers a single requester whatever it heard", function()
+                tracker:SendDiscoveryBeacon()
+                tracker:OnNetDataRequest(requesterHashes(), "Ann Wanderer")
+                hearYell("Zed Other", {"", true, 0, boardHash(0)})
+                _G.C_Timer.Advance(config.RequestSyncWait)
+
+                local whispers = sentOf(NetEvents.PlayerInfoBatch)
+                assert.equals(2, #whispers)
+                for _, s in ipairs(whispers) do
+                    assert.equals("WHISPER", s.channel)
+                    assert.equals("Ann Wanderer", s.target)
+                    assert.is_true(s.payload[2])
+                    assert.equals(boardHash(s.payload[3]), s.payload[4])
+                end
+            end)
+        end)
+    end)
+
     describe("Race leaderboards", function()
         local HUMAN, NIGHTELF, SKYBORNE = 1, 4, 95
 

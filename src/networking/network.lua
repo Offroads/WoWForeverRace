@@ -30,10 +30,10 @@ local function debugLogPayload(event, payload)
             WoWForeverRace:DebugPrint("  malformed payload: " .. tostring(payload))
             return
         end
-        local batchstr, isRebroadcast, classIndex = payload[1], payload[2], payload[3]
+        local batchstr, isDiscoveryAnswer, boardIndex = payload[1], payload[2], payload[3]
         local players = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(batchstr)
-        WoWForeverRace:DebugPrint("  rebroadcast=" .. tostring(isRebroadcast) ..
-                " class=" .. tostring(classIndex or 0) .. " count=" .. #players)
+        WoWForeverRace:DebugPrint("  discovery=" .. tostring(isDiscoveryAnswer) ..
+                " board=" .. tostring(boardIndex or 0) .. " count=" .. #players)
         for _, p in ipairs(players) do
             WoWForeverRace:DebugPrint("  " .. p.name .. " lvl" .. p.level .. " [" .. tostring(p.classIndex) .. "]")
         end
