@@ -9,6 +9,8 @@ describe("Roster", function()
     local eventbus
     local roster
     local batches
+    -- the source argument of each batch, false when there is none
+    local sources
     local time = 1000000000
 
     -- every batch the roster published, flattened to {name = {level, class, raceIndex}}
@@ -36,8 +38,10 @@ describe("Roster", function()
         roster = WoWForeverRace.Roster(core, db, eventbus)
 
         batches = {}
-        eventbus:RegisterCallback(Events.SlashWhoResult, {}, function(_, batch)
+        sources = {}
+        eventbus:RegisterCallback(Events.SlashWhoResult, {}, function(_, batch, source)
             batches[#batches + 1] = batch
+            sources[#batches] = source or false
         end)
     end)
 
@@ -257,6 +261,17 @@ describe("Roster", function()
 
             assert.equals(0, #batches)
         end)
+    end)
+
+    it("tags group batches with their source and guild batches not", function()
+        SetGuildRoster({{name = "Alice-NubVille", level = 12, class = "WARRIOR", online = true}})
+        SetGroupMembers({{name = "Bob", level = 35, class = "MAGE", raceIndex = 7}})
+
+        roster.Thread:FireEvent("GUILD_ROSTER_UPDATE")
+        roster.Thread:FireEvent("GROUP_ROSTER_UPDATE")
+
+        -- the tracker pushes guild levels to the group, not the group's own levels
+        assert.same({false, WoWForeverRace.Config.WhoResultSources.Group}, sources)
     end)
 
     it("lands guild and group members on the leaderboards", function()

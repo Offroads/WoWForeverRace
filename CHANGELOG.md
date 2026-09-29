@@ -3,6 +3,16 @@
 All user-visible changes to WoWForeverRace. The BigWigs packager ships this
 file in the release zip and posts it as the CurseForge release notes.
 
+## Unreleased
+
+### Changed
+- Grouping up with another WoWForeverRace user keeps your leaderboards in step
+  with theirs. They are compared right after you log in or `/reload` in a
+  group, not only when someone joins or leaves, and again every 5 minutes
+  while you stay grouped.
+- A new level or leaderboard entry you spot is sent straight to your party or
+  raid, so group members outside yell range see it right away.
+
 ## v0.1.0-beta9 - 2026-09-25
 
 The leaderboards now fill from data the client already has, not just from

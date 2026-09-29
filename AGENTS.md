@@ -18,11 +18,12 @@ docker compose run --rm dev make tests            # busted with coverage (fetche
 docker compose run --rm dev make tests INCLUDES=scanner        # only test files matching a Lua pattern
 docker compose run --rm dev make tests TESTS='.*binary.*'     # only test names matching a Lua pattern
 docker compose run --rm dev make tests BUSTED_RUN=quick       # skip coverage
+docker compose run --rm dev make sim              # simulate addon traffic in a party and a raid (SCENARIO=, SIZES=, SV=)
 docker compose run --rm dev make fetch-libs       # re-download external libraries into ./libs
 docker compose run --rm dev make release          # build a release zip into ./.release
 ```
 
-Windows: `.\scripts\dev.ps1 <build|lint|tests|check|libs|release|shell|deploy>` wraps the same commands; `deploy` junctions the checkout into a WoW `AddOns` folder (the `_classic_beta_` install that serves the WoW Forever beta, or `-AddOnsPath`). macOS/Linux: `make docker-*` targets. With a native Lua 5.1 toolchain the plain `make lint tests` also works (`make setup-dev` installs the rocks).
+Windows: `.\scripts\dev.ps1 <build|lint|tests|check|sim|libs|release|shell|deploy>` wraps the same commands; `deploy` junctions the checkout into a WoW `AddOns` folder (the `_classic_beta_` install that serves the WoW Forever beta, or `-AddOnsPath`). macOS/Linux: `make docker-*` targets. With a native Lua 5.1 toolchain the plain `make lint tests` also works (`make setup-dev` installs the rocks).
 
 CI (`.github/workflows/ci.yml`) runs lint + tests in the same image on every PR and on pushes to `main`. Tagging `v*` runs `.github/workflows/release.yml`: the BigWigs packager (v2.6.0+ maps interface 16xxx to game type `forever`) builds the zip, creates the GitHub release and uploads to CurseForge (`X-Curse-Project-ID` in the TOC, `CF_API_KEY` secret). No WoWInterface upload: it has no WoW Forever game type and the packager fails the run.
 
@@ -119,6 +120,7 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 - Scanner timings (constants in `scanner.lua`): 5s cooldown between scans, doubled (up to 30s) for the rest of the session whenever a `/who` reply is lost, because the server drops queries that come in too fast and has no API for that limit, 60s timeout before an unanswered `/who` is abandoned, 15min rest for a fully-scanned class (`/who` only sees online players, so a "complete" result is just a snapshot). A result is complete only when it stays under the 50 row cap (and `C_FriendList.GetNumWhoResults()` reports no more matches than rows shown); a result of exactly 50 rows counts as cut off
 - WHO results are validated against the pending query (level range + class filter, or for a race scan: no row of another known race) so manual `/who` results are never misattributed to a scan
 - `Network:SendObject(..., "GROUP")` routes to `INSTANCE_CHAT` in instance groups, else `RAID`/`PARTY`
+- The group is used freely, but a raid multiplies every group message by up to 40 senders and 39 receivers. `Sync:ScheduleGroupSync` (BPING to `GROUP`, debounced 2s) runs on `GROUP_ROSTER_UPDATE`, once the login sync is done (`SetReady`, for a login or `/reload` inside a group) and every `Config.GroupSyncInterval` (`Sync:InitGroupTicker`). A member already in sync does not answer a group BPING (`OnNetBuddyPing` gets the distribution from `Network:HandleAddonMessage`, which publishes every wire event as `(payload, sender, distribution)`), so a converged raid costs one message per member per interval; `SendBuddyPings` skips buddies in the group. A ding push goes to `GROUP` right away next to the zone `YELL`, except for a batch from the group roster (`Config.WhoResultSources.Group`), which every member reads itself
 - Race leaderboards sync through the per-board hash tables only (discovery beacon, guild sync, buddy ping/pong, group sync); the login handshake (`REQSYNC` / `OFFERSYNC` / zone `STARTSYNC`) still exchanges just the overall and the own class leaderboard
 - Chat announcements: the top N sliders `globalTopN`, `classTopN` and `raceTopN` (default 1: only the first of a race) gate a ding; it is always one chat line, the race rank is appended to the class / overall message or gets its own message when only the race gate passes. With `raceTopN` 0 the output is exactly the class / overall one
 - Peers can track a different class list (other client, older build on the shared `TCRace` prefix). Wherever a peer's per-board hash table (index i+1 = `leaderboard[i]`, classes and races) is available (`GUILDSYNC`, `BPING`, `BPONG`, `DATAREQ`), full, FTL and per-board comparisons only cover the leaderboards that peer reported (`Config:BoardIndexes(faction, peerHashes)`, `Tracker:ComputeNeedSet`); a missing entry means "not tracked", never "differs". The discovery beacon (`DATAAVAIL`) carries only the full hash, so such peers still cost one `DATAREQ` round trip per beacon, which then sends nothing
@@ -155,5 +157,6 @@ Player batches use a compact legacy format with a tagged delimiter format for le
 | `.luarc.json` | Lua Language Server config (editor completion / diagnostics) |
 | `Dockerfile`, `docker-compose.yml` | Dev toolchain image |
 | `scripts/dev.ps1` | Windows wrapper: docker targets + deploy into WoW AddOns |
+| `scripts/groupsim.lua` | Traffic simulation (`make sim`): 5 / 40 complete addon stacks in one group over the real network envelope, paced like ChatThrottleLib; reports messages, bytes, queueing and time to get back in sync per scenario. Runs against older checkouts too, to compare versions |
 | `.github/workflows/` | CI (lint + tests) and tag-triggered release packaging |
 | `CHANGELOG.md` | Release notes, shipped in the zip and posted on CurseForge by the packager |

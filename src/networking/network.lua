@@ -89,7 +89,7 @@ function WoWForeverRaceNetwork:TrackMessage(direction, event)
 end
 
 function WoWForeverRaceNetwork:HandleAddonMessage(...)
-    local prefix, message, _, sender = ...
+    local prefix, message, distribution, sender = ...
 
     -- check if it's our prefix
     if prefix ~= WoWForeverRace.Config.Network.Prefix then
@@ -148,7 +148,7 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
         debugLogPayload(event, payload)
 
         self:TrackMessage("recv", event)
-        self.EventBus:PublishEvent(event, payload, sender)
+        self.EventBus:PublishEvent(event, payload, sender, distribution)
     end)
 
     if not ok then

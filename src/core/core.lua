@@ -3,6 +3,7 @@ local WoWForeverRace = _G.WoWForeverRace
 
 -- WoW API
 local GetServerTime, UnitClass, UnitFactionGroup = _G.GetServerTime, _G.UnitClass, _G.UnitFactionGroup
+local GetNumGroupMembers, IsInRaid, GetUnitName = _G.GetNumGroupMembers, _G.IsInRaid, _G.GetUnitName
 
 ---@class WoWForeverRaceCore
 ---@field Config WoWForeverRaceConfig
@@ -198,6 +199,27 @@ function WoWForeverRaceCore:SplitFullPlayer(fullPlayer)
     return splt[1], splt[2]
 end
 
+
+-- The other members of our group, keyed like buddies (short name on our realm).
+function WoWForeverRaceCore:GroupMemberNames()
+    local names = {}
+    local numMembers = GetNumGroupMembers() or 0
+    if numMembers == 0 then return names end
+
+    -- raid tokens include ourselves, party tokens don't
+    local prefix, last = "party", numMembers - 1
+    if IsInRaid() then
+        prefix, last = "raid", numMembers
+    end
+    for i = 1, last do
+        local fullName = GetUnitName(prefix .. i, true)
+        if fullName ~= nil then
+            local name, realm = self:SplitFullPlayer(fullName)
+            names[self:IsMyRealm(realm) and name or fullName] = true
+        end
+    end
+    return names
+end
 
 function WoWForeverRaceCore:Now()
     return GetServerTime()
