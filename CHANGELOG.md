@@ -3,7 +3,9 @@
 All user-visible changes to WoWForeverRace. The BigWigs packager ships this
 file in the release zip and posts it as the CurseForge release notes.
 
-## Unreleased
+## v0.1.0-beta10 - 2026-09-29
+
+Party and raid members now keep their leaderboards in step with each other.
 
 ### Changed
 - Grouping up with another WoWForeverRace user keeps your leaderboards in step
