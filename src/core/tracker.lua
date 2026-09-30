@@ -48,6 +48,7 @@ function WoWForeverRaceTracker.new(Config, Core, DB, EventBus, Network)
     self.discoveryOpenedAt = nil   -- when our latest discovery window opened
     self.lastDataRequestAt = nil   -- when we last asked a beacon for its data
     self.boardYells = {}           -- [boardIndex][sender] = {at, hash}: discovery yells heard, see RecordBoardYell
+    self.boardYellParts = {}       -- [boardIndex][sender] = {hash, at, players}: yells still arriving, see CollectBoardYell
     self.pendingDings = {}
     self.dingPushPending = false
 
@@ -298,12 +299,11 @@ function WoWForeverRaceTracker:OnNetPlayerInfoBatch(payload, sender, distributio
     if not self.DB.profile.options.networking then return end
     if type(payload) ~= "table" then return end
 
+    local batch = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(payload[1])
     if distribution == "YELL" and payload[2] == true and type(payload[3]) == "number"
             and type(payload[4]) == "number" and type(sender) == "string" then
-        self:RecordBoardYell(payload[3], sender, payload[4])
+        self:CollectBoardYell(payload[3], sender, payload[4], batch)
     end
-
-    local batch = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(payload[1])
     self:ProcessPlayerInfoBatch(batch)
 end
 
@@ -542,7 +542,40 @@ function WoWForeverRaceTracker:SendBatches(batches, channel, target, openedAt)
     end
 end
 
--- Remembers a discovery yell another player sent for one of the boards.
+-- Collects the chunks of another player's discovery yell for a board, and records the
+-- yell (RecordBoardYell) once the players received hash to what it announced, i.e. once
+-- its whole answer arrived. The announced hash alone is only a claim: a yell that doesn't
+-- carry the players must never make us skip ours. A lost chunk only means we don't skip.
+function WoWForeverRaceTracker:CollectBoardYell(boardIndex, sender, hash, players)
+    local now = self.Core:Now()
+    local bySender = self.boardYellParts[boardIndex]
+    if bySender == nil then
+        bySender = {}
+        self.boardYellParts[boardIndex] = bySender
+    end
+    for name, parts in pairs(bySender) do
+        if parts.at < now - BOARD_YELL_TTL then
+            bySender[name] = nil
+        end
+    end
+
+    local parts = bySender[sender]
+    if parts == nil or parts.hash ~= hash then
+        parts = {hash = hash, at = now, players = {}}
+        bySender[sender] = parts
+    end
+    -- copies as received: merging them fills in fields (a remembered race, a floored time)
+    for _, p in ipairs(players) do
+        parts.players[#parts.players + 1] = {name = p.name, level = p.level, classIndex = p.classIndex,
+                                             dingedAt = p.dingedAt, raceIndex = p.raceIndex}
+    end
+    if batchHash(parts.players) == hash then
+        bySender[sender] = nil
+        self:RecordBoardYell(boardIndex, sender, hash)
+    end
+end
+
+-- Remembers a discovery yell another player sent in full for one of the boards.
 function WoWForeverRaceTracker:RecordBoardYell(boardIndex, sender, hash)
     local now = self.Core:Now()
     local heard = self.boardYells[boardIndex]

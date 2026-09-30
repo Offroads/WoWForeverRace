@@ -1061,6 +1061,19 @@ describe("Tracker", function()
                 tracker:OnNetPlayerInfoBatch(payload, sender, "YELL")
             end
 
+            -- another player's discovery yell for a board, in chunks like SendBatches sends it;
+            -- chunks: optional number of chunks to deliver (default all)
+            local function hearAnswer(sender, boardIndex, players, chunks)
+                local hash = hashOf(players)
+                local size = config.YellChunkSize
+                local total = math.ceil(#players / size)
+                for i = 0, (chunks or total) - 1 do
+                    local chunk = {}
+                    for j = i * size + 1, math.min((i + 1) * size, #players) do chunk[#chunk + 1] = players[j] end
+                    hearYell(sender, {WoWForeverRace.Serializer.SerializePlayerInfoBatch(chunk), true, boardIndex, hash})
+                end
+            end
+
             before_each(function()
                 config = merge(WoWForeverRace.Config, {MaxLeaderboardSize = 5, YellChunkSize = 2})
                 tracker = WoWForeverRace.Tracker(config, core, db, eventbus, network)
@@ -1099,7 +1112,7 @@ describe("Tracker", function()
 
             it("skips a board another player yelled with the same data since our window opened", function()
                 beaconWithTwoRequesters()
-                hearYell("Zed Other", {"", true, 0, boardHash(0)})
+                hearAnswer("Zed Other", 0, tracker:BatchPlayers(0))
                 answer()
 
                 assert.equals(0, yellChunks(0))
@@ -1108,7 +1121,26 @@ describe("Tracker", function()
 
             it("still yells a board another player yelled with different data", function()
                 beaconWithTwoRequesters()
-                hearYell("Zed Other", {"", true, 0, boardHash(0) + 1})
+                local fewer = {}
+                for i = 1, 4 do fewer[i] = tracker:BatchPlayers(0)[i] end
+                hearAnswer("Zed Other", 0, fewer)
+                answer()
+
+                assert.equals(3, yellChunks(0))
+            end)
+
+            it("does not skip for a yell that only claims our data", function()
+                beaconWithTwoRequesters()
+                -- our hash, but none of the players
+                hearYell("Zed Other", {"", true, 0, boardHash(0)})
+                answer()
+
+                assert.equals(3, yellChunks(0))
+            end)
+
+            it("counts another player's answer only once all its chunks arrived", function()
+                beaconWithTwoRequesters()
+                hearAnswer("Zed Other", 0, tracker:BatchPlayers(0), 2)
                 answer()
 
                 assert.equals(3, yellChunks(0))
@@ -1124,7 +1156,7 @@ describe("Tracker", function()
 
             it("ignores a yell heard before our window opened", function()
                 time = time - 10
-                hearYell("Zed Other", {"", true, 0, boardHash(0)})
+                hearAnswer("Zed Other", 0, tracker:BatchPlayers(0))
                 time = time + 10
                 beaconWithTwoRequesters()
                 answer()
@@ -1137,7 +1169,7 @@ describe("Tracker", function()
                 _G.C_Timer.Advance(config.RequestSyncWait)
                 assert.equals(1, yellChunks(0), "first chunk out")
 
-                hearYell("Zzz Later", {"", true, 0, boardHash(0)})
+                hearAnswer("Zzz Later", 0, tracker:BatchPlayers(0))
                 _G.C_Timer.Advance(10)
 
                 assert.equals(3, yellChunks(0))
@@ -1148,7 +1180,7 @@ describe("Tracker", function()
                 _G.C_Timer.Advance(config.RequestSyncWait)
                 assert.equals(1, yellChunks(0), "first chunk out")
 
-                hearYell("Aaa First", {"", true, 0, boardHash(0)})
+                hearAnswer("Aaa First", 0, tracker:BatchPlayers(0))
                 _G.C_Timer.Advance(10)
 
                 assert.equals(1, yellChunks(0))
@@ -1158,7 +1190,7 @@ describe("Tracker", function()
             it("whispers a single requester whatever it heard", function()
                 tracker:SendDiscoveryBeacon()
                 tracker:OnNetDataRequest(requesterHashes(), "Ann Wanderer")
-                hearYell("Zed Other", {"", true, 0, boardHash(0)})
+                hearAnswer("Zed Other", 0, tracker:BatchPlayers(0))
                 _G.C_Timer.Advance(config.RequestSyncWait)
 
                 local whispers = sentOf(NetEvents.PlayerInfoBatch)
@@ -1223,7 +1255,7 @@ describe("Tracker", function()
                 tracker:SendDiscoveryBeacon()
                 tracker:OnNetDataRequest(druidOnlyRequest(db), "Cid Other")
                 tracker:OnNetDataRequest(druidOnlyRequest(db), "Dan Other")
-                hearYell("Aaa Other", {"", true, DRUIDIDX, hashOf(db.factionrealm.leaderboard[DRUIDIDX].players)})
+                hearAnswer("Aaa Other", DRUIDIDX, tracker:BatchPlayers(DRUIDIDX))
                 answer()
 
                 assert.equals(0, yellChunks(DRUIDIDX))
