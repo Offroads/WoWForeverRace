@@ -290,9 +290,9 @@ function WoWForeverRaceTracker:RaceFinished()
     end
 end
 
--- payload = {batchstr, isDiscoveryAnswer, boardIndex, boardHash}: a discovery answer
--- (SendBatches) carries the board it belongs to and the sender's hash of that board,
--- a ding push is {batchstr, false, 0}. Merging only needs the batch, the board of each
+-- payload = {batchstr, isDiscoveryAnswer, boardIndex, batchHash}: a discovery answer
+-- (SendBatches) carries the board it belongs to and the hash of every player the sender
+-- sends for that board, a ding push is {batchstr, false, 0}. Merging only needs the batch, the board of each
 -- player is implied by its own classIndex and raceIndex.
 function WoWForeverRaceTracker:OnNetPlayerInfoBatch(payload, sender, distribution)
     if not self.DB.profile.options.networking then return end
@@ -444,6 +444,30 @@ function WoWForeverRaceTracker:InitDiscoveryTicker()
     end)
 end
 
+-- The players a discovery answer sends for one board: the overall board in full, any
+-- other board without the players already on our overall board (the receiver merges
+-- those from the overall board). inGlobal: optional {[name] = true} of the overall board.
+function WoWForeverRaceTracker:BatchPlayers(boardIndex, inGlobal)
+    local lb = self.DB.factionrealm.leaderboard[boardIndex]
+    if lb == nil then return {} end
+    if boardIndex == 0 then return lb.players end
+
+    if inGlobal == nil then
+        inGlobal = {}
+        for _, p in ipairs(self.DB.factionrealm.leaderboard[0].players) do inGlobal[p.name] = true end
+    end
+    local unique = {}
+    for _, p in ipairs(lb.players) do
+        if not inGlobal[p.name] then unique[#unique + 1] = p end
+    end
+    return unique
+end
+
+-- hash of the players a discovery answer sends for a board, all chunks together
+local function batchHash(players)
+    return WoWForeverRace.Leaderboard.ComputeHash({players = players})
+end
+
 -- Collect global + class-unique + race-unique players into batches ready for sending.
 -- needSet: optional {[boardIndex]=true} filter; nil means include all.
 -- Returns nil if no batches would be produced.
@@ -462,15 +486,9 @@ function WoWForeverRaceTracker:CollectBatches(needSet)
     -- class and race boards; a player on both is sent with each, the receiver merges
     for _, boardIndex in ipairs(self.Core:BoardIndexes()) do
         if boardIndex ~= 0 and (needSet == nil or needSet[boardIndex]) then
-            local lb = self.DB.factionrealm.leaderboard[boardIndex]
-            if lb and #lb.players > 0 then
-                local unique = {}
-                for _, p in ipairs(lb.players) do
-                    if not inGlobal[p.name] then unique[#unique + 1] = p end
-                end
-                if #unique > 0 then
-                    batches[#batches + 1] = { players = unique, classIndex = boardIndex }
-                end
+            local unique = self:BatchPlayers(boardIndex, inGlobal)
+            if #unique > 0 then
+                batches[#batches + 1] = { players = unique, classIndex = boardIndex }
             end
         end
     end
@@ -479,8 +497,11 @@ function WoWForeverRaceTracker:CollectBatches(needSet)
 end
 
 -- Send collected batches (our discovery answer) to a channel. Each message is
--- {batchstr, true, boardIndex, boardHash}: marked as a discovery answer, with our hash of
--- the whole board so zone listeners can tell identical data apart (see BoardYellTaken).
+-- {batchstr, true, boardIndex, batchHash}: marked as a discovery answer, with the hash of
+-- every player we send for that board (all chunks together, see BatchPlayers) so zone
+-- listeners can tell an identical answer apart (see BoardYellTaken). Not the hash of the
+-- whole board: two owners with the same class board but different overall boards send
+-- different players for it.
 -- YELL: chunked with delays to stay under single-message size; openedAt is when our
 -- discovery window opened, the yells of others heard since then may make us skip a board.
 -- WHISPER/GUILD/GROUP: full batches in one message each.
@@ -492,7 +513,7 @@ function WoWForeverRaceTracker:SendBatches(batches, channel, target, openedAt)
         for _, batchInfo in ipairs(batches) do
             local batchPlayers = batchInfo.players
             local classIdx = batchInfo.classIndex
-            local boardHash = WoWForeverRace.Leaderboard.ComputeHash(self.DB.factionrealm.leaderboard[classIdx])
+            local answerHash = batchHash(batchPlayers)
             for i = 0, math.ceil(#batchPlayers / chunkSize) - 1 do
                 local chunk = {}
                 for j = i * chunkSize + 1, math.min((i + 1) * chunkSize, #batchPlayers) do
@@ -507,7 +528,7 @@ function WoWForeverRaceTracker:SendBatches(batches, channel, target, openedAt)
                     started[classIdx] = true
                     local batch = WoWForeverRace.Serializer.SerializePlayerInfoBatch(chunk)
                     self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch,
-                            { batch, true, classIdx, boardHash }, "YELL")
+                            { batch, true, classIdx, answerHash }, "YELL")
                 end)
                 delay = delay + self.Config.YellChunkDelay
             end
@@ -515,9 +536,8 @@ function WoWForeverRaceTracker:SendBatches(batches, channel, target, openedAt)
     else
         for _, batchInfo in ipairs(batches) do
             local batch = WoWForeverRace.Serializer.SerializePlayerInfoBatch(batchInfo.players)
-            local boardHash = WoWForeverRace.Leaderboard.ComputeHash(self.DB.factionrealm.leaderboard[batchInfo.classIndex])
             self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch,
-                    { batch, true, batchInfo.classIndex, boardHash }, channel, target)
+                    { batch, true, batchInfo.classIndex, batchHash(batchInfo.players) }, channel, target)
         end
     end
 end
@@ -538,19 +558,18 @@ function WoWForeverRaceTracker:RecordBoardYell(boardIndex, sender, hash)
     heard[sender] = {at = now, hash = hash}
 end
 
--- Whether to skip our next yell chunk of a board: only when another player yelled
--- exactly our data for it (same board hash) since our discovery window opened. We
--- compare with our current hash, so after merging a yell that covered everything we
--- had we stay quiet; with any entry of our own we keep yelling, and listeners merge
--- both copies, keeping the earliest ding. Two owners who both started yelling the same
--- data would otherwise each stop at the other's chunk and leave the board half sent:
--- the one with the lower name finishes it.
+-- Whether to skip our next yell chunk of a board: only when another player's answer
+-- sent exactly the players ours would send for it now (same batch hash) since our
+-- discovery window opened. We compare with what we'd send now, so after merging a yell
+-- that covered everything we had we stay quiet; with any entry of our own we keep
+-- yelling, and listeners merge both copies, keeping the earliest ding. Two owners who
+-- both started yelling the same data would otherwise each stop at the other's chunk and
+-- leave the board half sent: the one with the lower name finishes it.
 function WoWForeverRaceTracker:BoardYellTaken(boardIndex, since, started)
     local heard = self.boardYells[boardIndex]
     if heard == nil then return false end
 
-    local lb = self.DB.factionrealm.leaderboard[boardIndex]
-    local myHash = lb and WoWForeverRace.Leaderboard.ComputeHash(lb) or 0
+    local myHash = batchHash(self:BatchPlayers(boardIndex))
     local me = self.Core:RealMe()
     for name, yell in pairs(heard) do
         if yell.at >= since and yell.hash == myHash then

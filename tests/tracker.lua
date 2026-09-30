@@ -1017,8 +1017,36 @@ describe("Tracker", function()
                 return hashes
             end
 
+            local function hashOf(players)
+                return WoWForeverRace.Leaderboard.ComputeHash({players = players})
+            end
+
+            -- the hash our answer carries for a board: of the players we send for it
             local function boardHash(boardIndex)
-                return WoWForeverRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[boardIndex])
+                return hashOf(tracker:BatchPlayers(boardIndex))
+            end
+
+            -- names of the players we yelled for a board
+            local function yelledNames(sends, boardIndex)
+                local names = {}
+                for _, s in ipairs(sends) do
+                    if s.event == NetEvents.PlayerInfoBatch and s.channel == "YELL" and s.payload[3] == boardIndex then
+                        for _, p in ipairs(WoWForeverRace.Serializer.DeserializePlayerInfoBatch(s.payload[1])) do
+                            names[p.name] = true
+                        end
+                    end
+                end
+                return names
+            end
+
+            -- a data request from someone whose boards equal those of `ofDb` except the druid board
+            local function druidOnlyRequest(ofDb)
+                local hashes = {}
+                for _, boardIndex in ipairs(core:BoardIndexes()) do
+                    hashes[boardIndex + 1] = WoWForeverRace.Leaderboard.ComputeHash(ofDb.factionrealm.leaderboard[boardIndex])
+                end
+                hashes[DRUIDIDX + 1] = 5381
+                return hashes
             end
 
             local function yellChunks(boardIndex)
@@ -1057,7 +1085,7 @@ describe("Tracker", function()
                 _G.C_Timer.Advance(10)
             end
 
-            it("yells every board, marked as a discovery answer with our board hash", function()
+            it("yells every board, marked as a discovery answer with the hash of what it sends", function()
                 beaconWithTwoRequesters()
                 answer()
 
@@ -1141,6 +1169,64 @@ describe("Tracker", function()
                     assert.is_true(s.payload[2])
                     assert.equals(boardHash(s.payload[3]), s.payload[4])
                 end
+            end)
+
+            it("still yells a player another owner's answer for the same board left out", function()
+                -- A holds the same druid board as we do, but knows one warrior less, so Druid X
+                -- sits on A's overall board and A's druid answer leaves Druid X out
+                local dbA = LibStub("AceDB-3.0"):New({}, WoWForeverRace.DefaultDB, true)
+                local coreA = WoWForeverRace.Core(WoWForeverRace.Config, "Aaa Other", "NubVille")
+                function coreA:Now() return time end
+                local sentA = {}
+                local networkA = {SendObject = function(_, event, payload, channel)
+                    sentA[#sentA + 1] = {event = event, payload = payload, channel = channel}
+                end}
+                local trackerA = WoWForeverRace.Tracker(config, coreA, dbA, WoWForeverRace.EventBus(), networkA)
+                for i = 1, 4 do
+                    trackerA:ProcessPlayerInfo(playerInfo("Warrior " .. string.char(64 + i), 30 + i, WARRIORIDX))
+                end
+                trackerA:ProcessPlayerInfo(playerInfo("Druid Low", 10, DRUIDIDX))
+                trackerA:ProcessPlayerInfo(playerInfo("Druid X", 20, DRUIDIDX))
+                tracker:ProcessPlayerInfo(playerInfo("Druid X", 20, DRUIDIDX))
+                sent = {}
+                local druidBoardHash = WoWForeverRace.Leaderboard.ComputeHash
+                assert.equals(druidBoardHash(db.factionrealm.leaderboard[DRUIDIDX]),
+                        druidBoardHash(dbA.factionrealm.leaderboard[DRUIDIDX]), "equal druid boards")
+
+                -- both answer players who lack only the druid board, A a second earlier
+                trackerA:SendDiscoveryBeacon()
+                trackerA:OnNetDataRequest(druidOnlyRequest(dbA), "Ann Wanderer")
+                trackerA:OnNetDataRequest(druidOnlyRequest(dbA), "Bob Faraway")
+                _G.C_Timer.Advance(1)
+                tracker:SendDiscoveryBeacon()
+                tracker:OnNetDataRequest(druidOnlyRequest(db), "Cid Other")
+                tracker:OnNetDataRequest(druidOnlyRequest(db), "Dan Other")
+                _G.C_Timer.Advance(config.RequestSyncWait - 1)
+                assert.same({["Druid Low"] = true}, yelledNames(sentA, DRUIDIDX), "A leaves Druid X out")
+
+                -- we hear A's answer before our own window closes
+                for _, s in ipairs(sentA) do
+                    if s.event == NetEvents.PlayerInfoBatch and s.channel == "YELL" then
+                        hearYell("Aaa Other", s.payload)
+                    end
+                end
+                _G.C_Timer.Advance(1)
+                _G.C_Timer.Advance(10)
+
+                assert.is_true(yelledNames(sent, DRUIDIDX)["Druid X"])
+                assert.equals(0, yellChunks(0), "our requesters need only the druid board")
+            end)
+
+            it("skips a class board when another owner's answer sent the same players", function()
+                tracker:ProcessPlayerInfo(playerInfo("Druid X", 20, DRUIDIDX))
+                sent = {}
+                tracker:SendDiscoveryBeacon()
+                tracker:OnNetDataRequest(druidOnlyRequest(db), "Cid Other")
+                tracker:OnNetDataRequest(druidOnlyRequest(db), "Dan Other")
+                hearYell("Aaa Other", {"", true, DRUIDIDX, hashOf(db.factionrealm.leaderboard[DRUIDIDX].players)})
+                answer()
+
+                assert.equals(0, yellChunks(DRUIDIDX))
             end)
         end)
     end)
