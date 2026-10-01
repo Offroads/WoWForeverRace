@@ -65,7 +65,10 @@ function WoWForeverRaceLeaderboard.new(Config, leaderboardDB, label)
 end
 
 --[[
-ProcessPlayerInfo updates the leaderboard and triggers notifications accordingly
+ProcessPlayerInfo updates the leaderboard and triggers notifications accordingly.
+Returns nothing when the leaderboard stays as it is, else the player's rank, whether
+the player is new on it or reached a higher level, the level of the lowest ranked
+player, and whether only the time of the player's level became earlier.
 ]]--
 function WoWForeverRaceLeaderboard:ProcessPlayerInfo(playerInfo)
     WoWForeverRace:DebugPrint(self.debugTag .. "ProcessPlayerInfo: " .. playerInfo.name .. " lvl" .. playerInfo.level)
@@ -172,5 +175,5 @@ function WoWForeverRaceLeaderboard:ProcessPlayerInfo(playerInfo)
     -- update highest level
     self.lbdb.highestLevel = math.max(self.lbdb.highestLevel, playerInfo.level)
 
-    return insertAtRank, isNew or isDing, lowestLevel
+    return insertAtRank, isNew or isDing, lowestLevel, isDingedAtUpdate
 end

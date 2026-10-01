@@ -37,6 +37,14 @@ local WoWForeverRaceConfig = {
     -- the race data from before it. nil falls back to the inferred timestamps and purges nothing.
     RealmLaunchAt = 1793833200,
 
+    -- The characters whose realm-wide reset (Tracker:OnNetReset, sent by the dev command
+    -- /wfr resetall) every client accepts, until the realm launch. The server sets the
+    -- sender of an addon message, so nobody else can pose as them.
+    ResetAuthors = {
+        ["Offroad Dverg"] = true,
+        ["Offroad Hunt"] = true,
+    },
+
     -- OfferSync throttle time window
     RequestSyncWait = 5,
     RetrySyncWait = 30,
@@ -178,6 +186,29 @@ local WoWForeverRaceConfig = {
 
     DingPushDelay = 10,        -- seconds to batch dings before pushing to guild + buddies
 
+    -- Realm channel: a hidden player-made chat channel per faction (RaceChannelPrefix .. faction)
+    -- that every addon user of the faction joins. While it carries traffic it is the main
+    -- path, and yell, guild, group and buddy sync only run as its backup, see Channel:IsLive.
+    RaceChannelPrefix = "WFRace",
+    -- A channel that asks for a password is given up for the same name with the next number
+    -- (WFRaceHorde2, ...), and the highest number any player is on wins, see Channel:MoveTo
+    ChannelMaxIndex = 5,       -- the last number tried
+    ChannelMoveDelay = 5,      -- a move heard outside the channel is passed on to it after a random delay up to this
+    ChannelJoinDelay = 10,     -- seconds after login before the first join attempt
+    ChannelJoinRetry = 5,      -- seconds between join checks
+    ChannelJoinMaxWait = 60,   -- join anyway when the client's own channels didn't show up by then
+    ChannelJoinAttempts = 5,   -- joins tried before giving up for the session
+    -- the channel counts as live this long after another player was heard on it: longer than
+    -- the longest gap between two full syncs of one player, so two players keep it live
+    ChannelLiveTTL = 4800,
+    ChannelSettleTime = 60,    -- after joining, our own dings wait this long for the join sync (they may be old news)
+    ChannelDingDelayMin = 2,   -- a ding goes to the channel after a random delay in this range: of the
+    ChannelDingDelayMax = 6,   -- clients that spot the same ding, the first to send makes the others drop theirs
+    ChannelSyncInterval = 3600, -- full sync over the channel, about once per hour (+-25%)
+    ChannelSyncWait = 10,      -- seconds to collect channel offers before picking a partner
+    ChannelFollowUp = 300,     -- a full sync that brought us new players is followed by another one this soon
+    ChannelOfferTarget = 5,    -- offers a channel sync should draw, however many players are on the channel
+
     -- playerHistory sync: potentially large (hundreds of players x dozens of levels),
     -- so it's transferred only once per login (pull-only, toward the player who just
     -- logged in) and chunked to stay friendly to the addon channel throttle
@@ -200,10 +231,17 @@ local WoWForeverRaceConfig = {
             BuddyPong = "BPONG",
             FTLSync = "FTLSYNC",
             PlayerHistorySync = "PHSYNC",
+            ChannelSync = "CHSYNC",
+            ChannelOffer = "CHOFFR",
+            ChannelMove = "CHMOVE",
+            Reset = "RESET",
         },
     },
     Events = {
         NetworkReady = "NETWORK_READY",
+        ChannelJoined = "CHANNEL_JOINED",
+        -- ChannelHeard(sender): a player of our faction sent something on the realm channel
+        ChannelHeard = "CHANNEL_HEARD",
         SlashWhoResult = "WHO_RESULT",
         SyncResult = "SYNC_RESULT",
         FTLSyncResult = "FTL_SYNC_RESULT",
@@ -215,6 +253,8 @@ local WoWForeverRaceConfig = {
         ScanFinished = "SCAN_FINISHED",
         RaceFinished = "RACE_FINISHED",
         RefreshGUI = "REFRESH_GUI",
+        -- the race data was reset from the network (Tracker:ApplyReset): start over
+        DataReset = "DATA_RESET",
         MsgStats = "MSG_STATS",
         BuddyUpdate = "BUDDY_UPDATE",
     },

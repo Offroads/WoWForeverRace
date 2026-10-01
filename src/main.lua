@@ -15,6 +15,8 @@ local LibStub = _G.LibStub
 ---       event bus to facilitate communication between components
 ---@field Network       WoWForeverRaceNetwork
 ---       bridge between AceComms and our EventBus
+---@field Channel       WoWForeverRaceChannel
+---       keeps us in the hidden realm channel that reaches every addon user of our faction
 ---@field Scanner       WoWForeverRaceScanner
 ---       contains ticker to start Scans and publishes events based of Scan results
 ---@field Tracker       WoWForeverRaceTracker
@@ -44,10 +46,11 @@ function WoWForeverRace:OnInitialize()
     -- init components (should have minimal side effects)
     self.Core = WoWForeverRace.Core(self.Config, player, realm)
     self.EventBus = WoWForeverRace.EventBus()
-    self.Network = WoWForeverRace.Network(self.Core, self.EventBus)
-    self.Tracker = WoWForeverRace.Tracker(self.Config, self.Core, self.DB, self.EventBus, self.Network)
+    self.Channel = WoWForeverRace.Channel(self.Config, self.Core, self.DB, self.EventBus)
+    self.Network = WoWForeverRace.Network(self.Core, self.EventBus, self.Channel)
+    self.Tracker = WoWForeverRace.Tracker(self.Config, self.Core, self.DB, self.EventBus, self.Network, self.Channel)
     self.ChatNotifier = WoWForeverRace.ChatNotifier(self.Config, self.Core, self.DB, self.EventBus)
-    self.Sync = WoWForeverRace.Sync(self.Config, self.Core, self.DB, self.EventBus, self.Network)
+    self.Sync = WoWForeverRace.Sync(self.Config, self.Core, self.DB, self.EventBus, self.Network, self.Channel)
     self.updater = WoWForeverRace.Updater(self.Core, self.EventBus)
     self.Roster = WoWForeverRace.Roster(self.Core, self.DB, self.EventBus)
     self.StatusFrame = WoWForeverRace.StatusFrame(self.Config, self.Core, self.DB, self.EventBus)
@@ -62,6 +65,12 @@ function WoWForeverRace:OnInitialize()
     -- any reset of the database (ours, the options panel, a dev command, a
     -- future profile reset) hands the components fresh tables to bind to
     self.DB.RegisterCallback(self, "OnDatabaseReset", "OnDatabaseReset")
+
+    -- a reset from the network keeps the tables but empties them: scan and read the rosters anew
+    self.EventBus:RegisterCallback(self.Config.Events.DataReset, self, function()
+        self.scanner:ResetState()
+        self.Roster:Refresh()
+    end)
 
     self:DBMigrations()
 
@@ -85,11 +94,13 @@ function WoWForeverRace:OnEnable()
     self:DebugPrint("me: " .. self.Core:RealMe())
 
     self.Network:Init()
+    self.Channel:Init()
 
     self.Tracker:InitDiscoveryTicker()
     self.Sync:InitGuildTicker()
     self.Sync:InitBuddyTicker()
     self.Sync:InitGroupTicker()
+    self.Sync:InitChannelTicker()
     self.Roster:InitGuildRosterTicker()
 
     local groupEventFrame = CreateFrame("Frame")
@@ -145,14 +156,17 @@ function WoWForeverRace:MigratePioneerData()
 end
 
 function WoWForeverRace:ResetDB()
-    -- Preserve realmOpenedAt so a manual data reset doesn't lose the realm launch timestamp.
+    -- Preserve realmOpenedAt so a manual data reset doesn't lose the realm launch timestamp,
+    -- and the realm-wide reset we know, so data from before it stays out.
     local realmOpenedAt = self.DB.factionrealm.realmOpenedAt
+    local resetAt = self.DB.factionrealm.resetAt
     -- fires OnDatabaseReset, which re-binds the components to the new tables
     self.DB:ResetDB()
     self.DB.factionrealm.dbversion = self.Config.Version
     if realmOpenedAt then
         self.DB.factionrealm.realmOpenedAt = realmOpenedAt
     end
+    self.DB.factionrealm.resetAt = resetAt
 end
 
 -- AceDB replaces db.factionrealm and db.profile on a reset; everything that

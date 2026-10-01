@@ -251,6 +251,31 @@ function WoWForeverRaceCore:PredatesLaunch(timestamp)
     return self:HasLaunched() and type(timestamp) == "number" and timestamp < self:LaunchTime()
 end
 
+-- The time of the latest realm-wide reset, see Tracker:ApplyReset (which keeps it up to date).
+function WoWForeverRaceCore:SetResetTime(resetAt)
+    self.resetAt = resetAt
+end
+
+function WoWForeverRaceCore:ResetTime()
+    return self.resetAt
+end
+
+-- True for a timestamp from before the latest realm-wide reset.
+function WoWForeverRaceCore:PredatesReset(timestamp)
+    return self.resetAt ~= nil and type(timestamp) == "number" and timestamp < self.resetAt
+end
+
+-- Race data from before the realm launch or from before the latest reset belongs to a
+-- race that is over: it is neither kept nor accepted.
+function WoWForeverRaceCore:IsStale(timestamp)
+    return self:PredatesLaunch(timestamp) or self:PredatesReset(timestamp)
+end
+
+-- Whether a realm-wide reset sent by this player is accepted, see Config.ResetAuthors.
+function WoWForeverRaceCore:IsResetAuthor(name)
+    return name ~= nil and self.Config.ResetAuthors[name] == true
+end
+
 function WoWForeverRaceCore:LoginTime()
     return self.loginTime
 end

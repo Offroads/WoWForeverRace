@@ -209,6 +209,24 @@ describe("Leaderboard", function()
             assert.is_nil(changed)
         end)
 
+        it("reports an earlier time for the same level apart from a ding", function()
+            local _, changed, _, earlier = leaderboard:ProcessPlayerInfo(
+                    {name = "Nub1", level = 5, dingedAt = time, classIndex = 11})
+            assert.is_true(changed)
+            assert.is_false(earlier)
+
+            _, changed, _, earlier = leaderboard:ProcessPlayerInfo(
+                    {name = "Nub1", level = 5, dingedAt = time - 10, classIndex = 11})
+            assert.is_false(changed)
+            assert.is_true(earlier)
+            assert.equals(time - 10, dbboard.players[1].dingedAt)
+
+            _, changed, _, earlier = leaderboard:ProcessPlayerInfo(
+                    {name = "Nub1", level = 6, dingedAt = time - 20, classIndex = 11})
+            assert.is_true(changed)
+            assert.is_false(earlier)
+        end)
+
         it("ignores stale lower-level info for existing player", function()
             leaderboard:ProcessPlayerInfo({name = "Nub1", level = 25, dingedAt = time, classIndex = 11})
             -- an earlier dingedAt at a lower level is stale data, not an update

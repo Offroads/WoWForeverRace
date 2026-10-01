@@ -2,12 +2,36 @@
 
 ## Unreleased
 
-Keeping the leaderboards in step costs far less once many players use the addon.
+The leaderboards now stay in step across the whole realm through a hidden chat
+channel, and keeping them in step costs far less once many players use the addon.
 
 ### Added
+- Every WoWForeverRace user of your faction now shares one hidden chat channel
+  (`WFRaceHorde` / `WFRaceAlliance`). A new level or leaderboard entry anybody
+  spots reaches everyone on the realm within seconds, wherever they are, with
+  one small message. The channel is joined a few seconds after login, shows up
+  in no chat window and is gone when you remove the addon.
+- When somebody locks the channel with a password, the addon uses the same name
+  with a number behind it instead (`WFRaceHorde2`, and so on). The players
+  still inside the locked channel follow once one of them hears from a player
+  on the new one.
+- About once per hour, and right after you log in, your leaderboards are
+  compared with the channel and traded with one other player to catch
+  whatever was missed.
+- Every player heard on the channel is remembered for 3 days, so your addon can
+  keep trading data with them by whisper when the channel is locked or quiet.
+- During the beta the addon's author can reset the leaderboards of every
+  player, to clear out test data. Only the author's characters can do it, and
+  it stops working at the realm launch.
+- The debug window shows the state of the realm channel.
 - The options window shows the addon version.
 
 ### Changed
+- While the channel carries traffic, the older ways of syncing (shouts to the
+  zone, guild, party / raid and whispers to players you met) stay quiet. They
+  take over again when nobody is heard on the channel, or when you are not in
+  it: after you `/leave` it, or when you were banned from it.
+  Players who are not on the channel are still answered.
 - A party or raid whose members know different players gets in step within a
   minute instead of several, with a fraction of the addon traffic: only the
   member who asked and one other member send what is missing, to the whole

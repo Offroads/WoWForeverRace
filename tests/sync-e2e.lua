@@ -1,5 +1,5 @@
 -- End-to-end sync check: two complete addon stacks (Core, EventBus, Network, Tracker,
--- Sync) talk to each other through the real network envelope, one of them seeded
+-- Sync, Channel) talk to each other through the real network envelope, one of them seeded
 -- with real WoW Forever data (tests/fixtures/horde-pve-factionrealm.lua). Every
 -- sync flow must leave the peers with identical data and then go quiet.
 local WoWForeverRace = require("testbase")
@@ -51,6 +51,7 @@ local function resetWorld()
     _G.SetTime(now)
     _G.C_Timer.Reset()
     _G.SetFaction(FACTION)
+    _G.SetChatChannels(nil)
 end
 
 local originalSendCommMessage = AceComm.SendCommMessage
@@ -80,6 +81,9 @@ local function pump()
                     wanted = _G.IsInGuild()
                 elseif msg.channel == "YELL" then
                     wanted = yellReaches
+                elseif msg.channel == "CHANNEL" then
+                    -- the realm channel: every stack that joined it
+                    wanted = stack.channel:IsJoined()
                 end
                 if wanted then
                     delivered = true
@@ -108,11 +112,13 @@ local function stack(name, savedVariables)
     local db = AceDB:New(savedVariables or {}, WoWForeverRace.DefaultDB, true)
     local core = WoWForeverRace.Core(Config, name, REALM)
     local eventbus = WoWForeverRace.EventBus()
-    local network = WoWForeverRace.Network(core, eventbus)
-    local tracker = WoWForeverRace.Tracker(Config, core, db, eventbus, network)
-    local sync = WoWForeverRace.Sync(Config, core, db, eventbus, network)
+    -- not joined until a test calls joinChannel
+    local channel = WoWForeverRace.Channel(Config, core, db, eventbus)
+    local network = WoWForeverRace.Network(core, eventbus, channel)
+    local tracker = WoWForeverRace.Tracker(Config, core, db, eventbus, network, channel)
+    local sync = WoWForeverRace.Sync(Config, core, db, eventbus, network, channel)
     local s = {name = name, db = db, core = core, eventbus = eventbus, network = network,
-               tracker = tracker, sync = sync}
+               tracker = tracker, sync = sync, channel = channel}
     -- tag outgoing messages with their stack
     network.SendObject = function(self, ...)
         local previous = activeStack
@@ -224,6 +230,7 @@ describe("Sync end to end with real data", function()
         _G.SetIsInGuild(nil)
         _G.SetFaction(nil)
         _G.SetGroupState(nil)
+        _G.SetChatChannels(nil)
     end)
 
     it("loads the fixture into the right factionrealm without normalizing anything", function()
@@ -485,6 +492,276 @@ describe("Sync end to end with real data", function()
         advance(Config.DingPushDelay)
         assert.equals(2, countEvents()[NetEvents.PlayerInfoBatch], "guild push after DingPushDelay")
         assertAllBoardsEqual(a, b)
+    end)
+
+    -- ---------------------------------------------------------------------------
+    -- the realm channel: the stacks are out of yell range, in no guild and not grouped
+    -- ---------------------------------------------------------------------------
+    local RACE_CHANNEL = Config.RaceChannelPrefix .. FACTION
+
+    -- puts the stack in the realm channel (the channel list is shared by all stacks),
+    -- which runs its join sync
+    local function joinChannel(s)
+        _G.JoinTemporaryChannel(RACE_CHANNEL)
+        s.channel:TryJoin()
+        assert.is_true(s.channel:IsJoined())
+    end
+
+    -- the messages sent since log entry `since`, per channel
+    local function countChannels(since)
+        local counts = {}
+        for i = since or 1, #log do
+            counts[log[i].channel] = (counts[log[i].channel] or 0) + 1
+        end
+        return counts
+    end
+
+    -- both stacks joined a while ago and heard each other on the channel
+    local function settledOnChannel(a, b)
+        a.sync.isReady, b.sync.isReady = true, true
+        joinChannel(a)
+        joinChannel(b)
+        advance(Config.ChannelSettleTime)
+        a.channel:NoteSender(b.name)
+        b.channel:NoteSender(a.name)
+    end
+
+    it("realm channel: joining pulls every leaderboard, the pioneers and the history from one partner", function()
+        yellReaches = false
+        local a = stack("Alpha Tester", realSavedVariables())
+        a.sync.isReady = true
+        joinChannel(a)
+        advance(Config.ChannelSyncWait + 1)
+        local before = hashes(a)
+        local b = stack("Beta Tester", {})
+
+        joinChannel(b)
+        pump()
+        -- a announced itself to an empty channel, b to a
+        assert.equals(2, countEvents()[NetEvents.ChannelSync])
+        advance(Config.ChannelSyncWait + 1)
+        assert.equals(1, countEvents()[NetEvents.ChannelOffer])
+        assert.equals(1, countEvents()[NetEvents.BuddyPing])
+        advance(historyPullTime(a))
+
+        assert.equals(#BOARDS, countEvents()[NetEvents.SyncPayload], "one SYNC per leaderboard")
+        assertAllBoardsEqual(a, b)
+        assertFTLEqual(a, b)
+        assertHistoryCovered(a, b)
+        assert.same(before, hashes(a))
+        -- only the hashes went over the channel, the data by whisper
+        assert.equals(2, countChannels()["CHANNEL"])
+        -- both know now that the channel carries traffic
+        assert.is_true(a.channel:IsLive())
+        assert.is_true(b.channel:IsLive())
+    end)
+
+    it("realm channel: a ding reaches a player out of yell range in one message", function()
+        yellReaches = false
+        local a = stack("Alpha Tester", realSavedVariables())
+        local b = stack("Beta Tester", realSavedVariables())
+        settledOnChannel(a, b)
+        local mark = #log + 1
+
+        b.eventbus:PublishEvent(Events.SlashWhoResult, {
+            {name = "Far Tester", level = 21, classIndex = 4, raceIndex = 8},
+        })
+        advance(Config.ChannelDingDelayMax)
+
+        assert.equals("Far Tester", a.db.factionrealm.leaderboard[0].players[1].name)
+        assertAllBoardsEqual(a, b)
+        assert.same({CHANNEL = 1}, countChannels(mark))
+    end)
+
+    it("realm channel: of the clients that spot the same ding, one sends it", function()
+        yellReaches = false
+        local a = stack("Alpha Tester", realSavedVariables())
+        local b = stack("Beta Tester", realSavedVariables())
+        local c = stack("Gamma Tester", realSavedVariables())
+        settledOnChannel(a, b)
+        c.sync.isReady = true
+        joinChannel(c)
+        advance(Config.ChannelSettleTime)
+        c.channel:NoteSender(a.name)
+        local mark = #log + 1
+
+        -- three delays, seconds apart
+        local draws = {0, 0.5, 0.99}
+        local originalRandom = _G.math.random
+        _G.math.random = function() return table.remove(draws, 1) end
+        for _, s in ipairs(stacks) do
+            s.eventbus:PublishEvent(Events.SlashWhoResult, {
+                {name = "Seen Tester", level = 21, classIndex = 4, raceIndex = 8},
+            })
+        end
+        _G.math.random = originalRandom
+        advance(Config.ChannelDingDelayMax)
+
+        assert.same({CHANNEL = 1}, countChannels(mark))
+        assertAllBoardsEqual(a, b)
+        assertAllBoardsEqual(b, c)
+    end)
+
+    it("realm channel: the hourly sync trades what each side lacks, then goes quiet", function()
+        yellReaches = false
+        local a = stack("Alpha Tester", realSavedVariables())
+        local b = stack("Beta Tester", realSavedVariables())
+        a.sync.isReady, b.sync.isReady = true, true
+        joinChannel(a)
+        joinChannel(b)
+        advance(Config.ChannelSyncWait + 1)
+        -- each learned of a player while the other was not listening
+        a.tracker:ProcessPlayerInfo({name = "Ann Only", level = 22, classIndex = 1, raceIndex = 2, dingedAt = now - 100})
+        b.tracker:ProcessPlayerInfo({name = "Bob Only", level = 23, classIndex = 4, raceIndex = 8, dingedAt = now - 50})
+        local mark = #log + 1
+
+        b.sync:SendChannelSync()
+        advance(Config.ChannelSyncWait + 2)
+
+        local counts = countEvents(mark)
+        assert.equals(1, counts[NetEvents.ChannelSync])
+        assert.equals(1, counts[NetEvents.ChannelOffer])
+        assert.equals(1, counts[NetEvents.BuddyPing])
+        assert.equals(1, counts[NetEvents.BuddyPong])
+        assertAllBoardsEqual(a, b)
+        assertFTLEqual(a, b)
+        assert.equals("Bob Only", a.db.factionrealm.leaderboard[0].players[1].name)
+        assert.equals("Ann Only", b.db.factionrealm.leaderboard[0].players[2].name)
+        assert.equals(1, countChannels(mark)["CHANNEL"], "only the announce goes over the channel")
+
+        -- in step: the next announce draws no offer
+        mark = #log + 1
+        a.sync:SendChannelSync()
+        advance(Config.ChannelSyncWait + 2)
+        assert.same({[NetEvents.ChannelSync] = 1}, countEvents(mark))
+    end)
+
+    it("realm channel: what one player alone knows reaches everyone through a single trade", function()
+        yellReaches = false
+        local a = stack("Alpha Tester", realSavedVariables())
+        local b = stack("Beta Tester", realSavedVariables())
+        local c = stack("Gamma Tester", realSavedVariables())
+        settledOnChannel(a, b)
+        c.sync.isReady = true
+        joinChannel(c)
+        advance(Config.ChannelSettleTime)
+        -- c saw this while nobody was listening
+        c.tracker:ProcessPlayerInfo({name = "Cid Only", level = 24, classIndex = 1, raceIndex = 2, dingedAt = now - 100})
+        local mark = #log + 1
+
+        c.sync:SendChannelSync()
+        -- the offers, the trade with one of them, and that partner passing it on
+        advance(Config.ChannelSyncWait + 2 + Config.ChannelDingDelayMax)
+
+        assert.equals(1, countEvents(mark)[NetEvents.BuddyPing], "c trades with one partner")
+        assertAllBoardsEqual(a, c)
+        assertAllBoardsEqual(b, c)
+        assert.equals("Cid Only", a.db.factionrealm.leaderboard[0].players[1].name)
+        assert.equals("Cid Only", b.db.factionrealm.leaderboard[0].players[1].name)
+        -- c's announce, and the partner's relay of the one player it gained
+        assert.equals(2, countChannels(mark)["CHANNEL"])
+    end)
+
+    it("realm channel: while it is live, the yells, guild, group and buddy sync stay quiet", function()
+        _G.SetIsInGuild(true)
+        _G.SetGroupState(2, false, false)
+        local a = stack("Alpha Tester", realSavedVariables())
+        local b = stack("Beta Tester", realSavedVariables())
+        settledOnChannel(a, b)
+        a.db.factionrealm.buddies[b.name] = {lastSeen = now}
+        b.db.factionrealm.buddies[a.name] = {lastSeen = now}
+        local mark = #log + 1
+
+        for _, s in ipairs(stacks) do
+            s.tracker:SendDiscoveryBeacon()
+            s.sync:SendBuddyPings()
+            s.sync:ScheduleGroupSync()
+        end
+        b.eventbus:PublishEvent(Events.SlashWhoResult, {
+            {name = "Live Tester", level = 21, classIndex = 4, raceIndex = 8},
+        })
+        advance(Config.DingPushDelay + Config.GroupSyncWait)
+
+        assert.same({CHANNEL = 1}, countChannels(mark))
+        assertAllBoardsEqual(a, b)
+    end)
+
+    it("realm channel: a player outside the channel is still served by whisper", function()
+        yellReaches = false
+        local a = stack("Alpha Tester", realSavedVariables())
+        local b = stack("Beta Tester", realSavedVariables())
+        settledOnChannel(a, b)
+        -- c never joined (an older version, or it left the channel) and knows b from before
+        local c = stack("Gamma Tester", {})
+        c.sync.isReady = true
+        c.db.factionrealm.buddies[b.name] = {lastSeen = now}
+        local mark = #log + 1
+
+        c.sync:SendBuddyPings()
+        advance(2)
+
+        assertAllBoardsEqual(b, c)
+        assertFTLEqual(b, c)
+        assert.is_nil(countChannels(mark)["CHANNEL"])
+    end)
+
+    it("realm-wide reset: an author empties everybody's leaderboards, also for a player who comes later", function()
+        yellReaches = false
+        local printStub = stub(WoWForeverRace, "PPrint")
+        local a = stack("Offroad Dverg", realSavedVariables())
+        local b = stack("Beta Tester", realSavedVariables())
+        settledOnChannel(a, b)
+        assert.equals(50, #b.db.factionrealm.leaderboard[0].players)
+
+        a.tracker:SendReset()
+        pump()
+
+        for _, s in ipairs({a, b}) do
+            assert.equals(now, s.db.factionrealm.resetAt)
+            for _, boardIndex in ipairs(BOARDS) do
+                assert.equals(0, #s.db.factionrealm.leaderboard[boardIndex].players, s.name .. " board " .. boardIndex)
+            end
+            assert.is_nil(next(s.db.factionrealm.playerHistory))
+        end
+
+        -- a player who was offline joins later with the old data: the author tells it
+        advance(60)
+        local c = stack("Gamma Tester", realSavedVariables())
+        c.sync.isReady = true
+        joinChannel(c)
+        advance(Config.ChannelSyncWait + 5)
+
+        assert.equals(a.db.factionrealm.resetAt, c.db.factionrealm.resetAt)
+        assert.equals(0, #c.db.factionrealm.leaderboard[0].players)
+        assert.equals(0, #b.db.factionrealm.leaderboard[0].players, "the old data did not come back")
+        printStub:revert()
+    end)
+
+    it("realm-wide reset: old data from a player who missed it is not taken back", function()
+        yellReaches = false
+        local printStub = stub(WoWForeverRace, "PPrint")
+        local a = stack("Offroad Dverg", realSavedVariables())
+        local b = stack("Beta Tester", realSavedVariables())
+        settledOnChannel(a, b)
+        a.tracker:SendReset()
+        pump()
+        -- the author logs off; a player with the old data trades with b by whisper
+        table.remove(stacks, 1)
+        local c = stack("Gamma Tester", realSavedVariables())
+        c.sync.isReady = true
+        c.db.factionrealm.buddies[b.name] = {lastSeen = now}
+
+        c.sync:SendBuddyPings()
+        advance(5)
+
+        assert.is_true((countEvents()[NetEvents.SyncPayload] or 0) > 0, "c pushed its old leaderboards")
+        assert.equals(0, #b.db.factionrealm.leaderboard[0].players)
+        -- and a stranger can't reset anybody
+        c.tracker:SendReset()
+        b.tracker:ProcessPlayerInfo({name = "Fresh Tester", level = 3, classIndex = 1, raceIndex = 2, dingedAt = now})
+        pump()
+        assert.equals(1, #b.db.factionrealm.leaderboard[0].players)
+        printStub:revert()
     end)
 
     it("faction lock: an Alliance client ignores the Horde data", function()

@@ -4,7 +4,7 @@ local WoWForeverRace = _G.WoWForeverRace
 -- WoW API
 local IsInRaid, IsInGroup, GetNumGroupMembers = _G.IsInRaid, _G.IsInGroup, _G.GetNumGroupMembers
 local LE_PARTY_CATEGORY_INSTANCE = _G.LE_PARTY_CATEGORY_INSTANCE
-local C_ChatInfo, C_Timer = _G.C_ChatInfo, _G.C_Timer
+local C_ChatInfo, C_Timer, math = _G.C_ChatInfo, _G.C_Timer, _G.math
 
 local OUTBOX_MAX = 100          -- messages held back during a chat messaging lockdown
 local OUTBOX_RETRY_INTERVAL = 5 -- seconds between checks whether the lockdown has ended
@@ -51,6 +51,7 @@ and broadcast them as events once received fully over our EventBus.
 ---@class WoWForeverRaceNetwork
 ---@field Core WoWForeverRaceCore
 ---@field EventBus WoWForeverRaceEventBus
+---@field Channel WoWForeverRaceChannel
 local WoWForeverRaceNetwork = {}
 WoWForeverRaceNetwork.__index = WoWForeverRaceNetwork
 WoWForeverRace.Network = WoWForeverRaceNetwork
@@ -63,11 +64,13 @@ setmetatable(WoWForeverRaceNetwork, {
 
 ---@param Core WoWForeverRaceCore
 ---@param EventBus WoWForeverRaceEventBus
-function WoWForeverRaceNetwork.new(Core, EventBus)
+---@param Channel WoWForeverRaceChannel optional, without it there is no "RACE" distribution
+function WoWForeverRaceNetwork.new(Core, EventBus, Channel)
     local self = setmetatable({}, WoWForeverRaceNetwork)
 
     self.Core = Core
     self.EventBus = EventBus
+    self.Channel = Channel
 
     AceComm:RegisterComm(WoWForeverRace.Config.Network.Prefix, function(...)
         self:HandleAddonMessage(...)
@@ -126,7 +129,7 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
             return
         end
 
-        local event, payload, faction = object[1], object[2], object[3]
+        local event, payload, faction, channelIndex = object[1], object[2], object[3], object[4]
 
         -- Local EventBus events are not part of the addon-wire protocol. Without
         -- this guard, another addon client could invoke local state transitions.
@@ -148,6 +151,14 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
         debugLogPayload(event, payload)
 
         self:TrackMessage("recv", event)
+        if self.Channel ~= nil then
+            -- a player of our faction on a chat channel: the realm channel carries traffic
+            if distribution == "CHANNEL" then
+                self.Channel:NoteSender(senderName)
+                self.EventBus:PublishEvent(WoWForeverRace.Config.Events.ChannelHeard, sender)
+            end
+            self:FollowChannel(channelIndex, distribution)
+        end
         self.EventBus:PublishEvent(event, payload, sender, distribution)
     end)
 
@@ -169,6 +180,66 @@ function WoWForeverRaceNetwork:ResolveGroupChannel()
         return "PARTY"
     end
     return nil
+end
+
+-- Resolves the virtual "RACE" channel to the number of the realm channel (see
+-- Channel) as the "CHANNEL" target, or nil when we are not in it.
+function WoWForeverRaceNetwork:ResolveRaceChannel()
+    if self.Channel == nil or not self.Channel:IsJoined() then
+        return nil
+    end
+    return tostring(self.Channel:Number())
+end
+
+-- The number of the realm channel we use, when it is not the first: the fourth element
+-- of every envelope, see FollowChannel. nil on the first channel name, so the envelope
+-- only grows once a channel was given up.
+function WoWForeverRaceNetwork:ChannelIndexTag()
+    local index = self.Channel ~= nil and self.Channel:Index() or 1
+    return index > 1 and index or nil
+end
+
+-- Every message tells which realm channel its sender uses, and the highest number wins:
+-- a higher one than ours means our channel asked somebody for a password (see Channel),
+-- so we move as well. That is how the players who were in a channel before it got its
+-- password, and the ones who land on an old name after the password is gone, end up
+-- with everybody else.
+function WoWForeverRaceNetwork:FollowChannel(index, distribution)
+    local channel = self.Channel
+    if not channel:CanMoveTo(index) then return end
+
+    if distribution == "CHANNEL" or not channel:IsJoined() then
+        -- everybody on our channel heard it too, or we are on none
+        channel:MoveTo(index)
+        return
+    end
+
+    -- Heard outside our channel: the players on it don't know yet. We tell them before
+    -- we leave, after a random delay so that not everybody who heard it does.
+    if self.pendingChannelIndex == nil then
+        local _self = self
+        C_Timer.After(math.random() * WoWForeverRace.Config.ChannelMoveDelay, function()
+            _self:AnnounceChannelMove()
+        end)
+    end
+    if self.pendingChannelIndex == nil or index > self.pendingChannelIndex then
+        self.pendingChannelIndex = index
+    end
+end
+
+function WoWForeverRaceNetwork:AnnounceChannelMove()
+    local index = self.pendingChannelIndex
+    self.pendingChannelIndex = nil
+
+    -- somebody else told the channel meanwhile, and we moved with it
+    if not self.Channel:CanMoveTo(index) then return end
+
+    local target = self:ResolveRaceChannel()
+    self.Channel:MoveTo(index)
+    if target ~= nil then
+        -- to the channel we leave; the envelope carries the new number
+        self:SendObject(WoWForeverRace.Config.Network.Events.ChannelMove, index, "CHANNEL", target)
+    end
 end
 
 function WoWForeverRaceNetwork:IsLockedDown()
@@ -239,7 +310,7 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
     end
 
     -- resolve the channel first so nothing is serialized, logged or counted
-    -- for a group message that has nowhere to go
+    -- for a group or realm channel message that has nowhere to go
     if channel == "GROUP" then
         channel = self:ResolveGroupChannel()
         if channel == nil then
@@ -247,11 +318,18 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
             return
         end
         target = nil
+    elseif channel == "RACE" then
+        target = self:ResolveRaceChannel()
+        if target == nil then
+            WoWForeverRace:DebugPrint("Dropped " .. event .. " -> RACE (not in the realm channel)")
+            return
+        end
+        channel = "CHANNEL"
     end
 
     -- the third element locks the data to our faction, see HandleAddonMessage;
-    -- older clients only read the first two
-    local payload = Serializer:Serialize({event, object, self.Core:MyFaction()})
+    -- older clients only read the first two. The fourth is our realm channel number
+    local payload = Serializer:Serialize({event, object, self.Core:MyFaction(), self:ChannelIndexTag()})
     local compressed = LibCompress:CompressHuffman(payload)
     local encoded = EncodeTable:Encode(compressed)
 

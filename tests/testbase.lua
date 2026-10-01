@@ -54,5 +54,6 @@ require("core.serializer")
 require("core.chat-notifier")
 require("core.roster")
 require("networking.network")
+require("networking.channel")
 
 return WoWForeverRace

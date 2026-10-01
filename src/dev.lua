@@ -18,6 +18,8 @@ local HELP = {
     "/wfr ding NAME LVL [CLASS] [RACEID]   fake a /who result for a player",
     "/wfr whoami NAME    pretend to be another player on this realm",
     "/wfr reset          wipe the leaderboards, pioneers and history for this faction-realm (keeps realmOpenedAt)",
+    "/wfr resetall       reset the leaderboards, pioneers and history of EVERY player of your faction (beta only,"
+            .. " other clients only accept it from the characters in Config.ResetAuthors)",
     "/wfr probe          dump what the client API returns into a copyable window (do a /who first)",
 }
 
@@ -37,6 +39,24 @@ function WoWForeverRace:slashwfr(input)
         -- the db version; the components re-bind through OnDatabaseReset)
         self:ResetDB()
         self:PPrint("Database reset.")
+
+    --[[RESET EVERYBODY]]--
+    elseif action == "resetall" then
+        if self.Core:HasLaunched() then
+            self:PPrint("The realm has launched: the race can no longer be reset for everybody.")
+            return
+        end
+        if not self.DB.profile.options.networking then
+            self:PPrint("Sharing is turned off: nobody would hear the reset.")
+            return
+        end
+        self.Tracker:SendReset()
+        if self.Core:IsResetAuthor(self.Core:RealMe()) then
+            self:PPrint("Leaderboards reset for everybody of your faction, as far as they can be reached.")
+        else
+            self:PPrint("Leaderboards reset here. Other clients ignore it: " .. tostring(self.Core:RealMe())
+                    .. " is not in Config.ResetAuthors.")
+        end
 
     --[[SHOW FRAME]]--
     elseif action == "show" or action == nil or action == "" then
@@ -137,6 +157,14 @@ function WoWForeverRace:BuildDevStatus()
             .. " lastSync=" .. tostring(sync.lastSync))
     add("buddies: " .. WoWForeverRace.table.cnt(db.buddies)
             .. ", players with history: " .. WoWForeverRace.table.cnt(db.playerHistory))
+    local channel = self.Channel
+    add("realm channel: " .. channel:Name() .. " status=" .. channel:Status()
+            .. " number=" .. tostring(channel:Number())
+            .. " joined=" .. tostring(channel:IsJoined())
+            .. " live=" .. tostring(channel:IsLive())
+            .. " heard=" .. channel:Size()
+            .. " lastHeard=" .. tostring(channel.lastHeardAt)
+            .. " settleIn=" .. channel:SettleDelay())
     add("")
 
     add("== Roster")

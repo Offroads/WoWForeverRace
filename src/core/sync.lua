@@ -117,6 +117,7 @@ WoWForeverRaceSync handles both requesting a sync when we login and responding t
 ---@field Core WoWForeverRaceCore
 ---@field DB table<string, table>
 ---@field EventBus WoWForeverRaceEventBus
+---@field Channel WoWForeverRaceChannel
 local WoWForeverRaceSync = {}
 WoWForeverRaceSync.__index = WoWForeverRaceSync
 WoWForeverRace.Sync = WoWForeverRaceSync
@@ -131,7 +132,8 @@ WoWForeverRaceSync.ComputeFTLHash = computeFTLHash
 WoWForeverRaceSync.ComputeFullHash = computeFullHash
 WoWForeverRaceSync.ComputePHHash = computePHHash
 
-function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network)
+-- Channel: optional, the realm channel (see Channel); without it only the older flows run
+function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network, Channel)
     local self = setmetatable({}, WoWForeverRaceSync)
 
     self.Config = Config
@@ -139,6 +141,7 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network)
     self.DB = DB
     self.EventBus = EventBus
     self.Network = Network
+    self.Channel = Channel
 
     self.classIndex = self.Core:MyClass()
 
@@ -149,6 +152,11 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network)
     self.guildOffers = nil  -- non-nil only during active guild sync window
     self.guildPHWanted = false  -- whether the open guild window should also pull player history
     self.groupRound = nil  -- our latest group ping, see SendGroupSync
+    self.channelOffers = nil  -- non-nil only during an active channel sync window
+    self.channelJoinRound = false  -- whether the open channel window belongs to the sync at the join
+    self.channelRound = nil  -- our latest channel trade: {partner, gained}, see DoChannelSync
+    self.historyPulled = false  -- whether a login sync already brought player history
+    self.channelSyncRetry = false  -- whether a channel sync is waiting for a chat messaging lockdown to end
 
     EventBus:RegisterCallback(self.Config.Network.Events.RequestSync, self, self.OnNetRequestSync)
     EventBus:RegisterCallback(self.Config.Network.Events.OfferSync, self, self.OnNetOfferSync)
@@ -160,15 +168,20 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network)
     EventBus:RegisterCallback(self.Config.Network.Events.BuddyPong, self, self.OnNetBuddyPong)
     EventBus:RegisterCallback(self.Config.Network.Events.FTLSync, self, self.OnNetFTLSync)
     EventBus:RegisterCallback(self.Config.Network.Events.PlayerHistorySync, self, self.OnNetPHSync)
+    EventBus:RegisterCallback(self.Config.Network.Events.ChannelSync, self, self.OnNetChannelSync)
+    EventBus:RegisterCallback(self.Config.Network.Events.ChannelOffer, self, self.OnNetChannelOffer)
+    EventBus:RegisterCallback(self.Config.Events.ChannelJoined, self, self.OnChannelJoined)
+    EventBus:RegisterCallback(self.Config.Events.ChannelHeard, self, self.OnChannelHeard)
 
     self:PruneBuddies()
 
     return self
 end
 
--- Every sender of OFFERSYNC, BPING and BPONG becomes a buddy, so on a busy realm the
--- list grows into thousands of entries and most random pings would go to players
--- who stopped playing. Runs once per login / reload; there is no cap on the count.
+-- Every sender of OFFERSYNC, BPING and BPONG and every player heard on the realm channel
+-- becomes a buddy, so on a busy realm the list grows into thousands of entries and most
+-- random pings would go to players who stopped playing. Runs once per login / reload;
+-- there is no cap on the count.
 function WoWForeverRaceSync:PruneBuddies()
     local buddies = self.DB.factionrealm.buddies
     local oldest = self.Core:Now() - self.Config.BuddyMaxAge
@@ -184,6 +197,17 @@ function WoWForeverRaceSync:PruneBuddies()
                 .. (self.Config.BuddyMaxAge / 86400) .. " days")
         self.EventBus:PublishEvent(self.Config.Events.BuddyUpdate)
     end
+end
+
+function WoWForeverRaceSync:ChannelJoined()
+    return self.Channel ~= nil and self.Channel:IsJoined()
+end
+
+-- While the realm channel carries traffic, the periodic guild, buddy and group sync
+-- are only its backup: we stop starting them, but keep answering the players who do
+-- (they are not in the channel, or hear nobody there).
+function WoWForeverRaceSync:ChannelLive()
+    return self.Channel ~= nil and self.Channel:IsLive()
 end
 
 function WoWForeverRaceSync:InitSync()
@@ -507,18 +531,30 @@ function WoWForeverRaceSync:OnNetSyncPayload(payload, sender)
 
     local batch = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(payload)
 
+    -- did our channel partner hold something we lacked? (see FollowUpChannelSync)
+    local round = self.channelRound
+    local hashBefore = nil
+    if round ~= nil and round.partner == sender and not round.gained then
+        hashBefore = computeFullHash(self.DB, self.Config, nil, self.Core:MyFaction())
+    end
+
     self.EventBus:PublishEvent(self.Config.Events.SyncResult, batch)
+
+    if hashBefore ~= nil and hashBefore ~= computeFullHash(self.DB, self.Config, nil, self.Core:MyFaction()) then
+        round.gained = true
+    end
 
     -- mark ourselves as synced up
     self:SetReady()
 end
 
 -- Periodic guild sync ticker: re-runs the guild sync flow every GuildSyncInterval seconds.
--- Only fires once we're ready (initial zone sync complete).
+-- Only fires once we're ready (initial zone sync complete), and not while the realm
+-- channel carries traffic.
 function WoWForeverRaceSync:InitGuildTicker()
     local _self = self
     C_Timer.NewTicker(self.Config.GuildSyncInterval, function()
-        if _self.isReady then
+        if _self.isReady and not _self:ChannelLive() then
             _self:SendGuildSync()
         end
     end)
@@ -590,8 +626,17 @@ function WoWForeverRaceSync:OnNetGuildOffer(offer, sender)
     })
 end
 
+-- Every player heard on the realm channel becomes a buddy: should the channel be locked
+-- or go quiet later, those are the players we can still reach by whisper.
+function WoWForeverRaceSync:OnChannelHeard(sender)
+    if not self.DB.profile.options.networking then return end
+    self:AddBuddy(sender, true)
+end
+
 -- Add or update a buddy entry in the persistent DB list.
-function WoWForeverRaceSync:AddBuddy(name)
+-- quiet: for the realm channel, where the same players are heard over and over: only a
+-- new buddy is logged and announced, a known one just gets its last-seen time updated.
+function WoWForeverRaceSync:AddBuddy(name, quiet)
     -- senders normally come without a realm; normalize a same-realm "Name-Realm"
     -- anyway so we don't store duplicates (and a whisper to "Name-Realm" is not delivered)
     local shortName, realm = self.Core:SplitFullPlayer(name)
@@ -602,19 +647,23 @@ function WoWForeverRaceSync:AddBuddy(name)
         return
     end
     local buddies = self.DB.factionrealm.buddies
-    if not buddies[name] then
+    local isNew = buddies[name] == nil
+    if isNew then
         buddies[name] = {}
     end
     buddies[name].lastSeen = self.Core:Now()
+    if quiet and not isNew then return end
     WoWForeverRace:DebugPrint("Buddy: added/updated " .. name)
     self.EventBus:PublishEvent(self.Config.Events.BuddyUpdate)
 end
 
 -- Send BPING to up to BuddyPingBatchSize buddies (random sample if more).
+-- Not while the realm channel carries traffic.
 function WoWForeverRaceSync:SendBuddyPings()
     if not self.isReady then return end
     if self.DB.factionrealm.finished then return end
     if not self.DB.profile.options.networking then return end
+    if self:ChannelLive() then return end
 
     -- group members get the group ping (ScheduleGroupSync, same gates) instead
     local inGroup = self.Core:GroupMemberNames()
@@ -664,6 +713,8 @@ end
 -- Received BPING, either whispered by a buddy or sent to the whole group by a member.
 -- Buddy ping: update their last-seen, push leaderboards they're missing, ack with BPONG.
 -- BPONG includes our own hashes so the sender can also push what we're missing (bidirectional in one round trip).
+-- A whispered ping from a player who just joined the realm channel also carries its history
+-- hash (field 4, see DoChannelSync): that is its once-per-login history pull.
 -- Group ping: only answer with our hashes, see SendGroupSync.
 function WoWForeverRaceSync:OnNetBuddyPing(payload, sender, distribution)
     if not self.DB.profile.options.networking then return end
@@ -694,7 +745,6 @@ function WoWForeverRaceSync:OnNetBuddyPing(payload, sender, distribution)
             {myFullHash, myPerClassHashes, myFTLHash}, "WHISPER", sender)
 
     if not self.isReady then return end
-    if not leaderboardsDiffer and not ftlDiffers then return end
 
     local diffClasses = {}
     if leaderboardsDiffer then
@@ -708,7 +758,15 @@ function WoWForeverRaceSync:OnNetBuddyPing(payload, sender, distribution)
         self:SyncFTL(sender)
     end
 
-    WoWForeverRace:AddHashLog(sender, ">", diffClasses, ftlDiffers)
+    -- player history is pull-only: never sent to a player who didn't ask
+    local pingPHHash = payload[4]
+    if type(pingPHHash) == "number" and pingPHHash ~= computePHHash(self.DB, self.Config, self.Core:MyFaction()) then
+        self:SyncPlayerHistory(sender)
+    end
+
+    if leaderboardsDiffer or ftlDiffers then
+        WoWForeverRace:AddHashLog(sender, ">", diffClasses, ftlDiffers)
+    end
 end
 
 -- Received BPONG. From a buddy: update their last-seen, push any leaderboards / FTL
@@ -807,6 +865,7 @@ function WoWForeverRaceSync:OnNetPHSync(payload, sender)
 
     local batch = WoWForeverRace.Serializer.DeserializePlayerHistoryBatch(payload or "")
     self.EventBus:PublishEvent(self.Config.Events.PHSyncResult, batch)
+    self.historyPulled = true
 
     -- a history payload also completes our initial sync: when only history differed
     -- from our partner this is the only payload we'll receive
@@ -820,11 +879,13 @@ end
 
 -- Sends BPING to GROUP so all members can exchange hashes and push any missing
 -- leaderboards. Debounced to avoid firing multiple times in quick succession.
+-- Not while the realm channel carries traffic.
 function WoWForeverRaceSync:ScheduleGroupSync()
     if not self.isReady then return end
     if not self.DB.profile.options.networking then return end
     if self.DB.factionrealm.finished then return end
     if GetNumGroupMembers() == 0 then return end
+    if self:ChannelLive() then return end
 
     -- debounce: multiple roster events can fire in quick succession
     if self.groupSyncPending then return end
@@ -991,3 +1052,174 @@ function WoWForeverRaceSync:DoGuildSync()
             {self.classIndex, myPerClassHashes, myFTLHash, myPHHash}, "WHISPER", best.name)
 end
 
+-- We are in the realm channel now (login, /reload, or sharing switched back on) and
+-- may be behind the realm: compare with it right away.
+-- moved: we came from a channel with a lower number, together with everybody on it
+-- (Channel:MoveTo). We were in step with them, so we only compare again at a random
+-- moment soon, not all of us at once.
+function WoWForeverRaceSync:OnChannelJoined(moved)
+    if moved then
+        local _self = self
+        C_Timer.After(math.random() * self.Config.ChannelFollowUp, function()
+            if _self.isReady then
+                _self:SendChannelSync()
+            end
+        end)
+        return
+    end
+    self:SendChannelSync(true)
+end
+
+-- The full sync over the realm channel, about once per ChannelSyncInterval: dings reach
+-- the channel as they happen (Tracker:ScheduleChannelDingPush), this catches what was
+-- missed. Jittered, so clients that logged in together (a realm restart) drift apart.
+function WoWForeverRaceSync:InitChannelTicker()
+    local interval = self.Config.ChannelSyncInterval
+    local _self = self
+    C_Timer.After(interval * (0.75 + 0.5 * math.random()), function()
+        if _self.isReady then
+            _self:SendChannelSync()
+        end
+        _self:InitChannelTicker()
+    end)
+end
+
+-- Announces our hashes on the realm channel and opens a window for offers, like the
+-- guild sync does in the guild (SendGuildSync). The channel reaches every addon user of
+-- the faction, so only the hashes go there; the data is traded with one partner by whisper.
+-- joinRound: we just joined the channel, see DoChannelSync.
+function WoWForeverRaceSync:SendChannelSync(joinRound)
+    if not self:ChannelJoined() then return end
+    if not self.DB.profile.options.networking then return end
+    if self.DB.factionrealm.finished then return end
+
+    -- nobody could answer us yet: try again once the lockdown has ended
+    if self.Network.IsLockedDown and self.Network:IsLockedDown() then
+        if not self.channelSyncRetry then
+            self.channelSyncRetry = true
+            local _self = self
+            C_Timer.After(self.Config.RetrySyncWait, function()
+                _self.channelSyncRetry = false
+                _self:SendChannelSync(joinRound)
+            end)
+        end
+        return
+    end
+
+    self.channelOffers = {}
+    self.channelJoinRound = joinRound or false
+
+    local fullHash = computeFullHash(self.DB, self.Config, nil, self.Core:MyFaction())
+    local ftlHash = computeFTLHash(self.DB, self.Config)
+    -- the third field is the realm-wide reset we know, see Tracker:OnNetChannelSyncReset
+    self.Network:SendObject(self.Config.Network.Events.ChannelSync,
+            {fullHash, ftlHash, self.DB.factionrealm.resetAt}, "RACE")
+
+    local _self = self
+    C_Timer.After(self.Config.ChannelSyncWait + 1, function()
+        _self:DoChannelSync()
+    end)
+end
+
+-- Received when a player announces its hashes on the realm channel. If our data differs,
+-- whisper back an offer after a random delay. Every player on the channel hears the
+-- announce, so the more players we heard there, the smaller our chance to answer: about
+-- ChannelOfferTarget offers come back in total, however large the channel is.
+function WoWForeverRaceSync:OnNetChannelSync(payload, sender)
+    if not self.DB.profile.options.networking then return end
+    if not self.isReady then return end
+    if type(payload) ~= "table" then return end
+
+    local requesterFullHash, requesterFTLHash = payload[1], payload[2]
+    local myFullHash = computeFullHash(self.DB, self.Config, nil, self.Core:MyFaction())
+    local ftlDiffers = requesterFTLHash ~= nil and requesterFTLHash ~= computeFTLHash(self.DB, self.Config)
+    if myFullHash == requesterFullHash and not ftlDiffers then return end
+
+    local size = self.Channel ~= nil and self.Channel:Size() or 0
+    local target = self.Config.ChannelOfferTarget
+    if size > target and math.random() >= target / size then return end
+
+    local _self = self
+    C_Timer.After(math.random() * self.Config.ChannelSyncWait, function()
+        _self.Network:SendObject(_self.Config.Network.Events.ChannelOffer,
+                {computeFullHash(_self.DB, _self.Config, nil, _self.Core:MyFaction()),
+                 computeFTLHash(_self.DB, _self.Config)},
+                "WHISPER", sender)
+    end)
+end
+
+-- Collect channel offers during the open window.
+function WoWForeverRaceSync:OnNetChannelOffer(offer, sender)
+    if not self.DB.profile.options.networking then return end
+    if self.channelOffers == nil or type(offer) ~= "table" then return end
+    WoWForeverRace:DebugPrint("ChannelOffer from " .. sender)
+
+    -- an answer to what we sent on the channel: it carries our messages to other players
+    if self.Channel ~= nil then
+        self.Channel:NoteSender((self.Core:SplitFullPlayer(sender)))
+    end
+    -- the players to fall back on by whisper when the channel goes quiet
+    self:AddBuddy(sender)
+    table.insert(self.channelOffers, {name = sender, fullHash = offer[1], ftlHash = offer[2]})
+end
+
+-- Called after the channel offer window closes: trades with one random partner by whisper,
+-- in both directions, the way a buddy ping does. Either side may hold what the other lacks
+-- (what it saw while nobody was listening), and what the partner gains it passes on to the
+-- channel (Tracker:RelayToChannel), so one trade brings it to everyone.
+-- At the join we are mostly the one behind: the ping also asks for the player history
+-- when no login sync brought it yet, and what we gain is no news to the channel.
+function WoWForeverRaceSync:DoChannelSync()
+    local offers = self.channelOffers
+    self.channelOffers = nil
+
+    if not offers or #offers == 0 then
+        WoWForeverRace:DebugPrint("Channel sync: no offers")
+        return
+    end
+
+    local best = self:SelectPartnerFromList(offers)
+
+    -- sanity check: the offers are a few seconds old, and so is what we announced
+    local myFullHash = computeFullHash(self.DB, self.Config, nil, self.Core:MyFaction())
+    local myFTLHash = computeFTLHash(self.DB, self.Config)
+    local ftlDiffers = best.ftlHash ~= nil and best.ftlHash ~= myFTLHash
+    if best.fullHash == myFullHash and not ftlDiffers then
+        WoWForeverRace:DebugPrint("Already in sync with channel partner " .. best.name)
+        return
+    end
+
+    WoWForeverRace:DebugPrint("DoChannelSync with " .. best.name)
+
+    local myPHHash = nil
+    if self.channelJoinRound then
+        if not self.historyPulled then
+            myPHHash = computePHHash(self.DB, self.Config, self.Core:MyFaction())
+        end
+        -- give the partner's data the full time to arrive
+        self.Channel:Settle()
+    end
+    self.Network:SendObject(self.Config.Network.Events.BuddyPing,
+            {myFullHash, self:MyBoardHashes(), myFTLHash, myPHHash}, "WHISPER", best.name)
+
+    local round = {partner = best.name, gained = false}
+    self.channelRound = round
+    local _self = self
+    C_Timer.After(self.Config.ChannelFollowUp, function()
+        _self:FollowUpChannelSync(round)
+    end)
+end
+
+-- A trade that brought us players we lacked means we were behind, and one partner may
+-- not have had everything either (it can be as fresh on the channel as we are, after a
+-- realm restart everybody is). So we compare with the channel again soon instead of at
+-- the next full sync. A trade that brought us nothing ends it.
+function WoWForeverRaceSync:FollowUpChannelSync(round)
+    -- a newer trade took over
+    if round ~= self.channelRound then return end
+    self.channelRound = nil
+
+    if round.gained then
+        self:SendChannelSync()
+    end
+end

@@ -334,6 +334,410 @@ describe("Tracker", function()
         end)
     end)
 
+    describe("Realm channel", function()
+        local NetEvents = WoWForeverRace.Config.Network.Events
+        local RACE_CHANNEL = WoWForeverRace.Config.RaceChannelPrefix .. "Alliance"
+        local channel, sent, startTime, originalRandom
+
+        local function sentTo(distribution)
+            local out = {}
+            for _, s in ipairs(sent) do
+                if s.channel == distribution then out[#out + 1] = s end
+            end
+            return out
+        end
+
+        -- the players of the one batch sent to the realm channel
+        local function channelBatch()
+            local toChannel = sentTo("RACE")
+            assert.equals(1, #toChannel)
+            assert.equals(NetEvents.PlayerInfoBatch, toChannel[1].event)
+            assert.is_false(toChannel[1].payload[2])
+            return WoWForeverRace.Serializer.DeserializePlayerInfoBatch(toChannel[1].payload[1])
+        end
+
+        local function batchPayload(players)
+            return {WoWForeverRace.Serializer.SerializePlayerInfoBatch(players), false, 0}
+        end
+
+        -- moves the mocked server time and the timers together
+        local function advance(seconds)
+            time = time + seconds
+            _G.C_Timer.Advance(seconds)
+        end
+
+        before_each(function()
+            startTime = time
+            originalRandom = _G.math.random
+            _G.SetIsInGuild(false)
+            _G.SetChatChannels({"General", RACE_CHANNEL})
+
+            sent = {}
+            network.SendObject = function(_, event, payload, distribution, target)
+                sent[#sent + 1] = {event = event, payload = payload, channel = distribution, target = target}
+            end
+            local bus = WoWForeverRace.EventBus()
+            channel = WoWForeverRace.Channel(config, core, db, bus)
+            channel:TryJoin()
+            assert.is_true(channel:IsJoined())
+            tracker = WoWForeverRace.Tracker(config, core, db, bus, network, channel)
+            -- joined a while ago: our dings don't wait for the join sync anymore
+            time = time + config.ChannelSettleTime
+        end)
+
+        after_each(function()
+            time = startTime
+            _G.math.random = originalRandom
+            _G.SetChatChannels(nil)
+        end)
+
+        it("sends a ding to the channel after a short delay, next to the backup while nobody is heard", function()
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            -- the backup: the zone hears it right away
+            assert.equals(1, #sentTo("YELL"))
+            assert.equals(0, #sentTo("RACE"))
+
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+            local players = channelBatch()
+            assert.equals(1, #players)
+            assert.equals("Nubone", players[1].name)
+            assert.equals(5, players[1].level)
+        end)
+
+        it("only sends to the channel while it is live", function()
+            _G.SetIsInGuild(true)
+            _G.SetGroupState(2, false, false)
+            db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
+            channel:NoteSender("Dude")
+
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            _G.C_Timer.Advance(config.DingPushDelay)
+
+            assert.equals(1, #sent)
+            assert.equals("Nubone", channelBatch()[1].name)
+        end)
+
+        it("falls back to the other pushes when the channel went quiet", function()
+            channel:NoteSender("Dude")
+            time = time + config.ChannelLiveTTL + 1
+
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+
+            assert.equals(1, #sentTo("YELL"))
+        end)
+
+        it("waits a random time within the delay range", function()
+            _G.math.random = function() return 0 end
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            _G.C_Timer.Advance(config.ChannelDingDelayMin - 0.1)
+            assert.equals(0, #sentTo("RACE"))
+            _G.C_Timer.Advance(0.1)
+            assert.equals(1, #sentTo("RACE"))
+
+            _G.math.random = function() return 0.999 end
+            tracker:OnSlashWhoResult({ playerInfo("Nubtwo", 6), })
+            _G.C_Timer.Advance(config.ChannelDingDelayMax - 0.1)
+            assert.equals(1, #sentTo("RACE"))
+            _G.C_Timer.Advance(0.1)
+            assert.equals(2, #sentTo("RACE"))
+        end)
+
+        it("sends the dings of several results as one message", function()
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            tracker:OnSlashWhoResult({ playerInfo("Nubtwo", 6, WARRIORIDX), playerInfo("Nubone", 6), })
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            local players = channelBatch()
+            assert.equals(2, #players)
+            assert.equals("Nubone", players[1].name)
+            assert.equals(6, players[1].level)
+            assert.equals("Nubtwo", players[2].name)
+        end)
+
+        it("drops a waiting ding that another player sent to the channel first", function()
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), playerInfo("Nubtwo", 6, WARRIORIDX), })
+
+            -- the same level-up, spotted in the same second
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubone", 5), }), "Dude", "CHANNEL")
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            local players = channelBatch()
+            assert.equals(1, #players)
+            assert.equals("Nubtwo", players[1].name)
+        end)
+
+        it("sends nothing when the channel heard everything that was waiting", function()
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+
+            -- somebody saw the next level already
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubone", 6), }), "Dude", "CHANNEL")
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            assert.equals(0, #sent)
+        end)
+
+        it("still sends a waiting ding that is earlier than what the channel heard", function()
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubone", 5, DRUIDIDX, time + 3), }),
+                    "Dude", "CHANNEL")
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            -- every client keeps the earliest time, so ours has to reach them
+            assert.equals(time, channelBatch()[1].dingedAt)
+        end)
+
+        it("still sends a waiting ding that was only heard outside the channel", function()
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubone", 5), }), "Dude", "YELL")
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            assert.equals("Nubone", channelBatch()[1].name)
+        end)
+
+        it("drops a waiting ding that the join sync showed to be old news", function()
+            -- we just joined, and our first scan looks like news to us
+            time = startTime
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({
+                playerInfo("Nubone", 5), playerInfo("Nubtwo", 6, WARRIORIDX), playerInfo("Nubthree", 7, PRIESTIDX),
+            })
+
+            -- we were behind: our partner knew Nubone at that level for a while, and Nubtwo is higher by now
+            tracker:OnSyncResult({ playerInfo("Nubone", 5, DRUIDIDX, time - 3600), playerInfo("Nubtwo", 8, WARRIORIDX), })
+            advance(config.ChannelSettleTime)
+
+            -- neither our stale sightings nor what the partner sent goes to the channel
+            local players = channelBatch()
+            assert.equals(1, #players)
+            assert.equals("Nubthree", players[1].name)
+        end)
+
+        it("passes on to the channel what a sync outside of it changed", function()
+            channel:NoteSender("Dude")
+
+            -- a whispered leaderboard: one new player, one we knew at that level already
+            tracker:ProcessPlayerInfo(playerInfo("Nubtwo", 6, WARRIORIDX))
+            tracker:OnSyncResult({ playerInfo("Nubone", 5), playerInfo("Nubtwo", 6, WARRIORIDX, time + 5), })
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            local players = channelBatch()
+            assert.equals(1, #players)
+            assert.equals("Nubone", players[1].name)
+            assert.equals(1, #sent, "and nowhere else")
+        end)
+
+        it("passes on a ding heard by yell or whisper, but not one from the channel itself", function()
+            channel:NoteSender("Dude")
+
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubone", 5), }), "Ann Wanderer", "YELL")
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubtwo", 6, WARRIORIDX), }), "Bob Faraway", "WHISPER")
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubthree", 7, PRIESTIDX), }), "Dude", "CHANNEL")
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            local players = channelBatch()
+            assert.equals(2, #players)
+            assert.equals("Nubone", players[1].name)
+            assert.equals("Nubtwo", players[2].name)
+        end)
+
+        it("passes on an earlier time for a level we already had", function()
+            channel:NoteSender("Dude")
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 5))
+            tracker:ProcessPlayerInfo(playerInfo("Nubtwo", 6, WARRIORIDX))
+            local dings = 0
+            tracker.EventBus:RegisterCallback(Events.Ding, {}, function() dings = dings + 1 end)
+
+            -- a whispered leaderboard saw Nubone at that level a minute before we did
+            tracker:OnSyncResult({ playerInfo("Nubone", 5, DRUIDIDX, time - 60), })
+            -- and a ding whispered by a buddy does the same for Nubtwo
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubtwo", 6, WARRIORIDX, time - 30), }),
+                    "Bob Faraway", "WHISPER")
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            local players = channelBatch()
+            assert.equals(2, #players)
+            assert.equals("Nubone", players[1].name)
+            assert.equals(time - 60, players[1].dingedAt)
+            assert.equals("Nubtwo", players[2].name)
+            assert.equals(time - 30, players[2].dingedAt)
+            -- an earlier time is no ding: nothing to announce in chat
+            assert.equals(0, dings)
+        end)
+
+        it("does not pass an earlier time on when it came from the channel, or right after joining", function()
+            channel:NoteSender("Dude")
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 5))
+            tracker:ProcessPlayerInfo(playerInfo("Nubtwo", 6, WARRIORIDX))
+
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubone", 5, DRUIDIDX, time - 60), }), "Dude", "CHANNEL")
+            time = startTime
+            tracker:OnSyncResult({ playerInfo("Nubtwo", 6, WARRIORIDX, time - 30), })
+            advance(config.ChannelSettleTime + config.ChannelDingDelayMax)
+
+            assert.equals(0, #sent)
+            assert.equals(startTime + config.ChannelSettleTime - 60, db.factionrealm.leaderboard[0].players[2].dingedAt)
+        end)
+
+        it("passes nothing on when a sync changed nothing", function()
+            channel:NoteSender("Dude")
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 5))
+
+            tracker:OnSyncResult({ playerInfo("Nubone", 5), })
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubone", 5), }), "Ann Wanderer", "WHISPER")
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            assert.equals(0, #sent)
+        end)
+
+        it("passes nothing on right after joining: what we gain then, the channel already has", function()
+            time = startTime
+            channel:NoteSender("Dude")
+
+            tracker:OnSyncResult({ playerInfo("Nubone", 5), })
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubtwo", 6, WARRIORIDX), }), "Ann Wanderer", "YELL")
+            advance(config.ChannelSettleTime + config.ChannelDingDelayMax)
+
+            assert.equals(0, #sent)
+        end)
+
+        it("passes nothing on without the channel, or with sharing off", function()
+            _G.SetChatChannels({"General"})
+            tracker:OnSyncResult({ playerInfo("Nubone", 5), })
+
+            _G.SetChatChannels({"General", RACE_CHANNEL})
+            db.profile.options.networking = false
+            tracker:OnSyncResult({ playerInfo("Nubtwo", 6, WARRIORIDX), })
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            assert.equals(0, #sent)
+        end)
+
+        it("holds dings back until the join sync had its time", function()
+            time = startTime
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+
+            advance(config.ChannelDingDelayMax)
+            assert.equals(0, #sent)
+
+            advance(config.ChannelSettleTime)
+            assert.equals("Nubone", channelBatch()[1].name)
+        end)
+
+        it("keeps holding dings back when the settle time started over meanwhile", function()
+            time = startTime
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), playerInfo("Nubtwo", 6, WARRIORIDX), })
+
+            -- the join sync found its partner 11s after the join
+            advance(11)
+            channel:Settle()
+
+            -- the first deadline passes: nothing goes out, and the partner's data still counts
+            advance(config.ChannelSettleTime - 11)
+            assert.equals(0, #sent)
+            tracker:OnSyncResult({ playerInfo("Nubone", 5, DRUIDIDX, time - 3600), })
+
+            advance(11)
+            local players = channelBatch()
+            assert.equals(1, #players)
+            assert.equals("Nubtwo", players[1].name)
+
+            -- and the next ding is on its normal short delay again
+            tracker:OnSlashWhoResult({ playerInfo("Nubthree", 7, PRIESTIDX), })
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+            assert.equals(2, #sentTo("RACE"))
+        end)
+
+        it("sends a waiting ding to the channel we are moving to", function()
+            channel:NoteSender("Dude")
+            _G.math.random = function() return 0 end
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+
+            -- the realm moves to the next channel name before the ding is due
+            channel:MoveTo(2)
+            assert.is_false(channel:IsJoined())
+            advance(config.ChannelDingDelayMin)
+            assert.equals(0, #sent, "waits for the join")
+
+            advance(config.ChannelJoinRetry * 2)
+            assert.is_true(channel:IsJoined())
+            assert.equals("Nubone", channelBatch()[1].name)
+            assert.equals(1, #sent)
+        end)
+
+        it("sends our own waiting dings the backup way when we left the channel", function()
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            -- learned by whisper, only waiting to be passed on
+            tracker:OnSyncResult({ playerInfo("Nubtwo", 6, WARRIORIDX), })
+            assert.equals(0, #sent)
+
+            -- the player left the channel
+            _G.SetChatChannels({"General"})
+            advance(config.ChannelDingDelayMax)
+
+            assert.equals(0, #sentTo("RACE"))
+            local yells = sentTo("YELL")
+            assert.equals(1, #yells)
+            local players = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(yells[1].payload[1])
+            assert.equals(1, #players)
+            assert.equals("Nubone", players[1].name)
+        end)
+
+        it("does not repeat the backup for a ding that already took it", function()
+            -- joined, but nobody heard: the ding goes to the zone right away
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            assert.equals(1, #sentTo("YELL"))
+
+            _G.SetChatChannels({"General"})
+            advance(config.ChannelDingDelayMax)
+
+            assert.equals(1, #sent)
+        end)
+
+        it("sends nothing to the channel after sharing was turned off", function()
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            db.profile.options.networking = false
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            assert.equals(0, #sent)
+        end)
+
+        it("sends no discovery beacon while the channel is live", function()
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 5))
+
+            channel:NoteSender("Dude")
+            tracker:SendDiscoveryBeacon()
+            assert.equals(0, #sent)
+
+            time = time + config.ChannelLiveTTL + 1
+            tracker:SendDiscoveryBeacon()
+            assert.equals(1, #sent)
+            assert.equals(NetEvents.DataAvailable, sent[1].event)
+            assert.equals("YELL", sent[1].channel)
+        end)
+
+        it("still answers a beacon and a data request while the channel is live", function()
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 5))
+            channel:NoteSender("Dude")
+
+            -- a player who is not in the channel announces different data
+            tracker:OnNetDataAvailable(12345, "Ann Wanderer")
+            assert.equals(1, #sent)
+            assert.equals(NetEvents.DataRequest, sent[1].event)
+            assert.equals("Ann Wanderer", sent[1].target)
+        end)
+    end)
+
     describe("Pioneers", function()
         it("UpdatePioneers sets raceStartedAt on first player", function()
             tracker:ProcessPlayerInfo(playerInfo("Alice", 15, DRUIDIDX, time))
@@ -423,6 +827,235 @@ describe("Tracker", function()
             }
             tracker:OnFTLSyncResult(ftldb)
             assert.equals("Remote", db.factionrealm.firstToLevel[0][10].name)
+        end)
+    end)
+
+    describe("Realm-wide reset", function()
+        local NetEvents = WoWForeverRace.Config.Network.Events
+        local AUTHOR = "Offroad Dverg"
+        local sent, printStub, startTime
+
+        local function sentOf(event)
+            local out = {}
+            for _, s in ipairs(sent) do
+                if s.event == event then out[#out + 1] = s end
+            end
+            return out
+        end
+
+        -- a tracker of our own for a character that may reset everybody
+        local function authorTracker(channel)
+            local authorCore = WoWForeverRace.Core(WoWForeverRace.Config, AUTHOR, "NubVille")
+            function authorCore:Now() return time end
+            authorCore.RealMe = function() return AUTHOR end
+            return WoWForeverRace.Tracker(config, authorCore, db, WoWForeverRace.EventBus(), network, channel), authorCore
+        end
+
+        before_each(function()
+            startTime = time
+            _G.SetIsInGuild(false)
+            sent = {}
+            network.SendObject = function(_, event, payload, distribution, target)
+                sent[#sent + 1] = {event = event, payload = payload, channel = distribution, target = target}
+            end
+            printStub = stub(WoWForeverRace, "PPrint")
+
+            -- before the reset: two players, pioneers and history
+            tracker:ProcessPlayerInfo(playerInfo("Old One", 10, DRUIDIDX, time - 500))
+            tracker:ProcessPlayerInfo(playerInfo("Old Two", 9, WARRIORIDX, time - 400))
+            db.factionrealm.buddies["Bob Faraway"] = {lastSeen = time - 450}
+        end)
+
+        after_each(function()
+            time = startTime
+            printStub:revert()
+            _G.SetChatChannels(nil)
+        end)
+
+        it("drops the race data from before it and keeps what came after", function()
+            tracker:ProcessPlayerInfo(playerInfo("New One", 5, PRIESTIDX, time - 50))
+            local resets = 0
+            eventbus:RegisterCallback(Events.DataReset, {}, function() resets = resets + 1 end)
+            db.factionrealm.finished = true
+
+            tracker:ApplyReset(time - 100)
+
+            assert.equals(time - 100, db.factionrealm.resetAt)
+            assert.equals(1, #db.factionrealm.leaderboard[0].players)
+            assert.equals("New One", db.factionrealm.leaderboard[0].players[1].name)
+            assert.equals(0, #db.factionrealm.leaderboard[DRUIDIDX].players)
+            assert.equals(0, #db.factionrealm.leaderboard[WARRIORIDX].players)
+            assert.is_nil(db.factionrealm.firstToLevel[0][10])
+            assert.equals("New One", db.factionrealm.firstToLevel[0][5].name)
+            assert.is_nil(db.factionrealm.playerHistory["Old One"])
+            assert.is_table(db.factionrealm.playerHistory["New One"])
+            assert.equals(time - 50, db.factionrealm.raceStartedAt)
+            assert.is_false(db.factionrealm.finished)
+            -- settings and buddies are not race data
+            assert.is_table(db.factionrealm.buddies["Bob Faraway"])
+            assert.equals(1, resets)
+        end)
+
+        it("accepts nothing from before it afterwards, by any path", function()
+            tracker:ApplyReset(time - 100)
+
+            tracker:ProcessPlayerInfo(playerInfo("Old One", 10, DRUIDIDX, time - 500))
+            tracker:OnSyncResult({ playerInfo("Old Two", 9, WARRIORIDX, time - 400), })
+            tracker:OnFTLSyncResult({[0] = {[10] = {name = "Old One", classIndex = DRUIDIDX, dingedAt = time - 500}}})
+            tracker:OnPHSyncResult({["Old One"] = {classIndex = DRUIDIDX, levels = {[10] = time - 500}}})
+
+            assert.equals(0, #db.factionrealm.leaderboard[0].players)
+            assert.is_nil(db.factionrealm.firstToLevel[0][10])
+            assert.is_nil((db.factionrealm.playerHistory["Old One"] or {levels = {}}).levels[10])
+
+            -- the same player seen again after the reset counts
+            tracker:ProcessPlayerInfo(playerInfo("Old One", 10, DRUIDIDX, time - 10))
+            assert.equals(1, #db.factionrealm.leaderboard[0].players)
+        end)
+
+        it("still holds after a /reload", function()
+            tracker:ApplyReset(time - 100)
+
+            local reloadedCore = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
+            function reloadedCore:Now() return time end
+            local reloaded = WoWForeverRace.Tracker(config, reloadedCore, db, WoWForeverRace.EventBus(), network)
+            reloaded:ProcessPlayerInfo(playerInfo("Old One", 10, DRUIDIDX, time - 500))
+
+            assert.equals(0, #db.factionrealm.leaderboard[0].players)
+        end)
+
+        describe("from the network", function()
+            it("is applied when one of the named characters sends it", function()
+                tracker:OnNetReset(time - 100, AUTHOR)
+
+                assert.equals(time - 100, db.factionrealm.resetAt)
+                assert.equals(0, #db.factionrealm.leaderboard[0].players)
+                assert.stub(printStub).was_called(1)
+            end)
+
+            it("is ignored from anybody else", function()
+                for _, sender in ipairs({"Dude", "Offroad", "Offroad Dverg-OtherRealm", "offroad dverg"}) do
+                    tracker:OnNetReset(time - 100, sender)
+                end
+                tracker:OnNetReset(time - 100, nil)
+
+                assert.is_nil(db.factionrealm.resetAt)
+                assert.equals(2, #db.factionrealm.leaderboard[0].players)
+                assert.stub(printStub).was_not_called()
+            end)
+
+            it("is ignored when it is not newer than the reset we know", function()
+                tracker:OnNetReset(time - 100, AUTHOR)
+                tracker:ProcessPlayerInfo(playerInfo("New One", 5, PRIESTIDX, time - 50))
+
+                tracker:OnNetReset(time - 100, AUTHOR)
+                tracker:OnNetReset(time - 200, "Offroad Hunt")
+
+                assert.equals(time - 100, db.factionrealm.resetAt)
+                assert.equals(1, #db.factionrealm.leaderboard[0].players)
+            end)
+
+            it("is ignored when the time is not a sane one", function()
+                for _, resetAt in ipairs({"junk", {}, true, 0, -5, 0 / 0, time + 3600}) do
+                    tracker:OnNetReset(resetAt, AUTHOR)
+                end
+
+                assert.is_nil(db.factionrealm.resetAt)
+                assert.equals(2, #db.factionrealm.leaderboard[0].players)
+            end)
+
+            it("is ignored with sharing turned off", function()
+                db.profile.options.networking = false
+                tracker:OnNetReset(time - 100, AUTHOR)
+
+                assert.is_nil(db.factionrealm.resetAt)
+            end)
+
+            it("is ignored once the realm has launched", function()
+                core.Config = setmetatable({RealmLaunchAt = time - 1000}, {__index = WoWForeverRace.Config})
+
+                tracker:OnNetReset(time - 100, AUTHOR)
+
+                assert.is_nil(db.factionrealm.resetAt)
+                assert.equals(2, #db.factionrealm.leaderboard[0].players)
+            end)
+
+            it("reaches the tracker as the RESET network event", function()
+                eventbus:PublishEvent(NetEvents.Reset, time - 100, AUTHOR, "CHANNEL")
+
+                assert.equals(time - 100, db.factionrealm.resetAt)
+            end)
+        end)
+
+        describe("sending", function()
+            it("resets our own data and tells everybody we can reach", function()
+                _G.SetIsInGuild(true)
+                _G.SetGroupState(2, false, false)
+
+                tracker:SendReset()
+
+                assert.equals(time, db.factionrealm.resetAt)
+                assert.equals(0, #db.factionrealm.leaderboard[0].players)
+                local resets = sentOf(NetEvents.Reset)
+                local channels = {}
+                for _, s in ipairs(resets) do
+                    assert.equals(time, s.payload)
+                    channels[#channels + 1] = s.channel
+                end
+                assert.same({"RACE", "YELL", "GUILD", "GROUP"}, channels)
+                assert.equals(#resets, #sent)
+            end)
+
+            it("an author tells the channel again whenever it joins it", function()
+                local authors = authorTracker()
+                authors:ApplyReset(time - 100)
+                sent = {}
+
+                authors:OnChannelJoinedReset()
+
+                assert.equals(time - 100, sentOf(NetEvents.Reset)[1].payload)
+                assert.equals("RACE", sentOf(NetEvents.Reset)[1].channel)
+            end)
+
+            it("an author whispers the reset to a player who announces an older one, or none", function()
+                local authors = authorTracker()
+                authors:ApplyReset(time - 100)
+                sent = {}
+
+                authors:OnNetChannelSyncReset({1, 2}, "Late Comer")
+                authors:OnNetChannelSyncReset({1, 2, time - 300}, "Stale Player")
+                authors:OnNetChannelSyncReset({1, 2, time - 100}, "Current Player")
+                authors:OnNetChannelSyncReset("junk", "Odd Player")
+
+                local resets = sentOf(NetEvents.Reset)
+                assert.equals(2, #resets)
+                assert.equals("WHISPER", resets[1].channel)
+                assert.equals("Late Comer", resets[1].target)
+                assert.equals("Stale Player", resets[2].target)
+                assert.equals(time - 100, resets[2].payload)
+            end)
+
+            it("a player who is no author never repeats a reset", function()
+                tracker:OnNetReset(time - 100, AUTHOR)
+                sent = {}
+
+                tracker:OnChannelJoinedReset()
+                tracker:OnNetChannelSyncReset({1, 2}, "Late Comer")
+
+                assert.equals(0, #sent)
+            end)
+
+            it("an author stops repeating it once the realm has launched", function()
+                local authors, authorCore = authorTracker()
+                authors:ApplyReset(time - 100)
+                sent = {}
+                authorCore.Config = setmetatable({RealmLaunchAt = time - 50}, {__index = WoWForeverRace.Config})
+
+                authors:OnChannelJoinedReset()
+                authors:OnNetChannelSyncReset({1, 2}, "Late Comer")
+
+                assert.equals(0, #sentOf(NetEvents.Reset))
+            end)
         end)
     end)
 

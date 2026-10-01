@@ -1144,6 +1144,509 @@ describe("Sync", function()
         assert.spy(eventBusSpy).called_at_most(1)
     end)
 
+    describe("channel sync", function()
+        local Config = WoWForeverRace.Config
+        local RACE_CHANNEL = Config.RaceChannelPrefix .. "Alliance"
+        local channel, sent, originalRandom
+
+        local function sentOf(event)
+            local out = {}
+            for _, s in ipairs(sent) do
+                if s.event == event then out[#out + 1] = s end
+            end
+            return out
+        end
+
+        -- our hashes after a change to our data
+        local function fullHash()
+            return WoWForeverRace.Sync.ComputeFullHash(db, Config, nil, core:MyFaction())
+        end
+
+        before_each(function()
+            originalRandom = _G.math.random
+            _G.SetChatChannels({"General", RACE_CHANNEL})
+
+            sent = {}
+            network.SendObject = function(_, event, payload, distribution, target)
+                sent[#sent + 1] = {event = event, payload = payload, channel = distribution, target = target}
+            end
+            eventbus = WoWForeverRace.EventBus()
+            channel = WoWForeverRace.Channel(Config, core, db, eventbus)
+            sync = WoWForeverRace.Sync(Config, core, db, eventbus, network, channel)
+        end)
+
+        after_each(function()
+            _G.math.random = originalRandom
+            _G.SetChatChannels(nil)
+            _G.SetGroupState(nil)
+        end)
+
+        describe("announcing", function()
+            it("announces our hashes on the channel when we join it", function()
+                channel:TryJoin()
+
+                assert.equals(1, #sent)
+                assert.equals(NetEvents.ChannelSync, sent[1].event)
+                assert.same({myFullHash, myFTLHash}, sent[1].payload)
+                assert.equals("RACE", sent[1].channel)
+            end)
+
+            it("after moving up with the whole channel, compares again at a random moment soon", function()
+                channel:TryJoin()
+                sent = {}
+                sync.isReady = true
+
+                eventbus:PublishEvent(Config.Events.ChannelJoined, true)
+                assert.equals(0, #sent, "not everybody at once")
+
+                AdvanceClock(Config.ChannelFollowUp)
+                assert.equals(1, #sentOf(NetEvents.ChannelSync))
+
+                -- a regular round: the trade asks for no player history
+                eventbus:PublishEvent(NetEvents.ChannelOffer, {12345, 678}, "Dude", "WHISPER")
+                AdvanceClock(Config.ChannelSyncWait + 1)
+                assert.is_nil(sentOf(NetEvents.BuddyPing)[1].payload[4])
+            end)
+
+            it("tells which realm-wide reset we know", function()
+                db.factionrealm.resetAt = time - 100
+                channel:TryJoin()
+
+                assert.same({myFullHash, myFTLHash, time - 100}, sent[1].payload)
+            end)
+
+            it("stays quiet outside the channel, with sharing off and after the race", function()
+                sync:SendChannelSync()
+                assert.equals(0, #sent)
+
+                channel:TryJoin()
+                sent = {}
+                db.profile.options.networking = false
+                sync:SendChannelSync()
+                db.profile.options.networking = true
+                db.factionrealm.finished = true
+                sync:SendChannelSync()
+
+                assert.equals(0, #sent)
+            end)
+
+            it("announces again about once per ChannelSyncInterval once ready", function()
+                channel:TryJoin()
+                sent = {}
+                sync.isReady = true
+                sync:InitChannelTicker()
+
+                AdvanceClock(Config.ChannelSyncInterval * 0.75 - 1)
+                assert.equals(0, #sentOf(NetEvents.ChannelSync))
+                AdvanceClock(Config.ChannelSyncInterval * 0.5 + 1)
+                assert.equals(1, #sentOf(NetEvents.ChannelSync))
+                -- and keeps going
+                AdvanceClock(Config.ChannelSyncInterval * 1.25)
+                assert.equals(2, #sentOf(NetEvents.ChannelSync))
+            end)
+
+            it("waits with the announce until a chat messaging lockdown has ended", function()
+                local lockedDown = true
+                network.IsLockedDown = function() return lockedDown end
+                channel:TryJoin()
+                AdvanceClock(Config.RetrySyncWait * 3)
+                assert.equals(0, #sent)
+
+                lockedDown = false
+                AdvanceClock(Config.RetrySyncWait)
+                assert.equals(1, #sentOf(NetEvents.ChannelSync))
+            end)
+        end)
+
+        describe("offering", function()
+            before_each(function()
+                sync.isReady = true
+            end)
+
+            it("whispers an offer with our hashes when the announcer's data differs", function()
+                eventbus:PublishEvent(NetEvents.ChannelSync, {12345, myFTLHash}, "Dude", "CHANNEL")
+                assert.equals(0, #sent, "after a random delay")
+                AdvanceClock(Config.ChannelSyncWait)
+
+                assert.equals(1, #sent)
+                assert.equals(NetEvents.ChannelOffer, sent[1].event)
+                assert.same({myFullHash, myFTLHash}, sent[1].payload)
+                assert.equals("WHISPER", sent[1].channel)
+                assert.equals("Dude", sent[1].target)
+            end)
+
+            it("offers when only the pioneers differ", function()
+                eventbus:PublishEvent(NetEvents.ChannelSync, {myFullHash, 12345}, "Dude", "CHANNEL")
+                AdvanceClock(Config.ChannelSyncWait)
+
+                assert.equals(1, #sentOf(NetEvents.ChannelOffer))
+            end)
+
+            it("won't offer when the announcer's hashes match ours", function()
+                eventbus:PublishEvent(NetEvents.ChannelSync, {myFullHash, myFTLHash}, "Dude", "CHANNEL")
+                AdvanceClock(Config.ChannelSyncWait)
+
+                assert.equals(0, #sent)
+            end)
+
+            it("won't offer before our own login sync is done, or with sharing off", function()
+                sync.isReady = false
+                eventbus:PublishEvent(NetEvents.ChannelSync, {12345, myFTLHash}, "Dude", "CHANNEL")
+                sync.isReady = true
+                db.profile.options.networking = false
+                eventbus:PublishEvent(NetEvents.ChannelSync, {12345, myFTLHash}, "Dude", "CHANNEL")
+                AdvanceClock(Config.ChannelSyncWait)
+
+                assert.equals(0, #sent)
+            end)
+
+            it("ignores a malformed announce", function()
+                assert.has_no.errors(function()
+                    eventbus:PublishEvent(NetEvents.ChannelSync, 42, "Dude", "CHANNEL")
+                    eventbus:PublishEvent(NetEvents.ChannelSync, "junk", "Dude", "CHANNEL")
+                end)
+                AdvanceClock(Config.ChannelSyncWait)
+                assert.equals(0, #sent)
+            end)
+
+            it("always offers on a small channel", function()
+                for i = 1, Config.ChannelOfferTarget do
+                    channel:NoteSender("Player " .. i)
+                end
+                _G.math.random = function() return 0.999 end
+
+                eventbus:PublishEvent(NetEvents.ChannelSync, {12345, myFTLHash}, "Dude", "CHANNEL")
+                AdvanceClock(Config.ChannelSyncWait)
+
+                assert.equals(1, #sentOf(NetEvents.ChannelOffer))
+            end)
+
+            it("offers with a chance that shrinks with the players heard on the channel", function()
+                -- 100 players: the chance is ChannelOfferTarget in 100
+                for i = 1, 100 do
+                    channel:NoteSender("Player " .. i)
+                end
+                local chance = Config.ChannelOfferTarget / 100
+
+                _G.math.random = function() return chance + 0.001 end
+                eventbus:PublishEvent(NetEvents.ChannelSync, {12345, myFTLHash}, "Dude", "CHANNEL")
+                AdvanceClock(Config.ChannelSyncWait)
+                assert.equals(0, #sent)
+
+                _G.math.random = function() return chance - 0.001 end
+                eventbus:PublishEvent(NetEvents.ChannelSync, {12345, myFTLHash}, "Dude", "CHANNEL")
+                AdvanceClock(Config.ChannelSyncWait)
+                assert.equals(1, #sentOf(NetEvents.ChannelOffer))
+            end)
+        end)
+
+        describe("picking a partner", function()
+            local function boardHashes()
+                local hashes = {}
+                for _, boardIndex in ipairs(boardIndexes()) do
+                    hashes[boardIndex + 1] = WoWForeverRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[boardIndex])
+                end
+                return hashes
+            end
+
+            before_each(function()
+                channel:TryJoin()
+                sent = {}
+            end)
+
+            it("trades with one partner like a buddy ping", function()
+                AdvanceClock(Config.ChannelSyncWait + 1)
+                sync.isReady = true
+                sync:SendChannelSync()
+                sent = {}
+                local settleAt = channel.settleAt
+
+                eventbus:PublishEvent(NetEvents.ChannelOffer, {12345, 678}, "Dude", "WHISPER")
+                AdvanceClock(Config.ChannelSyncWait + 1)
+
+                assert.equals(1, #sent)
+                assert.equals(NetEvents.BuddyPing, sent[1].event)
+                assert.same({myFullHash, boardHashes(), myFTLHash}, sent[1].payload)
+                assert.equals("WHISPER", sent[1].channel)
+                assert.equals("Dude", sent[1].target)
+                assert.equals(settleAt, channel.settleAt, "an hourly trade does not hold our dings back")
+            end)
+
+            it("at the join, also asks for the player history and gives the partner's data time to arrive", function()
+                AdvanceClock(Config.ChannelSyncWait - 1)
+                eventbus:PublishEvent(NetEvents.ChannelOffer, {12345, 678}, "Dude", "WHISPER")
+                AdvanceClock(2)
+
+                assert.equals(1, #sent)
+                assert.equals(NetEvents.BuddyPing, sent[1].event)
+                assert.same({myFullHash, boardHashes(), myFTLHash, myPHHash}, sent[1].payload)
+                assert.equals("Dude", sent[1].target)
+                -- joined ChannelSyncWait + 1 seconds ago, and the full settle time starts over
+                assert.equals(Config.ChannelSettleTime, channel:SettleDelay())
+            end)
+
+            it("at the join, leaves the player history out when a login sync brought it already", function()
+                sync:OnNetPHSync("", "Zone Partner")
+                eventbus:PublishEvent(NetEvents.ChannelOffer, {12345, 678}, "Dude", "WHISPER")
+                AdvanceClock(Config.ChannelSyncWait + 1)
+
+                assert.same({myFullHash, boardHashes(), myFTLHash}, sentOf(NetEvents.BuddyPing)[1].payload)
+            end)
+
+            describe("follow-up", function()
+                local function syncPayload(name)
+                    return WoWForeverRace.Serializer.SerializePlayerInfoBatch({
+                        {name = name, level = 5, classIndex = 11, dingedAt = time},
+                    })
+                end
+
+                before_each(function()
+                    -- merges the leaderboards a partner sends
+                    WoWForeverRace.Tracker(Config, core, db, eventbus, network, channel)
+                    eventbus:PublishEvent(NetEvents.ChannelOffer, {12345, 678}, "Dude", "WHISPER")
+                    AdvanceClock(Config.ChannelSyncWait + 1)
+                    assert.equals(1, #sentOf(NetEvents.BuddyPing))
+                    sent = {}
+                end)
+
+                it("compares with the channel again soon after a trade that brought new players", function()
+                    eventbus:PublishEvent(NetEvents.SyncPayload, syncPayload("Nubone"), "Dude", "WHISPER")
+
+                    AdvanceClock(Config.ChannelFollowUp - 1)
+                    assert.equals(0, #sentOf(NetEvents.ChannelSync))
+                    AdvanceClock(1)
+                    assert.equals(1, #sentOf(NetEvents.ChannelSync))
+
+                    -- that round found nobody who differs: back to the full sync interval
+                    AdvanceClock(Config.ChannelFollowUp * 2)
+                    assert.equals(1, #sentOf(NetEvents.ChannelSync))
+                end)
+
+                it("leaves it at that after a trade that brought nothing", function()
+                    -- we know that player already
+                    eventbus:PublishEvent(NetEvents.SyncPayload, syncPayload("Nubone"), "Ann Wanderer", "WHISPER")
+                    eventbus:PublishEvent(NetEvents.SyncPayload, syncPayload("Nubone"), "Dude", "WHISPER")
+                    AdvanceClock(Config.ChannelFollowUp)
+
+                    assert.equals(0, #sentOf(NetEvents.ChannelSync))
+                end)
+
+                it("does not count what somebody else sent", function()
+                    eventbus:PublishEvent(NetEvents.SyncPayload, syncPayload("Nubone"), "Ann Wanderer", "WHISPER")
+                    AdvanceClock(Config.ChannelFollowUp)
+
+                    assert.equals(0, #sentOf(NetEvents.ChannelSync))
+                end)
+            end)
+
+            it("asks only one of the players who offered", function()
+                for _, name in ipairs({"Dude", "Dudette", "Dudester"}) do
+                    eventbus:PublishEvent(NetEvents.ChannelOffer, {12345, 678}, name, "WHISPER")
+                end
+                AdvanceClock(Config.ChannelSyncWait + 1)
+
+                assert.equals(1, #sent)
+            end)
+
+            it("does nothing when the partner's data matches ours by then", function()
+                eventbus:PublishEvent(NetEvents.ChannelOffer, {myFullHash, myFTLHash}, "Dude", "WHISPER")
+                AdvanceClock(Config.ChannelSyncWait + 1)
+
+                assert.equals(0, #sent)
+            end)
+
+            it("does nothing without offers", function()
+                AdvanceClock(Config.ChannelSyncWait + 1)
+                assert.equals(0, #sent)
+            end)
+
+            it("takes an offer as proof that the channel carries our messages", function()
+                assert.is_false(channel:IsLive())
+
+                eventbus:PublishEvent(NetEvents.ChannelOffer, {12345, 678}, "Dude-NubVille", "WHISPER")
+
+                assert.is_true(channel:IsLive())
+                assert.equals(1, channel:Size())
+                assert.is_table(db.factionrealm.buddies["Dude"])
+            end)
+
+            it("ignores an offer nobody asked for", function()
+                AdvanceClock(Config.ChannelSyncWait + 1)
+
+                assert.has_no.errors(function()
+                    eventbus:PublishEvent(NetEvents.ChannelOffer, {12345, 678}, "Dude", "WHISPER")
+                    eventbus:PublishEvent(NetEvents.ChannelOffer, "junk", "Dude", "WHISPER")
+                end)
+                AdvanceClock(Config.ChannelSyncWait + 1)
+
+                assert.is_false(channel:IsLive())
+                assert.is_nil(db.factionrealm.buddies["Dude"])
+                assert.equals(0, #sent)
+            end)
+        end)
+
+        describe("answering a channel partner's ping", function()
+            local historySpy
+
+            before_each(function()
+                sync.isReady = true
+                historySpy = spy.on(sync, "SyncPlayerHistory")
+            end)
+
+            it("sends the player history to a whispered ping that asks for it", function()
+                eventbus:PublishEvent(NetEvents.BuddyPing, {myFullHash, {}, myFTLHash, 12345}, "Dude", "WHISPER")
+
+                assert.spy(historySpy).was_called_with(match.is_ref(sync), "Dude")
+                assert.equals(1, #sentOf(NetEvents.BuddyPong))
+            end)
+
+            it("sends no player history when the hash matches, or when nobody asked", function()
+                eventbus:PublishEvent(NetEvents.BuddyPing, {myFullHash, {}, myFTLHash, myPHHash}, "Dude", "WHISPER")
+                eventbus:PublishEvent(NetEvents.BuddyPing, {myFullHash, {}, myFTLHash}, "Dude", "WHISPER")
+                eventbus:PublishEvent(NetEvents.BuddyPing, {myFullHash, {}, myFTLHash, "junk"}, "Dude", "WHISPER")
+
+                assert.spy(historySpy).was_not_called()
+            end)
+
+            it("sends no player history to a group ping, or before our own login sync is done", function()
+                _G.SetGroupState(2, false, false)
+                eventbus:PublishEvent(NetEvents.BuddyPing, {12345, {}, myFTLHash, 12345}, "Dude", "PARTY")
+                sync.isReady = false
+                eventbus:PublishEvent(NetEvents.BuddyPing, {12345, {}, myFTLHash, 12345}, "Dude", "WHISPER")
+
+                assert.spy(historySpy).was_not_called()
+            end)
+        end)
+
+        describe("players heard on the channel", function()
+            local updates
+
+            before_each(function()
+                updates = 0
+                eventbus:RegisterCallback(Events.BuddyUpdate, {}, function() updates = updates + 1 end)
+            end)
+
+            it("become buddies, to whisper when the channel is locked or quiet later", function()
+                eventbus:PublishEvent(Events.ChannelHeard, "Dude")
+                eventbus:PublishEvent(Events.ChannelHeard, "Dudette-NubVille")
+
+                assert.equals(time, db.factionrealm.buddies["Dude"].lastSeen)
+                assert.is_table(db.factionrealm.buddies["Dudette"])
+                assert.equals(2, updates)
+            end)
+
+            it("are kept up to date without announcing them again", function()
+                eventbus:PublishEvent(Events.ChannelHeard, "Dude")
+                AdvanceClock(60)
+                eventbus:PublishEvent(Events.ChannelHeard, "Dude")
+                eventbus:PublishEvent(Events.ChannelHeard, "Dude")
+
+                assert.equals(time, db.factionrealm.buddies["Dude"].lastSeen)
+                assert.equals(1, updates)
+            end)
+
+            it("are not added with sharing off, and never ourselves", function()
+                eventbus:PublishEvent(Events.ChannelHeard, "Nub")
+                db.profile.options.networking = false
+                eventbus:PublishEvent(Events.ChannelHeard, "Dude")
+
+                assert.is_nil(next(db.factionrealm.buddies))
+                assert.equals(0, updates)
+            end)
+
+            it("are pinged once the channel is gone", function()
+                channel:TryJoin()
+                AdvanceClock(Config.ChannelSyncWait + 1)
+                sync.isReady = true
+                channel:NoteSender("Dude")
+                eventbus:PublishEvent(Events.ChannelHeard, "Dude")
+                sent = {}
+
+                sync:SendBuddyPings()
+                assert.equals(0, #sent, "the channel is live")
+
+                -- somebody locked the channel and we are out of it
+                _G.SetChatChannels({"General"})
+                sync:SendBuddyPings()
+
+                local pings = sentOf(NetEvents.BuddyPing)
+                assert.equals(1, #pings)
+                assert.equals("WHISPER", pings[1].channel)
+                assert.equals("Dude", pings[1].target)
+            end)
+        end)
+
+        describe("the other flows as backup", function()
+            before_each(function()
+                _G.SetIsInGuild(true)
+                channel:TryJoin()
+                AdvanceClock(Config.ChannelSyncWait + 1)
+                sync.isReady = true
+                db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
+                sent = {}
+            end)
+
+            it("keeps pinging buddies, the group and the guild while nobody is heard on the channel", function()
+                _G.SetGroupState(2, false, false)
+                sync:InitGuildTicker()
+
+                sync:SendBuddyPings()
+                sync:ScheduleGroupSync()
+                AdvanceClock(Config.GuildSyncInterval)
+
+                assert.equals(1, #sentOf(NetEvents.GuildSync))
+                local pings = sentOf(NetEvents.BuddyPing)
+                assert.equals(2, #pings)
+                assert.equals("WHISPER", pings[1].channel)
+                assert.equals("GROUP", pings[2].channel)
+            end)
+
+            it("starts none of them while the channel is live", function()
+                _G.SetGroupState(2, false, false)
+                sync:InitGuildTicker()
+                channel:NoteSender("Dude")
+
+                sync:SendBuddyPings()
+                sync:ScheduleGroupSync()
+                AdvanceClock(Config.GuildSyncInterval)
+
+                assert.equals(0, #sent)
+            end)
+
+            it("picks them up again when the channel went quiet", function()
+                channel:NoteSender("Dude")
+                AdvanceClock(Config.ChannelLiveTTL + 1)
+
+                sync:SendBuddyPings()
+
+                assert.equals(1, #sentOf(NetEvents.BuddyPing))
+            end)
+
+            it("still answers a buddy, the guild and the group while the channel is live", function()
+                _G.SetGroupState(2, false, false)
+                channel:NoteSender("Dude")
+                db.factionrealm.leaderboard[0].players = {
+                    {name = "Nubone", level = 5, dingedAt = time, classIndex = 11},
+                }
+                local peerHashes = {}
+                for _, boardIndex in ipairs(boardIndexes()) do peerHashes[boardIndex + 1] = 5381 end
+
+                -- players who are not in the channel start these
+                eventbus:PublishEvent(NetEvents.BuddyPing, {12345, peerHashes, myFTLHash}, "Ann Wanderer", "WHISPER")
+                assert.equals(1, #sentOf(NetEvents.BuddyPong))
+                assert.equals(1, #sentOf(NetEvents.SyncPayload))
+
+                eventbus:PublishEvent(NetEvents.BuddyPing, {12345, peerHashes, myFTLHash}, "Cid Member", "PARTY")
+                assert.equals(2, #sentOf(NetEvents.BuddyPong))
+
+                eventbus:PublishEvent(NetEvents.GuildSync, {11, 12345, time, myFTLHash}, "Bea Guildie", "GUILD")
+                AdvanceClock(Config.GuildSyncWait)
+                assert.equals(1, #sentOf(NetEvents.GuildOffer))
+                assert.not_equals(myFullHash, fullHash())
+            end)
+        end)
+    end)
+
     describe("race leaderboards", function()
         local HUMAN_BOARD = WoWForeverRace.Config:RaceBoardIndex(1)
 
