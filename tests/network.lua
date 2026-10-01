@@ -163,6 +163,21 @@ describe("Network", function()
             assert.is_true(channel:IsLive())
             assert.equals(1, channel:Size())
         end)
+
+        it("tells the other components who was heard on a chat channel", function()
+            channel:TryJoin()
+            local heard = {}
+            eventbus:RegisterCallback(Events.ChannelHeard, {}, function(_, sender) heard[#heard + 1] = sender end)
+
+            receive({NetworkEvents.ChannelSync, {1}, "Alliance"}, "WHISPER")
+            receive({NetworkEvents.ChannelSync, {1}, "Horde"}, "CHANNEL")
+            receive({NetworkEvents.ChannelSync, {1}, "Alliance"}, "CHANNEL", "Nub")
+            assert.same({}, heard)
+
+            receive({NetworkEvents.PlayerInfoBatch, {"", false, 0}, "Alliance"}, "CHANNEL", "Dude")
+            receive({NetworkEvents.ChannelSync, {1}, "Alliance"}, "CHANNEL", "Dudette")
+            assert.same({"Dude", "Dudette"}, heard)
+        end)
     end)
 
     describe("realm channel number", function()

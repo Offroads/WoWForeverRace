@@ -155,6 +155,7 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
             -- a player of our faction on a chat channel: the realm channel carries traffic
             if distribution == "CHANNEL" then
                 self.Channel:NoteSender(senderName)
+                self.EventBus:PublishEvent(WoWForeverRace.Config.Events.ChannelHeard, sender)
             end
             self:FollowChannel(channelIndex, distribution)
         end

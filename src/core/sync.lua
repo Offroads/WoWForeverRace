@@ -171,15 +171,17 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network, Channel)
     EventBus:RegisterCallback(self.Config.Network.Events.ChannelSync, self, self.OnNetChannelSync)
     EventBus:RegisterCallback(self.Config.Network.Events.ChannelOffer, self, self.OnNetChannelOffer)
     EventBus:RegisterCallback(self.Config.Events.ChannelJoined, self, self.OnChannelJoined)
+    EventBus:RegisterCallback(self.Config.Events.ChannelHeard, self, self.OnChannelHeard)
 
     self:PruneBuddies()
 
     return self
 end
 
--- Every sender of OFFERSYNC, BPING and BPONG becomes a buddy, so on a busy realm the
--- list grows into thousands of entries and most random pings would go to players
--- who stopped playing. Runs once per login / reload; there is no cap on the count.
+-- Every sender of OFFERSYNC, BPING and BPONG and every player heard on the realm channel
+-- becomes a buddy, so on a busy realm the list grows into thousands of entries and most
+-- random pings would go to players who stopped playing. Runs once per login / reload;
+-- there is no cap on the count.
 function WoWForeverRaceSync:PruneBuddies()
     local buddies = self.DB.factionrealm.buddies
     local oldest = self.Core:Now() - self.Config.BuddyMaxAge
@@ -624,8 +626,17 @@ function WoWForeverRaceSync:OnNetGuildOffer(offer, sender)
     })
 end
 
+-- Every player heard on the realm channel becomes a buddy: should the channel be locked
+-- or go quiet later, those are the players we can still reach by whisper.
+function WoWForeverRaceSync:OnChannelHeard(sender)
+    if not self.DB.profile.options.networking then return end
+    self:AddBuddy(sender, true)
+end
+
 -- Add or update a buddy entry in the persistent DB list.
-function WoWForeverRaceSync:AddBuddy(name)
+-- quiet: for the realm channel, where the same players are heard over and over: only a
+-- new buddy is logged and announced, a known one just gets its last-seen time updated.
+function WoWForeverRaceSync:AddBuddy(name, quiet)
     -- senders normally come without a realm; normalize a same-realm "Name-Realm"
     -- anyway so we don't store duplicates (and a whisper to "Name-Realm" is not delivered)
     local shortName, realm = self.Core:SplitFullPlayer(name)
@@ -636,10 +647,12 @@ function WoWForeverRaceSync:AddBuddy(name)
         return
     end
     local buddies = self.DB.factionrealm.buddies
-    if not buddies[name] then
+    local isNew = buddies[name] == nil
+    if isNew then
         buddies[name] = {}
     end
     buddies[name].lastSeen = self.Core:Now()
+    if quiet and not isNew then return end
     WoWForeverRace:DebugPrint("Buddy: added/updated " .. name)
     self.EventBus:PublishEvent(self.Config.Events.BuddyUpdate)
 end

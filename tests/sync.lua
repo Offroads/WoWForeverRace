@@ -1511,6 +1511,64 @@ describe("Sync", function()
             end)
         end)
 
+        describe("players heard on the channel", function()
+            local updates
+
+            before_each(function()
+                updates = 0
+                eventbus:RegisterCallback(Events.BuddyUpdate, {}, function() updates = updates + 1 end)
+            end)
+
+            it("become buddies, to whisper when the channel is locked or quiet later", function()
+                eventbus:PublishEvent(Events.ChannelHeard, "Dude")
+                eventbus:PublishEvent(Events.ChannelHeard, "Dudette-NubVille")
+
+                assert.equals(time, db.factionrealm.buddies["Dude"].lastSeen)
+                assert.is_table(db.factionrealm.buddies["Dudette"])
+                assert.equals(2, updates)
+            end)
+
+            it("are kept up to date without announcing them again", function()
+                eventbus:PublishEvent(Events.ChannelHeard, "Dude")
+                AdvanceClock(60)
+                eventbus:PublishEvent(Events.ChannelHeard, "Dude")
+                eventbus:PublishEvent(Events.ChannelHeard, "Dude")
+
+                assert.equals(time, db.factionrealm.buddies["Dude"].lastSeen)
+                assert.equals(1, updates)
+            end)
+
+            it("are not added with sharing off, and never ourselves", function()
+                eventbus:PublishEvent(Events.ChannelHeard, "Nub")
+                db.profile.options.networking = false
+                eventbus:PublishEvent(Events.ChannelHeard, "Dude")
+
+                assert.is_nil(next(db.factionrealm.buddies))
+                assert.equals(0, updates)
+            end)
+
+            it("are pinged once the channel is gone", function()
+                channel:TryJoin()
+                AdvanceClock(Config.ChannelSyncWait + 1)
+                sync.isReady = true
+                channel:NoteSender("Dude")
+                eventbus:PublishEvent(Events.ChannelHeard, "Dude")
+                sent = {}
+
+                sync:SendBuddyPings()
+                assert.equals(0, #sent, "the channel is live")
+
+                -- somebody locked the channel and we are out of it
+                _G.SetChatChannels({"General"})
+                sync:SendBuddyPings()
+
+                local pings = sentOf(NetEvents.BuddyPing)
+                assert.equals(1, #pings)
+                assert.equals("WHISPER", pings[1].channel)
+                assert.equals("Dude", pings[1].target)
+            end)
+        end)
+
         describe("the other flows as backup", function()
             before_each(function()
                 _G.SetIsInGuild(true)

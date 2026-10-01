@@ -25,6 +25,10 @@ local CLASS_SHORT = { [0]="G","Wa","Pa","Hu","Ro","Pr","DK","Sh","Ma","Wl","Mo",
 local REL_EVENT = 0.62
 local REL_COUNT = 0.18   -- two count columns * 0.18 = 0.36 → total 0.98
 
+-- Every player heard on the realm channel is a buddy, thousands on a busy realm:
+-- only the ones seen last are listed
+local MAX_BUDDIES_SHOWN = 50
+
 -- Human-readable names for network event codes
 local EVENT_NAMES = {
     PINFOB    = "PlayerInfoBatch",
@@ -406,10 +410,17 @@ function WoWForeverRaceDebugFrame:RenderBuddies()
 
     self:AddSeparator()
 
-    for _, buddy in ipairs(list) do
+    for i = 1, math.min(#list, MAX_BUDDIES_SHOWN) do
+        local buddy = list[i]
         local label = AceGUI:Create("Label")
         label:SetFullWidth(true)
         label:SetText(WHITE .. buddy.name .. "  " .. GRAY .. formatAge(buddy.lastSeen) .. "|r")
         self.scroll:AddChild(label)
+    end
+    if #list > MAX_BUDDIES_SHOWN then
+        local more = AceGUI:Create("Label")
+        more:SetFullWidth(true)
+        more:SetText(GRAY .. "... and " .. (#list - MAX_BUDDIES_SHOWN) .. " more|r")
+        self.scroll:AddChild(more)
     end
 end

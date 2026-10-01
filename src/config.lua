@@ -231,6 +231,8 @@ local WoWForeverRaceConfig = {
     Events = {
         NetworkReady = "NETWORK_READY",
         ChannelJoined = "CHANNEL_JOINED",
+        -- ChannelHeard(sender): a player of our faction sent something on the realm channel
+        ChannelHeard = "CHANNEL_HEARD",
         SlashWhoResult = "WHO_RESULT",
         SyncResult = "SYNC_RESULT",
         FTLSyncResult = "FTL_SYNC_RESULT",
