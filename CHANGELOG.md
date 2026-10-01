@@ -11,6 +11,10 @@ channel, and keeping them in step costs far less once many players use the addon
   spots reaches everyone on the realm within seconds, wherever they are, with
   one small message. The channel is joined a few seconds after login, shows up
   in no chat window and is gone when you remove the addon.
+- When somebody locks the channel with a password, the addon uses the same name
+  with a number behind it instead (`WFRaceHorde2`, and so on), and every client
+  follows to the highest number in use, also the ones still inside the locked
+  channel.
 - About once per hour, and right after you log in, your leaderboards are
   compared with the channel and traded with one other player to catch
   whatever was missed.
@@ -21,7 +25,7 @@ channel, and keeping them in step costs far less once many players use the addon
 - While the channel carries traffic, the older ways of syncing (shouts to the
   zone, guild, party / raid and whispers to players you met) stay quiet. They
   take over again when nobody is heard on the channel, or when you are not in
-  it: after you `/leave` it, or when somebody locked it with a password.
+  it: after you `/leave` it, or when you were banned from it.
   Players who are not on the channel are still answered.
 - A party or raid whose members know different players gets in step within a
   minute instead of several, with a fraction of the addon traffic: only the

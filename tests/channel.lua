@@ -6,7 +6,7 @@ local NAME = Config.RaceChannelPrefix .. "Alliance"
 describe("Channel", function()
     local db, core, eventbus, channel
     local time
-    local joinedEvents
+    local joinedEvents, lastMoved
 
     -- moves the mocked server time and the timers together
     local function advance(seconds)
@@ -34,8 +34,11 @@ describe("Channel", function()
         eventbus = WoWForeverRace.EventBus()
         channel = WoWForeverRace.Channel(Config, core, db, eventbus)
 
-        joinedEvents = 0
-        eventbus:RegisterCallback(Config.Events.ChannelJoined, {}, function() joinedEvents = joinedEvents + 1 end)
+        joinedEvents, lastMoved = 0, nil
+        eventbus:RegisterCallback(Config.Events.ChannelJoined, {}, function(_, moved)
+            joinedEvents = joinedEvents + 1
+            lastMoved = moved
+        end)
     end)
 
     after_each(function()
@@ -43,6 +46,7 @@ describe("Channel", function()
         _G.SetChatLockdown(false)
         _G.SetFaction(nil)
         _G.issecretvalue = nil
+        _G.StaticPopup_Hide = nil
     end)
 
     it("is named after the faction", function()
@@ -124,21 +128,96 @@ describe("Channel", function()
             assert.equals(0, joinedEvents)
         end)
 
-        it("stays out when the channel has a password or banned us", function()
-            for _, noticeType in ipairs({"WRONG_PASSWORD", "BANNED"}) do
-                _G.C_Timer.Reset()
-                _G.SetChatChannels(nil)
-                _G.SetChannelJoinRefused(true)
-                channel = WoWForeverRace.Channel(Config, core, db, eventbus)
+        it("stays out when the channel banned us", function()
+            _G.SetChannelJoinRefused(true)
+            channel:Init()
+            advance(Config.ChannelJoinDelay)
+            notice("BANNED")
+            advance(Config.ChannelJoinRetry * 3)
 
+            assert.equals("refused", channel:Status())
+            assert.equals(1, channel:Index())
+            assert.equals(1, #_G.GetChannelJoinRequests())
+        end)
+
+        describe("a channel that asks for a password", function()
+            local function passwordRequest(name)
+                channel.Thread:FireEvent("CHANNEL_PASSWORD_REQUEST", name or channel:Name())
+            end
+
+            it("is given up for the same name with the next number", function()
+                _G.SetChannelJoinRefused({NAME})
                 channel:Init()
                 advance(Config.ChannelJoinDelay)
-                notice(noticeType)
-                advance(Config.ChannelJoinRetry * 3)
+                passwordRequest()
+                advance(Config.ChannelJoinRetry * 2)
+
+                assert.same({NAME, NAME .. "2"}, _G.GetChannelJoinRequests())
+                assert.is_true(channel:IsJoined())
+                assert.equals(NAME .. "2", channel:Name())
+                assert.equals(2, channel:Index())
+                assert.equals(1, joinedEvents)
+                assert.is_false(lastMoved)
+                -- a fresh join, not a move with everybody: the join sync has its time
+                assert.equals(Config.ChannelSettleTime, channel:SettleDelay())
+            end)
+
+            it("is also given up on the wrong password notice, once per channel", function()
+                _G.SetChannelJoinRefused({NAME})
+                channel:Init()
+                advance(Config.ChannelJoinDelay)
+                -- the server may send both for the one join
+                notice("WRONG_PASSWORD")
+                notice("WRONG_PASSWORD", NAME)
+                passwordRequest(NAME)
+                advance(Config.ChannelJoinRetry * 2)
+
+                assert.equals(2, channel:Index())
+                assert.is_true(channel:IsJoined())
+            end)
+
+            it("hides the password dialog the client opens for our join", function()
+                local hidden = {}
+                _G.StaticPopup_Hide = function(which, data) hidden[#hidden + 1] = which .. ":" .. tostring(data) end
+                _G.SetChannelJoinRefused({NAME})
+                channel:Init()
+                advance(Config.ChannelJoinDelay)
+                passwordRequest()
+
+                assert.same({"CHAT_CHANNEL_PASSWORD:" .. NAME}, hidden)
+                -- and once more a frame later, in case the client opened it after our handler ran
+                advance(1)
+                assert.equals(2, #hidden)
+            end)
+
+            it("leaves the dialog and the channel alone when it was not our join", function()
+                local hideSpy = spy.new(function() end)
+                _G.StaticPopup_Hide = hideSpy
+
+                -- before we tried to join anything, and for some other channel
+                passwordRequest(NAME)
+                channel:Init()
+                advance(Config.ChannelJoinDelay)
+                passwordRequest("SomeGuildChannel")
+
+                assert.spy(hideSpy).was_not_called()
+                assert.equals(1, channel:Index())
+            end)
+
+            it("gives up when every name asks for a password", function()
+                _G.SetChannelJoinRefused(true)
+                channel:Init()
+                advance(Config.ChannelJoinDelay)
+                for _ = 1, Config.ChannelMaxIndex do
+                    passwordRequest()
+                    advance(Config.ChannelJoinRetry)
+                end
 
                 assert.equals("refused", channel:Status())
-                assert.equals(1, #_G.GetChannelJoinRequests())
-            end
+                assert.equals(Config.ChannelMaxIndex, channel:Index())
+                assert.equals(Config.ChannelMaxIndex, #_G.GetChannelJoinRequests())
+                assert.is_false(channel:IsJoined())
+            end)
         end)
 
         it("waits out a chat messaging lockdown", function()
@@ -247,6 +326,83 @@ describe("Channel", function()
             assert.equals(10, channel:SettleDelay())
             advance(20)
             assert.equals(0, channel:SettleDelay())
+        end)
+    end)
+
+    describe("moving to a higher channel number", function()
+        before_each(function()
+            channel:Init()
+            advance(Config.ChannelJoinDelay + Config.ChannelJoinRetry)
+            assert.is_true(channel:IsJoined())
+        end)
+
+        it("joins the higher number and leaves the old channel a moment later", function()
+            assert.is_true(channel:MoveTo(2))
+            assert.equals(NAME .. "2", channel:Name())
+            -- still there: what we tell the old channel has to get out
+            assert.is_true(_G.GetChannelName(NAME) > 0)
+
+            advance(Config.ChannelJoinRetry)
+
+            assert.is_true(channel:IsJoined())
+            assert.equals(0, (_G.GetChannelName(NAME)))
+            assert.equals(2, joinedEvents)
+            assert.is_true(lastMoved)
+        end)
+
+        it("does not hold our dings back again: we know what the channel knows", function()
+            advance(Config.ChannelSettleTime)
+            channel:MoveTo(2)
+            advance(Config.ChannelJoinRetry)
+
+            assert.is_true(channel:IsJoined())
+            assert.equals(0, channel:SettleDelay())
+        end)
+
+        it("keeps who was heard: the same players move with us", function()
+            channel:NoteSender("Dude")
+            channel:MoveTo(2)
+            advance(Config.ChannelJoinRetry)
+
+            assert.is_true(channel:IsLive())
+            assert.equals(1, channel:Size())
+        end)
+
+        it("only moves up, to a whole number we would try ourselves", function()
+            for _, index in ipairs({1, 0, -3, 2.5, Config.ChannelMaxIndex + 1}) do
+                assert.is_false(channel:CanMoveTo(index), tostring(index))
+                assert.is_false(channel:MoveTo(index))
+            end
+            assert.is_false(channel:CanMoveTo("2"))
+            assert.is_false(channel:CanMoveTo(nil))
+            assert.is_true(channel:CanMoveTo(Config.ChannelMaxIndex))
+            assert.equals(1, channel:Index())
+        end)
+
+        it("does not move after the player left the channel, or with sharing off", function()
+            db.profile.options.networking = false
+            assert.is_false(channel:MoveTo(2))
+            db.profile.options.networking = true
+
+            _G.LeaveChannelByName(NAME)
+            notice("YOU_LEFT")
+            assert.is_false(channel:MoveTo(2))
+            assert.equals(1, channel:Index())
+        end)
+
+        it("before the first join, just joins the higher number", function()
+            _G.C_Timer.Reset()
+            _G.SetChatChannels(nil)
+            channel = WoWForeverRace.Channel(Config, core, db, eventbus)
+            joinedEvents = 0
+
+            assert.is_true(channel:MoveTo(3))
+            advance(Config.ChannelJoinRetry)
+
+            assert.same({NAME .. "3"}, _G.GetChannelJoinRequests())
+            assert.is_true(channel:IsJoined())
+            assert.equals(1, joinedEvents)
+            assert.is_false(lastMoved)
         end)
     end)
 

@@ -18,7 +18,8 @@ end
 
 -- Chat channels, see SetChatChannels(names): the channels the player is in, in slot
 -- order (default: General and Trade; nil restores it). JoinTemporaryChannel adds one
--- at the end, unless SetChannelJoinRefused(true) makes the server ignore the join.
+-- at the end, unless SetChannelJoinRefused makes the server ignore the join: true for
+-- every channel, or a list of the channel names that are refused.
 -- GetChannelJoinRequests() lists the names passed to JoinTemporaryChannel since
 -- SetChatChannels. The state is shared by every addon stack of a test.
 local defaultChannels = {"General", "Trade"}
@@ -65,7 +66,13 @@ end
 
 _G.JoinTemporaryChannel = function(name)
     joinRequests[#joinRequests + 1] = name
-    if not joinRefused and _G.GetChannelName(name) == 0 then
+    local refused = joinRefused == true
+    if type(joinRefused) == "table" then
+        for _, refusedName in ipairs(joinRefused) do
+            if string.lower(refusedName) == string.lower(name) then refused = true end
+        end
+    end
+    if not refused and _G.GetChannelName(name) == 0 then
         chatChannels[#chatChannels + 1] = name
     end
     return 0, nil

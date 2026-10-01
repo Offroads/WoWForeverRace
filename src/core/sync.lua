@@ -1041,7 +1041,19 @@ end
 
 -- We are in the realm channel now (login, /reload, or sharing switched back on) and
 -- may be behind the realm: compare with it right away.
-function WoWForeverRaceSync:OnChannelJoined()
+-- moved: we came from a channel with a lower number, together with everybody on it
+-- (Channel:MoveTo). We were in step with them, so we only compare again at a random
+-- moment soon, not all of us at once.
+function WoWForeverRaceSync:OnChannelJoined(moved)
+    if moved then
+        local _self = self
+        C_Timer.After(math.random() * self.Config.ChannelFollowUp, function()
+            if _self.isReady then
+                _self:SendChannelSync()
+            end
+        end)
+        return
+    end
     self:SendChannelSync(true)
 end
 

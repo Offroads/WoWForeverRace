@@ -182,6 +182,10 @@ local WoWForeverRaceConfig = {
     -- that every addon user of the faction joins. While it carries traffic it is the main
     -- path, and yell, guild, group and buddy sync only run as its backup, see Channel:IsLive.
     RaceChannelPrefix = "WFRace",
+    -- A channel that asks for a password is given up for the same name with the next number
+    -- (WFRaceHorde2, ...), and the highest number any player is on wins, see Channel:MoveTo
+    ChannelMaxIndex = 5,       -- the last number tried
+    ChannelMoveDelay = 5,      -- a move heard outside the channel is passed on to it after a random delay up to this
     ChannelJoinDelay = 10,     -- seconds after login before the first join attempt
     ChannelJoinRetry = 5,      -- seconds between join checks
     ChannelJoinMaxWait = 60,   -- join anyway when the client's own channels didn't show up by then
@@ -221,6 +225,7 @@ local WoWForeverRaceConfig = {
             PlayerHistorySync = "PHSYNC",
             ChannelSync = "CHSYNC",
             ChannelOffer = "CHOFFR",
+            ChannelMove = "CHMOVE",
         },
     },
     Events = {

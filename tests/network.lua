@@ -77,7 +77,12 @@ describe("Network", function()
 
     describe("RACE channel", function()
         local RACE_CHANNEL = WoWForeverRace.Config.RaceChannelPrefix .. "Alliance"
-        local core, eventbus, channel, network, commSpy
+        local core, eventbus, channel, network, commSpy, sent
+
+        local function receive(envelope, distribution, sender)
+            network:HandleAddonMessage(WoWForeverRace.Config.Network.Prefix, encodeEnvelope(envelope),
+                    distribution, sender or "Dude")
+        end
 
         before_each(function()
             _G.C_Timer.Reset()
@@ -88,7 +93,10 @@ describe("Network", function()
             eventbus = WoWForeverRace.EventBus()
             channel = WoWForeverRace.Channel(WoWForeverRace.Config, core, db, eventbus)
             network = WoWForeverRace.Network(core, eventbus, channel)
-            commSpy = spy.on(AceComm, "SendCommMessage")
+            sent = {}
+            commSpy = stub(AceComm, "SendCommMessage", function(_, _, message, distribution, target)
+                sent[#sent + 1] = {envelope = decodeMessage(message), distribution = distribution, target = target}
+            end)
         end)
 
         after_each(function()
@@ -141,24 +149,127 @@ describe("Network", function()
 
         it("notes who was heard on a chat channel", function()
             channel:TryJoin()
-            local Prefix = WoWForeverRace.Config.Network.Prefix
             assert.is_false(channel:IsLive())
 
             -- a whisper says nothing about the channel, and neither does the other faction
-            network:HandleAddonMessage(Prefix, encodeEnvelope({NetworkEvents.ChannelSync, {1}, "Alliance"}),
-                    "WHISPER", "Dude")
-            network:HandleAddonMessage(Prefix, encodeEnvelope({NetworkEvents.ChannelSync, {1}, "Horde"}),
-                    "CHANNEL", "Dude")
+            receive({NetworkEvents.ChannelSync, {1}, "Alliance"}, "WHISPER")
+            receive({NetworkEvents.ChannelSync, {1}, "Horde"}, "CHANNEL")
             -- our own messages come back to us on a channel
-            network:HandleAddonMessage(Prefix, encodeEnvelope({NetworkEvents.ChannelSync, {1}, "Alliance"}),
-                    "CHANNEL", "Nub")
+            receive({NetworkEvents.ChannelSync, {1}, "Alliance"}, "CHANNEL", "Nub")
             assert.is_false(channel:IsLive())
             assert.equals(0, channel:Size())
 
-            network:HandleAddonMessage(Prefix, encodeEnvelope({NetworkEvents.ChannelSync, {1}, "Alliance"}),
-                    "CHANNEL", "Dude")
+            receive({NetworkEvents.ChannelSync, {1}, "Alliance"}, "CHANNEL")
             assert.is_true(channel:IsLive())
             assert.equals(1, channel:Size())
+        end)
+    end)
+
+    describe("realm channel number", function()
+        local Config = WoWForeverRace.Config
+        local RACE_CHANNEL = Config.RaceChannelPrefix .. "Alliance"
+        local core, eventbus, channel, network, commStub, sent
+
+        local function receive(envelope, distribution, sender)
+            network:HandleAddonMessage(Config.Network.Prefix, encodeEnvelope(envelope), distribution, sender or "Dude")
+        end
+
+        local function sentOf(event)
+            local out = {}
+            for _, s in ipairs(sent) do
+                if s.envelope[1] == event then out[#out + 1] = s end
+            end
+            return out
+        end
+
+        before_each(function()
+            _G.C_Timer.Reset()
+            SetChatChannels({"General", "Trade", RACE_CHANNEL})
+            local db = LibStub("AceDB-3.0"):New("WoWForeverRace_DB", WoWForeverRace.DefaultDB, true)
+            db:ResetDB()
+            core = WoWForeverRace.Core(Config, "Nub", "NubVille")
+            eventbus = WoWForeverRace.EventBus()
+            channel = WoWForeverRace.Channel(Config, core, db, eventbus)
+            network = WoWForeverRace.Network(core, eventbus, channel)
+            sent = {}
+            commStub = stub(AceComm, "SendCommMessage", function(_, _, message, distribution, target)
+                sent[#sent + 1] = {envelope = decodeMessage(message), distribution = distribution, target = target}
+            end)
+        end)
+
+        after_each(function()
+            commStub:revert()
+            SetChatChannels(nil)
+        end)
+
+        it("is left out of the envelope on the first channel name", function()
+            channel:TryJoin()
+            network:SendObject(NetworkEvents.BuddyPing, {1}, "WHISPER", "Dude")
+
+            assert.same({NetworkEvents.BuddyPing, {1}, "Alliance"}, sent[1].envelope)
+        end)
+
+        it("travels in every envelope from the second name on", function()
+            channel:MoveTo(2)
+            network:SendObject(NetworkEvents.BuddyPing, {1}, "WHISPER", "Dude")
+
+            assert.same({NetworkEvents.BuddyPing, {1}, "Alliance", 2}, sent[1].envelope)
+        end)
+
+        it("moves us when a higher one is heard on our channel, without telling the channel again", function()
+            channel:TryJoin()
+            receive({NetworkEvents.ChannelMove, 2, "Alliance", 2}, "CHANNEL")
+
+            assert.equals(2, channel:Index())
+            _G.C_Timer.Advance(Config.ChannelMoveDelay)
+            assert.equals(0, #sentOf(NetworkEvents.ChannelMove))
+        end)
+
+        it("is passed on to our channel when heard outside of it, then we move", function()
+            channel:TryJoin()
+            -- a player our channel refused whispers us from the next one
+            receive({NetworkEvents.BuddyPing, {0, {}, 0}, "Alliance", 2}, "WHISPER")
+            assert.equals(1, channel:Index(), "after a random delay")
+
+            _G.C_Timer.Advance(Config.ChannelMoveDelay)
+
+            assert.equals(2, channel:Index())
+            local moves = sentOf(NetworkEvents.ChannelMove)
+            assert.equals(1, #moves)
+            -- to the channel we leave (number 3 in our list), telling the new number
+            assert.equals("CHANNEL", moves[1].distribution)
+            assert.equals("3", moves[1].target)
+            assert.same({NetworkEvents.ChannelMove, 2, "Alliance", 2}, moves[1].envelope)
+        end)
+
+        it("is not passed on when another player told the channel first", function()
+            channel:TryJoin()
+            receive({NetworkEvents.BuddyPing, {0, {}, 0}, "Alliance", 2}, "YELL")
+            receive({NetworkEvents.ChannelMove, 2, "Alliance", 2}, "CHANNEL", "Dudette")
+            assert.equals(2, channel:Index())
+
+            _G.C_Timer.Advance(Config.ChannelMoveDelay)
+            assert.equals(0, #sentOf(NetworkEvents.ChannelMove))
+        end)
+
+        it("is taken before the first join, with nobody to tell", function()
+            receive({NetworkEvents.OfferSync, {11}, "Alliance", 3}, "WHISPER")
+            _G.C_Timer.Advance(Config.ChannelMoveDelay)
+
+            assert.equals(3, channel:Index())
+            assert.equals(RACE_CHANNEL .. "3", channel:Name())
+            assert.equals(0, #sentOf(NetworkEvents.ChannelMove))
+        end)
+
+        it("is ignored when lower, not a channel number, or from the other faction", function()
+            channel:MoveTo(2)
+            for _, index in ipairs({1, 2, 2.5, "3", {}, Config.ChannelMaxIndex + 1}) do
+                receive({NetworkEvents.ChannelMove, 2, "Alliance", index}, "CHANNEL")
+            end
+            receive({NetworkEvents.ChannelMove, 3, "Horde", 3}, "CHANNEL")
+            _G.C_Timer.Advance(Config.ChannelMoveDelay)
+
+            assert.equals(2, channel:Index())
         end)
     end)
 

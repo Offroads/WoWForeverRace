@@ -42,6 +42,7 @@ local EVENT_NAMES = {
     PHSYNC    = "PlayerHistorySync",
     CHSYNC    = "ChannelSync",
     CHOFFR    = "ChannelOffer",
+    CHMOVE    = "ChannelMove",
 }
 
 local function formatAge(timestamp)

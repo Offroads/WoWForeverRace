@@ -1191,6 +1191,23 @@ describe("Sync", function()
                 assert.equals("RACE", sent[1].channel)
             end)
 
+            it("after moving up with the whole channel, compares again at a random moment soon", function()
+                channel:TryJoin()
+                sent = {}
+                sync.isReady = true
+
+                eventbus:PublishEvent(Config.Events.ChannelJoined, true)
+                assert.equals(0, #sent, "not everybody at once")
+
+                AdvanceClock(Config.ChannelFollowUp)
+                assert.equals(1, #sentOf(NetEvents.ChannelSync))
+
+                -- a regular round: the trade asks for no player history
+                eventbus:PublishEvent(NetEvents.ChannelOffer, {12345, 678}, "Dude", "WHISPER")
+                AdvanceClock(Config.ChannelSyncWait + 1)
+                assert.is_nil(sentOf(NetEvents.BuddyPing)[1].payload[4])
+            end)
+
             it("stays quiet outside the channel, with sharing off and after the race", function()
                 sync:SendChannelSync()
                 assert.equals(0, #sent)
