@@ -19,6 +19,9 @@ Keeping the leaderboards in step costs far less once many players use the addon.
   10 seconds instead of answering every player who announces theirs, and you
   no longer shout leaderboards to the zone that another player just shouted.
 
+### Fixed
+- Turning off Debug Mode in the addon settings no longer throws a Lua error.
+
 ## v0.1.0-beta10 - 2026-09-29
 
 Party and raid members now keep their leaderboards in step with each other.

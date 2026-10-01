@@ -78,23 +78,23 @@ function WoWForeverRaceDebugFrame.new(Config, Core, DB, EventBus)
     return self
 end
 
+-- Releasing a Window hides it, which fires its OnClose callback (another Release,
+-- a no-op) and clears the fields, so keep a local reference.
+function WoWForeverRaceDebugFrame:ReleaseFrame()
+    local frame = self.frame
+    if not frame then return end
+    self.frame = nil
+    self.scroll = nil
+    frame:Release()
+end
+
 function WoWForeverRaceDebugFrame:Hide()
     self:HideLog()
-    if self.frame then
-        self.frame:Hide()
-        self.frame:Release()
-        self.frame = nil
-        self.scroll = nil
-    end
+    self:ReleaseFrame()
 end
 
 function WoWForeverRaceDebugFrame:Show()
-    if self.frame then
-        self.frame:Hide()
-        self.frame:Release()
-        self.frame = nil
-        self.scroll = nil
-    end
+    self:ReleaseFrame()
 
     local _self = self
 
@@ -160,12 +160,11 @@ function WoWForeverRaceDebugFrame:Show()
 end
 
 function WoWForeverRaceDebugFrame:HideLog()
-    if self.logFrame then
-        self.logFrame:Hide()
-        self.logFrame:Release()
-        self.logFrame = nil
-        self.logBox = nil
-    end
+    local frame = self.logFrame
+    if not frame then return end
+    self.logFrame = nil
+    self.logBox = nil
+    frame:Release()
 end
 
 -- Every debug / trace message of the session in a scrollable edit box:
