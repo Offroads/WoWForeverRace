@@ -179,7 +179,8 @@ local WoWForeverRaceConfig = {
 
     BuddySyncInterval = 600,   -- buddy ping every 10 minutes
     BuddyPingBatchSize = 50,   -- max buddies to ping per cycle (random sample if more)
-    BuddyMaxAge = 3 * 24 * 60 * 60, -- buddies not heard from for 3 days are dropped at login
+    BuddyMaxAge = 3 * 24 * 60 * 60, -- buddies not heard from for 3 days are dropped after login
+    BuddyPruneDelay = 60,      -- seconds after the login sync before they are dropped: who is online answers first
 
     GroupSyncInterval = 300,   -- group sync every 5 minutes while grouped (members already in sync don't answer)
     GroupSyncWait = 5,         -- seconds a group pinger collects pongs before sending to the group

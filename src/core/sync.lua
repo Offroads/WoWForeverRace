@@ -173,15 +173,13 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network, Channel)
     EventBus:RegisterCallback(self.Config.Events.ChannelJoined, self, self.OnChannelJoined)
     EventBus:RegisterCallback(self.Config.Events.ChannelHeard, self, self.OnChannelHeard)
 
-    self:PruneBuddies()
-
     return self
 end
 
 -- Every sender of OFFERSYNC, BPING and BPONG and every player heard on the realm channel
 -- becomes a buddy, so on a busy realm the list grows into thousands of entries and most
--- random pings would go to players who stopped playing. Runs once per login / reload;
--- there is no cap on the count.
+-- random pings would go to players who stopped playing. Runs once per login / reload,
+-- BuddyPruneDelay after the login sync is done (SetReady); there is no cap on the count.
 function WoWForeverRaceSync:PruneBuddies()
     local buddies = self.DB.factionrealm.buddies
     local oldest = self.Core:Now() - self.Config.BuddyMaxAge
@@ -349,6 +347,11 @@ function WoWForeverRaceSync:SetReady()
         self.isReady = true
         WoWForeverRace:DebugPrint("Sync done", true)
         self:SendBuddyPings()
+        -- After BuddyMaxAge offline every buddy looks stale. The ones who are online
+        -- answer that ping or are heard on the realm channel in the next moments, so
+        -- the stale ones are only dropped after that.
+        local _self = self
+        C_Timer.After(self.Config.BuddyPruneDelay, function() _self:PruneBuddies() end)
         -- already grouped at login or /reload: GROUP_ROSTER_UPDATE came before we
         -- were ready, so compare with the group now instead of on its next change
         self:ScheduleGroupSync()
