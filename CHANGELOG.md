@@ -12,9 +12,9 @@ channel, and keeping them in step costs far less once many players use the addon
   one small message. The channel is joined a few seconds after login, shows up
   in no chat window and is gone when you remove the addon.
 - When somebody locks the channel with a password, the addon uses the same name
-  with a number behind it instead (`WFRaceHorde2`, and so on), and every client
-  follows to the highest number in use, also the ones still inside the locked
-  channel.
+  with a number behind it instead (`WFRaceHorde2`, and so on). The players
+  still inside the locked channel follow once one of them hears from a player
+  on the new one.
 - About once per hour, and right after you log in, your leaderboards are
   compared with the channel and traded with one other player to catch
   whatever was missed.

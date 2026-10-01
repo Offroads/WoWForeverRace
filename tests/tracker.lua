@@ -656,6 +656,53 @@ describe("Tracker", function()
             assert.equals(2, #sentTo("RACE"))
         end)
 
+        it("sends a waiting ding to the channel we are moving to", function()
+            channel:NoteSender("Dude")
+            _G.math.random = function() return 0 end
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+
+            -- the realm moves to the next channel name before the ding is due
+            channel:MoveTo(2)
+            assert.is_false(channel:IsJoined())
+            advance(config.ChannelDingDelayMin)
+            assert.equals(0, #sent, "waits for the join")
+
+            advance(config.ChannelJoinRetry * 2)
+            assert.is_true(channel:IsJoined())
+            assert.equals("Nubone", channelBatch()[1].name)
+            assert.equals(1, #sent)
+        end)
+
+        it("sends our own waiting dings the backup way when we left the channel", function()
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            -- learned by whisper, only waiting to be passed on
+            tracker:OnSyncResult({ playerInfo("Nubtwo", 6, WARRIORIDX), })
+            assert.equals(0, #sent)
+
+            -- the player left the channel
+            _G.SetChatChannels({"General"})
+            advance(config.ChannelDingDelayMax)
+
+            assert.equals(0, #sentTo("RACE"))
+            local yells = sentTo("YELL")
+            assert.equals(1, #yells)
+            local players = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(yells[1].payload[1])
+            assert.equals(1, #players)
+            assert.equals("Nubone", players[1].name)
+        end)
+
+        it("does not repeat the backup for a ding that already took it", function()
+            -- joined, but nobody heard: the ding goes to the zone right away
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            assert.equals(1, #sentTo("YELL"))
+
+            _G.SetChatChannels({"General"})
+            advance(config.ChannelDingDelayMax)
+
+            assert.equals(1, #sent)
+        end)
+
         it("sends nothing to the channel after sharing was turned off", function()
             channel:NoteSender("Dude")
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })

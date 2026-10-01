@@ -390,6 +390,34 @@ describe("Channel", function()
             assert.equals(1, channel:Index())
         end)
 
+        it("starts from scratch when sharing is switched off and on during a move", function()
+            advance(Config.ChannelSettleTime)
+            -- the channel we move to asks for a password, so the move is still under way
+            _G.SetChannelJoinRefused({NAME .. "2"})
+            channel:MoveTo(2)
+            channel.Thread:FireEvent("CHANNEL_PASSWORD_REQUEST", NAME .. "2")
+
+            db.profile.options.networking = false
+            channel:OnNetworkingChanged()
+            db.profile.options.networking = true
+            channel:OnNetworkingChanged()
+            advance(Config.ChannelJoinRetry * 2)
+
+            assert.is_true(channel:IsJoined())
+            assert.equals(NAME .. "3", channel:Name())
+            -- a fresh join: it runs the join sync and holds our dings back for it
+            assert.is_false(lastMoved)
+            assert.is_true(channel:SettleDelay() > 0)
+        end)
+
+        it("tells whether a join is under way", function()
+            assert.is_false(channel:IsJoining())
+            channel:MoveTo(2)
+            assert.is_true(channel:IsJoining())
+            advance(Config.ChannelJoinRetry)
+            assert.is_false(channel:IsJoining())
+        end)
+
         it("before the first join, just joins the higher number", function()
             _G.C_Timer.Reset()
             _G.SetChatChannels(nil)

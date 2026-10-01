@@ -117,6 +117,11 @@ function WoWForeverRaceChannel:IsJoined()
     return self.status == JOINED and self:Number() ~= nil
 end
 
+-- A join is under way: its next attempt, or the check that confirms it, is scheduled.
+function WoWForeverRaceChannel:IsJoining()
+    return self.status == IDLE and self.joinScheduled and self:Wanted()
+end
+
 -- Whether the channel carries traffic: we are in it and heard another player on it
 -- lately (see NoteSender). Only then does it replace the other sync flows; an empty
 -- or broken channel leaves them running.
@@ -336,6 +341,9 @@ end
 
 -- The sharing option was switched: leave the channel with it, join when it comes back.
 function WoWForeverRaceChannel:OnNetworkingChanged()
+    -- whatever join was under way, the next one starts from scratch (not as the move
+    -- with everybody that a join interrupted by this may have been)
+    self.moved = false
     if self:Wanted() then
         if self.status == IDLE or self.status == FAILED then
             self.status = IDLE

@@ -55,6 +55,7 @@ function WoWForeverRaceTracker.new(Config, Core, DB, EventBus, Network, Channel)
     self.pendingDings = {}
     self.dingPushPending = false
     self.pendingChannelDings = {}  -- [name] = playerInfo: dings waiting to go to the realm channel
+    self.backupSkipped = {}        -- [name] = true: those of them we spotted ourselves and kept off the backup paths
     self.channelDingPending = false
 
     self.launchPurged = false      -- true once PurgePreLaunchData ran after the realm launch
@@ -369,8 +370,9 @@ function WoWForeverRaceTracker:ScheduleDingPush(changedPlayers, toGroup)
     -- the realm channel reaches every addon user of our faction with one message;
     -- everything below is the backup for when nobody is heard there
     if self:ChannelJoined() then
-        self:ScheduleChannelDingPush(changedPlayers)
-        if self:ChannelLive() then return end
+        local live = self:ChannelLive()
+        self:ScheduleChannelDingPush(changedPlayers, live)
+        if live then return end
     end
 
     -- YELL immediately so zone players get real-time updates
@@ -442,9 +444,14 @@ end
 -- delay: many clients spot the same level-up within seconds of each other, and whoever
 -- sends first makes the others drop theirs (DropHeardDings). Right after joining the
 -- channel they also wait for the join sync (Channel:SettleDelay).
-function WoWForeverRaceTracker:ScheduleChannelDingPush(changedPlayers)
+-- backupSkipped: our own sightings that only go to the channel (ScheduleDingPush on a
+-- live channel); should the channel be gone when they are due, they take the backup paths.
+function WoWForeverRaceTracker:ScheduleChannelDingPush(changedPlayers, backupSkipped)
     for _, p in ipairs(changedPlayers) do
         self.pendingChannelDings[p.name] = p
+        if backupSkipped then
+            self.backupSkipped[p.name] = true
+        end
     end
 
     if self.channelDingPending then return end
@@ -470,10 +477,19 @@ function WoWForeverRaceTracker:FlushChannelDingPush()
         return
     end
 
+    -- between two channel names (Channel:MoveTo): the dings go to the one we are joining
+    if not self:ChannelJoined() and self.Channel:IsJoining() then
+        local _self = self
+        C_Timer.After(self.Config.ChannelJoinRetry, function()
+            _self:FlushChannelDingPush()
+        end)
+        return
+    end
+
     self.channelDingPending = false
 
-    local pending = self.pendingChannelDings
-    self.pendingChannelDings = {}
+    local pending, backupSkipped = self.pendingChannelDings, self.backupSkipped
+    self.pendingChannelDings, self.backupSkipped = {}, {}
 
     if not self.DB.profile.options.networking then return end
     if self.DB.factionrealm.finished then return end
@@ -486,6 +502,22 @@ function WoWForeverRaceTracker:FlushChannelDingPush()
     end
     if #players == 0 then return end
     table.sort(players, function(a, b) return a.name < b.name end)
+
+    if not self:ChannelJoined() then
+        -- We are not in the channel anymore (a /leave, a kick). What we spotted ourselves
+        -- takes the backup paths after all, they were skipped for it; what we only
+        -- passed on is dropped, like a client without the channel never passes on.
+        local own = {}
+        for _, p in ipairs(players) do
+            if backupSkipped[p.name] then
+                own[#own + 1] = p
+            end
+        end
+        if #own > 0 then
+            self:ScheduleDingPush(own)
+        end
+        return
+    end
 
     local batchstr = WoWForeverRace.Serializer.SerializePlayerInfoBatch(players)
     self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, {batchstr, false, 0}, "RACE")
@@ -527,6 +559,7 @@ function WoWForeverRaceTracker:DropHeardDings(batch)
                 and (heard.level > pending.level
                 or (heard.level == pending.level and heard.dingedAt <= pending.dingedAt)) then
             self.pendingChannelDings[heard.name] = nil
+            self.backupSkipped[heard.name] = nil
         end
     end
 end
