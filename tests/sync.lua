@@ -454,6 +454,27 @@ describe("Sync", function()
             assert.spy(networkSpy).called_at_most(1)
         end)
 
+        it("picks the guild partner at random, not the member online the longest", function()
+            local networkSpy = spy.on(network, "SendObject")
+            _G.SetIsInGuild(true)
+
+            sync:SendGuildSync()
+            networkSpy:clear()
+
+            -- First has been online the longest (lowest loginTime)
+            for _, offer in ipairs({{"First", 100}, {"Second", 300}, {"Third", 200}}) do
+                eventbus:PublishEvent(NetEvents.GuildOffer,
+                        {11, nil, myFullHash + 1, myGlobalHash, myClassHash, offer[2], myFTLHash}, offer[1])
+            end
+            local random = stub(math, "random", 2)
+            AdvanceClock(WoWForeverRace.Config.GuildSyncWait + 1)
+            random:revert()
+
+            assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.StartSync,
+                    match.is_table(), "WHISPER", "Second")
+            assert.spy(networkSpy).called_at_most(1)
+        end)
+
         it("skips the FTL payload when a guild STARTSYNC carries a matching FTL hash", function()
             local networkSpy = spy.on(network, "SendObject")
 
@@ -690,6 +711,42 @@ describe("Sync", function()
             end
             assert.equals(0, count)
         end)
+
+        it("drops buddies not seen for BuddyMaxAge at login", function()
+            local maxAge = WoWForeverRace.Config.BuddyMaxAge
+            db.factionrealm.buddies = {
+                ["Stale Buddy"] = {lastSeen = time - maxAge - 1},
+                ["Unseen Buddy"] = {},
+                ["Fresh Buddy"] = {lastSeen = time - 60},
+                ["Edge Buddy"] = {lastSeen = time - maxAge},
+            }
+            local updates = 0
+            eventbus:RegisterCallback(Events.BuddyUpdate, {}, function() updates = updates + 1 end)
+
+            WoWForeverRace.Sync(WoWForeverRace.Config, core, db, eventbus, network)
+
+            assert.is_nil(db.factionrealm.buddies["Stale Buddy"])
+            assert.is_nil(db.factionrealm.buddies["Unseen Buddy"])
+            assert.is_table(db.factionrealm.buddies["Fresh Buddy"])
+            assert.is_table(db.factionrealm.buddies["Edge Buddy"])
+            assert.equals(1, updates)
+        end)
+
+        it("keeps any number of recent buddies and stays quiet when nothing is stale", function()
+            db.factionrealm.buddies = {}
+            for i = 1, 400 do
+                db.factionrealm.buddies["Buddy " .. i] = {lastSeen = time - i}
+            end
+            local updates = 0
+            eventbus:RegisterCallback(Events.BuddyUpdate, {}, function() updates = updates + 1 end)
+
+            WoWForeverRace.Sync(WoWForeverRace.Config, core, db, eventbus, network)
+
+            local count = 0
+            for _ in pairs(db.factionrealm.buddies) do count = count + 1 end
+            assert.equals(400, count)
+            assert.equals(0, updates)
+        end)
     end)
 
     describe("group sync", function()
@@ -841,16 +898,17 @@ describe("Sync", function()
             assert.equals(1, pongs)
         end)
 
-        it("pongs a group ping when the data differs, so the pinger can push back", function()
-            local pongs = 0
-            network.SendObject = function(_, event)
-                if event == NetEvents.BuddyPong then pongs = pongs + 1 end
+        it("pongs a group ping when the data differs, flagged so the pinger runs its round", function()
+            local pongs = {}
+            network.SendObject = function(_, event, payload)
+                if event == NetEvents.BuddyPong then pongs[#pongs + 1] = payload end
             end
             sync.isReady = true
 
             sync:OnNetBuddyPing({myFullHash + 1, {}, myFTLHash}, "Dude", "PARTY")
 
-            assert.equals(1, pongs)
+            assert.equals(1, #pongs)
+            assert.is_true(pongs[1][4])
         end)
 
         it("pongs a group ping before the login sync is done", function()
@@ -874,6 +932,159 @@ describe("Sync", function()
             AdvanceClock(2)
 
             assert.equals(0, #groupPings)
+        end)
+
+        describe("one data responder per ping", function()
+            local CLASS = 11
+            local sent, fullHash
+
+            local function sentOf(event)
+                local out = {}
+                for _, s in ipairs(sent) do
+                    if s.event == event then out[#out + 1] = s end
+                end
+                return out
+            end
+
+            -- our per-board hashes with some boards made to differ
+            local function hashesDiffering(boards)
+                local hashes = sync:MyBoardHashes()
+                for _, boardIndex in ipairs(boards) do hashes[boardIndex + 1] = 1 end
+                return hashes
+            end
+
+            local function groupPong(name, boards, ftlHash)
+                eventbus:PublishEvent(NetEvents.BuddyPong, {fullHash + 1, hashesDiffering(boards), ftlHash or myFTLHash, true}, name)
+            end
+
+            before_each(function()
+                sent = {}
+                network.SendObject = function(_, event, payload, channel, target)
+                    sent[#sent + 1] = {event = event, payload = payload, channel = channel, target = target}
+                end
+                db.factionrealm.leaderboard[0].players = {
+                    {name = "Nub One", level = 12, classIndex = CLASS, dingedAt = time},
+                }
+                db.factionrealm.leaderboard[CLASS].players = {
+                    {name = "Nub One", level = 12, classIndex = CLASS, dingedAt = time},
+                }
+                fullHash = WoWForeverRace.Sync.ComputeFullHash(db, WoWForeverRace.Config, nil, core:MyFaction())
+                sync.isReady = true
+                _G.SetGroupState(3, true, false)
+            end)
+
+            it("answers a differing group ping with its hashes only, no data", function()
+                sync:OnNetBuddyPing({fullHash + 1, hashesDiffering({0}), myFTLHash + 1}, "Dude", "RAID")
+
+                assert.equals(1, #sent)
+                assert.equals(NetEvents.BuddyPong, sent[1].event)
+                assert.equals("WHISPER", sent[1].channel)
+                assert.equals("Dude", sent[1].target)
+                assert.is_true(sent[1].payload[4])
+            end)
+
+            it("sends what the answering members lack to the group once, then picks one of them", function()
+                sync:SendGroupSync()
+                assert.equals(1, #sentOf(NetEvents.BuddyPing))
+                assert.equals("GROUP", sentOf(NetEvents.BuddyPing)[1].channel)
+
+                groupPong("Ann Wanderer", {0})
+                groupPong("Bob Faraway", {0}, myFTLHash + 1)
+                assert.equals(0, #sentOf(NetEvents.SyncPayload), "nothing before the window closes")
+
+                AdvanceClock(WoWForeverRace.Config.GroupSyncWait)
+
+                local syncs = sentOf(NetEvents.SyncPayload)
+                assert.equals(1, #syncs, "board 0 once, although both lack it")
+                assert.equals("GROUP", syncs[1].channel)
+                local ftls = sentOf(NetEvents.FTLSync)
+                assert.equals(1, #ftls)
+                assert.equals("GROUP", ftls[1].channel)
+
+                local starts = sentOf(NetEvents.StartSync)
+                assert.equals(1, #starts)
+                assert.equals("WHISPER", starts[1].channel)
+                assert.is_true(starts[1].target == "Ann Wanderer" or starts[1].target == "Bob Faraway")
+                assert.is_true(starts[1].payload[5])
+                assert.is_nil(starts[1].payload[4], "no player history in group sync")
+                assert.same(sync:MyBoardHashes(), starts[1].payload[2])
+            end)
+
+            it("sends nothing when nobody answers", function()
+                sync:SendGroupSync()
+                AdvanceClock(WoWForeverRace.Config.GroupSyncWait)
+
+                assert.equals(1, #sent)
+                assert.equals(NetEvents.BuddyPing, sent[1].event)
+            end)
+
+            it("serves a late answer with only what nobody sent yet this round", function()
+                local syncSpy = spy.on(sync, "Sync")
+                sync:SendGroupSync()
+                groupPong("Ann Wanderer", {0})
+                AdvanceClock(WoWForeverRace.Config.GroupSyncWait)
+                assert.spy(syncSpy).was_called_with(match.is_ref(sync), nil, 0, "GROUP")
+                sent = {}
+                syncSpy:clear()
+
+                -- needs board 0 too: already sent to the whole group
+                groupPong("Bob Faraway", {0})
+                assert.equals(0, #sent)
+
+                -- needs the class board: sent now, and nobody else is asked to answer
+                groupPong("Cid Late", {CLASS})
+                assert.spy(syncSpy).was_called_with(match.is_ref(sync), nil, CLASS, "GROUP")
+                assert.spy(syncSpy).called_at_most(1)
+                assert.equals(0, #sentOf(NetEvents.StartSync))
+            end)
+
+            it("lets a late answer respond when nobody answered in time", function()
+                sync:SendGroupSync()
+                AdvanceClock(WoWForeverRace.Config.GroupSyncWait)
+                sent = {}
+
+                groupPong("Ann Wanderer", {0})
+
+                assert.equals(1, #sentOf(NetEvents.SyncPayload))
+                local starts = sentOf(NetEvents.StartSync)
+                assert.equals(1, #starts)
+                assert.equals("Ann Wanderer", starts[1].target)
+            end)
+
+            it("drops a round a newer ping replaced", function()
+                sync:SendGroupSync()
+                groupPong("Ann Wanderer", {0})
+                AdvanceClock(1)
+                sync:SendGroupSync()
+                sent = {}
+
+                -- the first round's window ends first: it was replaced, so nothing
+                AdvanceClock(WoWForeverRace.Config.GroupSyncWait - 1)
+                assert.equals(0, #sent)
+                -- the second round heard no answer
+                AdvanceClock(1)
+                assert.equals(0, #sent)
+            end)
+
+            it("answers a STARTSYNC with the toGroup flag to the group", function()
+                eventbus:PublishEvent(NetEvents.StartSync, {CLASS, hashesDiffering({0}), myFTLHash + 1, nil, true}, "Pinger")
+
+                local syncs = sentOf(NetEvents.SyncPayload)
+                assert.equals(1, #syncs)
+                assert.equals("GROUP", syncs[1].channel)
+                local ftls = sentOf(NetEvents.FTLSync)
+                assert.equals(1, #ftls)
+                assert.equals("GROUP", ftls[1].channel)
+                assert.equals(2, #sent)
+            end)
+
+            it("ignores a STARTSYNC with the toGroup flag when not grouped", function()
+                _G.SetGroupState(nil)
+
+                eventbus:PublishEvent(NetEvents.StartSync, {CLASS, hashesDiffering({0}), myFTLHash + 1, nil, true}, "Pinger")
+
+                assert.equals(0, #sent)
+            end)
         end)
     end)
 

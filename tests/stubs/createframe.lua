@@ -86,8 +86,9 @@ function Frame:FireEvent(event, ...)
     end
 end
 
+-- the frame type is case-insensitive in WoW (LibCompress asks for a "frame")
 function _G.CreateFrame(frameType)
-    if frameType ~= "Frame" then
+    if type(frameType) ~= "string" or frameType:lower() ~= "frame" then
         error("unsupported type arg to CreateFrame(" .. tostring(frameType) .. ")")
     end
 

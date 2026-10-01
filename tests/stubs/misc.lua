@@ -17,6 +17,7 @@ _G.wipe = function(t)                 -- ChatThrottleLib (as table.wipe)
     return t
 end
 _G.table.wipe = _G.wipe
+_G.sort = table.sort                  -- LibCompress (the real one, see testbase.lua)
 _G.geterrorhandler = function()       -- ChatThrottleLib, EventBus
     return error
 end

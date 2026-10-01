@@ -15,7 +15,15 @@ dofile("libs/AceDB/AceDB-3.0.lua")
 dofile("libs/AceSerializer/AceSerializer-3.0.lua")
 dofile("libs/AceComm/ChatThrottleLib.lua")
 dofile("libs/AceComm/AceComm-3.0.lua")
-dofile("tests/stubs/libcompressmock.lua")
+-- Tests run on a pass-through LibCompress. Scripts that measure real message sizes
+-- (scripts/netsize.lua) set WFR_REAL_LIBCOMPRESS before requiring this file to get
+-- the real one, which needs WoW's `bit` library (LuaBitOp, in the dev image).
+if _G.WFR_REAL_LIBCOMPRESS then
+    _G.bit = _G.bit or require("bit")
+    dofile("libs/LibCompress/LibCompress.lua")
+else
+    dofile("tests/stubs/libcompressmock.lua")
+end
 
 -- addon
 WoWForeverRace = {}

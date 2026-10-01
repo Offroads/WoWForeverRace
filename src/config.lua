@@ -164,14 +164,17 @@ local WoWForeverRaceConfig = {
     BroadcastInterval = 60,
     YellChunkSize = 10,
     YellChunkDelay = 2,
+    DataRequestInterval = 10,  -- at most one DATAREQ per 10s: wait for that answer instead of asking every beacon
 
     GuildSyncInterval = 300,   -- periodic guild sync every 5 minutes
     GuildSyncWait = 10,        -- seconds to collect guild offers before picking a partner
 
     BuddySyncInterval = 600,   -- buddy ping every 10 minutes
     BuddyPingBatchSize = 50,   -- max buddies to ping per cycle (random sample if more)
+    BuddyMaxAge = 3 * 24 * 60 * 60, -- buddies not heard from for 3 days are dropped at login
 
     GroupSyncInterval = 300,   -- group sync every 5 minutes while grouped (members already in sync don't answer)
+    GroupSyncWait = 5,         -- seconds a group pinger collects pongs before sending to the group
 
     DingPushDelay = 10,        -- seconds to batch dings before pushing to guild + buddies
 
@@ -223,6 +226,16 @@ local WoWForeverRaceConfig = {
     },
 }
 WoWForeverRace.Config = WoWForeverRaceConfig
+
+-- The version to show to the player. An unpackaged checkout still holds the packager's
+-- placeholder (it starts with "@"; not spelled out here, the packager would replace it too).
+function WoWForeverRaceConfig:DisplayVersion()
+    local version = self.Version
+    if type(version) ~= "string" or version == "" or version:sub(1, 1) == "@" then
+        return "development"
+    end
+    return version
+end
 
 function WoWForeverRaceConfig:IsValidClassIndex(classIndex)
     for _, validClassIndex in ipairs(self.MopClassIndexes) do

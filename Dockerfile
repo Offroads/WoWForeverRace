@@ -4,6 +4,8 @@
 # toolchain is identical on Windows, macOS and Linux (and in CI):
 #   - Lua 5.1 (the Lua version WoW embeds) + LuaRocks
 #   - busted (unit tests), luacheck (linter), luacov (coverage)
+#   - LuaBitOp: the `bit` library WoW embeds, which the real LibCompress needs
+#     (scripts/netsize.lua; the tests use a pass-through mock)
 #   - git, subversion, curl, zip: required by the BigWigs packager (release.sh)
 #
 # Usage (see README.md):
@@ -13,7 +15,7 @@ FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
 # The compiler is only needed to build the rocks with C parts (luafilesystem,
-# luasystem, lua-term, cluacov) and is purged again in the same layer so the
+# luasystem, lua-term, cluacov, luabitop) and is purged again in the same layer so the
 # image stays small. luarocks and the Lua headers stay: Debian's luarocks
 # package owns the rocks tree and takes it along when removed.
 RUN apt-get update \
@@ -25,6 +27,7 @@ RUN apt-get update \
  && luarocks --lua-version 5.1 install busted 2.2.0-1 \
  && luarocks --lua-version 5.1 install luacov 0.15.0-1 \
  && luarocks --lua-version 5.1 install cluacov 0.1.4-1 \
+ && luarocks --lua-version 5.1 install luabitop 1.0.3-1 \
  && apt-get purge -y --auto-remove build-essential \
  && rm -rf /var/lib/apt/lists/* /root/.cache
 

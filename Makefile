@@ -7,8 +7,9 @@
 # run --rm dev make <target>`, or through the docker-* targets below, or on
 # Windows through scripts\dev.ps1.
 #
-.PHONY: help setup-dev hr lint tests check reflex-tests sim libs fetch-libs download-bw-release release \
-        docker-build docker-lint docker-tests docker-check docker-sim docker-libs docker-release docker-shell clean
+.PHONY: help setup-dev hr lint tests check reflex-tests sim netsize libs fetch-libs download-bw-release release \
+        docker-build docker-lint docker-tests docker-check docker-sim docker-netsize docker-libs docker-release \
+        docker-shell clean
 
 # filter on test FILE names (Lua pattern matched against the file name, e.g. scanner)
 INCLUDES ?=
@@ -18,7 +19,7 @@ TESTS ?= .*
 TESTOPTS ?=
 # busted run configuration from .busted: default (with coverage) or quick
 BUSTED_RUN ?= default
-# group traffic simulation, see scripts/groupsim.lua
+# traffic simulation, see scripts/groupsim.lua (SV is also used by netsize)
 SCENARIO ?= all
 SIZES ?= 5,40
 SV ?=
@@ -38,12 +39,13 @@ help:
 	@echo "  lint            run luacheck on src/, tests/ and scripts/"
 	@echo "  tests           run the busted test suite (INCLUDES=<file pattern> TESTS=<name pattern>)"
 	@echo "  check           lint + tests"
-	@echo "  sim             simulate addon traffic in a party and a raid (SCENARIO=<name> SIZES=5,40 SV=<file>)"
+	@echo "  sim             simulate addon traffic in a party, raid, guild or zone (SCENARIO=<name> SIZES=5,40 SV=<file>)"
+	@echo "  netsize         message sizes of a full update through the real compression (SV=<file>)"
 	@echo "  libs            download external libraries into ./libs (only if missing)"
 	@echo "  fetch-libs      force a fresh download of ./libs"
 	@echo "  release         build a release zip into ./.release (UPLOADRELEASE=y to upload)"
 	@echo "  reflex-tests    re-run lint + tests on every file change (needs reflex)"
-	@echo "  setup-dev       install luacheck, busted and luacov with luarocks"
+	@echo "  setup-dev       install luacheck, busted, luacov and luabitop with luarocks"
 	@echo "  docker-*        same as above but inside the Docker dev image (docker-build first)"
 	@echo "  clean           remove build and coverage output"
 
@@ -56,6 +58,7 @@ setup-dev:
 	luarocks install busted
 	luarocks install luacov
 	luarocks install cluacov || true
+	luarocks install luabitop
 
 #
 # -- hr --
@@ -86,14 +89,25 @@ check: lint tests
 
 #
 # -- sim --
-# simulate the addon's traffic in a group: complete addon stacks talking through the
-# real network envelope, paced like ChatThrottleLib (see the header of scripts/groupsim.lua)
-# SCENARIO: all, steady, reload, levelup, scan, diverge or drift
-# SIZES: comma separated group sizes
+# simulate the addon's traffic in a group, a guild or a crowded zone: complete addon
+# stacks talking through the real network envelope, paced like ChatThrottleLib (see
+# the header of scripts/groupsim.lua)
+# SCENARIO: all, steady, reload, levelup, scan, diverge, drift, guild or zone
+# SIZES: comma separated numbers of clients
 # SV: optional SavedVariables file inside the checkout to seed every client with
 #
 sim: libs
 	lua scripts/groupsim.lua $(SCENARIO) $(SIZES) $(SV)
+
+#
+# -- netsize --
+# the size of the messages of a full update (every leaderboard, the pioneers, the login
+# history pull) through the real serializer, LibCompress and AceComm chunking, with the
+# ChatThrottleLib cost of each (see the header of scripts/netsize.lua)
+# SV: optional SavedVariables file inside the checkout to measure instead of the fixture
+#
+netsize: libs
+	lua scripts/netsize.lua $(SV)
 
 #
 # -- reflex-tests --
@@ -161,6 +175,9 @@ docker-check:
 
 docker-sim:
 	$(DOCKER_RUN) make sim $(MAKEOVERRIDES)
+
+docker-netsize:
+	$(DOCKER_RUN) make netsize $(MAKEOVERRIDES)
 
 docker-libs:
 	$(DOCKER_RUN) make fetch-libs
