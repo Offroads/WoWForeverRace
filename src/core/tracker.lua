@@ -458,6 +458,17 @@ function WoWForeverRaceTracker:ScheduleChannelDingPush(changedPlayers)
 end
 
 function WoWForeverRaceTracker:FlushChannelDingPush()
+    -- the join sync found its partner after this was scheduled, and the settle time
+    -- started over (Channel:Settle): keep the dings until that has passed
+    local settleDelay = self.Channel:SettleDelay()
+    if settleDelay > 0 then
+        local _self = self
+        C_Timer.After(settleDelay, function()
+            _self:FlushChannelDingPush()
+        end)
+        return
+    end
+
     self.channelDingPending = false
 
     local pending = self.pendingChannelDings

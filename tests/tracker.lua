@@ -360,6 +360,12 @@ describe("Tracker", function()
             return {WoWForeverRace.Serializer.SerializePlayerInfoBatch(players), false, 0}
         end
 
+        -- moves the mocked server time and the timers together
+        local function advance(seconds)
+            time = time + seconds
+            _G.C_Timer.Advance(seconds)
+        end
+
         before_each(function()
             startTime = time
             originalRandom = _G.math.random
@@ -505,7 +511,7 @@ describe("Tracker", function()
 
             -- we were behind: our partner knew Nubone at that level for a while, and Nubtwo is higher by now
             tracker:OnSyncResult({ playerInfo("Nubone", 5, DRUIDIDX, time - 3600), playerInfo("Nubtwo", 8, WARRIORIDX), })
-            _G.C_Timer.Advance(config.ChannelSettleTime)
+            advance(config.ChannelSettleTime)
 
             -- neither our stale sightings nor what the partner sent goes to the channel
             local players = channelBatch()
@@ -558,7 +564,7 @@ describe("Tracker", function()
 
             tracker:OnSyncResult({ playerInfo("Nubone", 5), })
             tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubtwo", 6, WARRIORIDX), }), "Ann Wanderer", "YELL")
-            _G.C_Timer.Advance(config.ChannelSettleTime + config.ChannelDingDelayMax)
+            advance(config.ChannelSettleTime + config.ChannelDingDelayMax)
 
             assert.equals(0, #sent)
         end)
@@ -580,11 +586,36 @@ describe("Tracker", function()
             channel:NoteSender("Dude")
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
 
-            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+            advance(config.ChannelDingDelayMax)
             assert.equals(0, #sent)
 
-            _G.C_Timer.Advance(config.ChannelSettleTime)
+            advance(config.ChannelSettleTime)
             assert.equals("Nubone", channelBatch()[1].name)
+        end)
+
+        it("keeps holding dings back when the settle time started over meanwhile", function()
+            time = startTime
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), playerInfo("Nubtwo", 6, WARRIORIDX), })
+
+            -- the join sync found its partner 11s after the join
+            advance(11)
+            channel:Settle()
+
+            -- the first deadline passes: nothing goes out, and the partner's data still counts
+            advance(config.ChannelSettleTime - 11)
+            assert.equals(0, #sent)
+            tracker:OnSyncResult({ playerInfo("Nubone", 5, DRUIDIDX, time - 3600), })
+
+            advance(11)
+            local players = channelBatch()
+            assert.equals(1, #players)
+            assert.equals("Nubtwo", players[1].name)
+
+            -- and the next ding is on its normal short delay again
+            tracker:OnSlashWhoResult({ playerInfo("Nubthree", 7, PRIESTIDX), })
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+            assert.equals(2, #sentTo("RACE"))
         end)
 
         it("sends nothing to the channel after sharing was turned off", function()
