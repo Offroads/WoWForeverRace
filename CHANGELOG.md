@@ -15,7 +15,7 @@ channel, and keeping them in step costs far less once many players use the addon
   compared with the channel and traded with one other player to catch
   whatever was missed.
 - Every player heard on the channel is remembered for 3 days, so your addon can
-  keep trading data with them by whisper when the channel is locked or quiet.
+  keep trading data with them by whisper when the channel is quiet.
 - The debug window shows the state of the realm channel.
 - The options window shows the addon version.
 
