@@ -1,20 +1,19 @@
 # Changelog
 
-## Unreleased
+## v0.1.0-beta11 - 2026-10-01
 
 The leaderboards now stay in step across the whole realm through a hidden chat
 channel, and keeping them in step costs far less once many players use the addon.
 
 ### Added
-- Every WoWForeverRace user of your faction now shares one hidden chat channel
-  (`WFRaceHorde` / `WFRaceAlliance`). A new level or leaderboard entry anybody
-  spots reaches everyone on the realm within seconds, wherever they are, with
-  one small message. The channel is joined a few seconds after login, shows up
-  in no chat window and is gone when you remove the addon.
-- When somebody locks the channel with a password, the addon uses the same name
-  with a number behind it instead (`WFRaceHorde2`, and so on). The players
-  still inside the locked channel follow once one of them hears from a player
-  on the new one.
+- Every WoWForeverRace user of your faction now shares one hidden chat channel.
+  A new level or leaderboard entry anybody spots reaches everyone on the realm
+  within seconds, wherever they are, with one small message. The channel is
+  joined a few seconds after login, shows up in no chat window and is gone
+  when you remove the addon.
+- When somebody locks the channel with a password, the addon moves on to
+  another channel. The players still inside the locked channel follow once one
+  of them hears from a player on the new one.
 - About once per hour, and right after you log in, your leaderboards are
   compared with the channel and traded with one other player to catch
   whatever was missed.
