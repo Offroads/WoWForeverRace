@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.0-beta12 - 2026-10-01
+
+A repackaged v0.1.0-beta11. No changes to the addon itself.
+
 ## v0.1.0-beta11 - 2026-10-01
 
 The leaderboards now stay in step across the whole realm through a hidden chat
