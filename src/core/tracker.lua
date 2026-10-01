@@ -348,7 +348,8 @@ end
 
 -- What reached us outside the realm channel (a whisper, the group, the guild, a yell) and
 -- changed our leaderboards is news to the channel too: the player who sent it is not on
--- the channel, or held something the channel never heard. So one sync with a single
+-- the channel, or held something the channel never heard. That includes an earlier time
+-- for a level we already had: every client keeps the earliest. So one sync with a single
 -- player brings it to everyone. Not right after joining: then we are the one behind,
 -- and what we gain is what the channel already has.
 function WoWForeverRaceTracker:RelayToChannel(changedPlayers)
@@ -530,12 +531,13 @@ function WoWForeverRaceTracker:DropHeardDings(batch)
     end
 end
 
--- returns the players that changed a leaderboard
+-- returns the players that changed a leaderboard: new on it, at a higher level, or
+-- at their level earlier than we knew
 function WoWForeverRaceTracker:ProcessPlayerInfoBatch(playerInfoBatch)
     local changed = {}
     for _, playerInfo in ipairs(playerInfoBatch) do
-        local normalizedInfo, isChanged = self:ProcessPlayerInfo(playerInfo)
-        if isChanged then
+        local normalizedInfo, isChanged, isEarlier = self:ProcessPlayerInfo(playerInfo)
+        if isChanged or isEarlier then
             changed[#changed + 1] = normalizedInfo
         end
     end
@@ -936,17 +938,19 @@ function WoWForeverRaceTracker:ProcessPlayerInfo(playerInfo)
     WoWForeverRace:DebugPrint("[T] ProcessPlayerInfo: [" .. tostring(playerInfo.classIndex) .. "] "
             .. playerInfo.name .. " lvl" .. playerInfo.level)
 
-    local globalRank, globalIsChanged = self.lbGlobal:ProcessPlayerInfo(playerInfo)
-    local classRank, classIsChanged, classLowestLevel = nil, nil
+    local globalRank, globalIsChanged, _, globalIsEarlier = self.lbGlobal:ProcessPlayerInfo(playerInfo)
+    local classRank, classIsChanged, classLowestLevel, classIsEarlier = nil, nil
     -- classIndex 0 (unknown class) has no class leaderboard
     if self.Config:IsValidClassIndex(playerInfo.classIndex) and self.lbPerClass[playerInfo.classIndex] ~= nil then
-        classRank, classIsChanged, classLowestLevel = self.lbPerClass[playerInfo.classIndex]:ProcessPlayerInfo(playerInfo)
+        classRank, classIsChanged, classLowestLevel, classIsEarlier =
+                self.lbPerClass[playerInfo.classIndex]:ProcessPlayerInfo(playerInfo)
     end
 
     -- an unknown race has no race leaderboard
-    local raceRank, raceIsChanged, raceLowestLevel = nil, nil
+    local raceRank, raceIsChanged, raceLowestLevel, raceIsEarlier = nil, nil
     if playerInfo.raceIndex ~= nil and self.lbPerRace[playerInfo.raceIndex] ~= nil then
-        raceRank, raceIsChanged, raceLowestLevel = self.lbPerRace[playerInfo.raceIndex]:ProcessPlayerInfo(playerInfo)
+        raceRank, raceIsChanged, raceLowestLevel, raceIsEarlier =
+                self.lbPerRace[playerInfo.raceIndex]:ProcessPlayerInfo(playerInfo)
     end
 
     -- update pioneer records for every detected player
@@ -964,8 +968,11 @@ function WoWForeverRaceTracker:ProcessPlayerInfo(playerInfo)
         self:CheckRaceFinished()
     end
 
-    -- return normalized playerinfo and boolean if anything changed
-    return playerInfo, globalIsChanged or classIsChanged or raceIsChanged
+    -- return normalized playerinfo, whether the player is new on a leaderboard or reached
+    -- a higher level (a ding), and whether a leaderboard only took an earlier time for
+    -- the level it already had (no ding: nothing is announced in chat for it)
+    return playerInfo, globalIsChanged or classIsChanged or raceIsChanged,
+            globalIsEarlier or classIsEarlier or raceIsEarlier
 end
 
 -- Records this player's dingedAt in playerHistory for future per-character level breakdown.

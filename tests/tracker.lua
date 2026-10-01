@@ -547,6 +547,44 @@ describe("Tracker", function()
             assert.equals("Nubtwo", players[2].name)
         end)
 
+        it("passes on an earlier time for a level we already had", function()
+            channel:NoteSender("Dude")
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 5))
+            tracker:ProcessPlayerInfo(playerInfo("Nubtwo", 6, WARRIORIDX))
+            local dings = 0
+            tracker.EventBus:RegisterCallback(Events.Ding, {}, function() dings = dings + 1 end)
+
+            -- a whispered leaderboard saw Nubone at that level a minute before we did
+            tracker:OnSyncResult({ playerInfo("Nubone", 5, DRUIDIDX, time - 60), })
+            -- and a ding whispered by a buddy does the same for Nubtwo
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubtwo", 6, WARRIORIDX, time - 30), }),
+                    "Bob Faraway", "WHISPER")
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            local players = channelBatch()
+            assert.equals(2, #players)
+            assert.equals("Nubone", players[1].name)
+            assert.equals(time - 60, players[1].dingedAt)
+            assert.equals("Nubtwo", players[2].name)
+            assert.equals(time - 30, players[2].dingedAt)
+            -- an earlier time is no ding: nothing to announce in chat
+            assert.equals(0, dings)
+        end)
+
+        it("does not pass an earlier time on when it came from the channel, or right after joining", function()
+            channel:NoteSender("Dude")
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 5))
+            tracker:ProcessPlayerInfo(playerInfo("Nubtwo", 6, WARRIORIDX))
+
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubone", 5, DRUIDIDX, time - 60), }), "Dude", "CHANNEL")
+            time = startTime
+            tracker:OnSyncResult({ playerInfo("Nubtwo", 6, WARRIORIDX, time - 30), })
+            advance(config.ChannelSettleTime + config.ChannelDingDelayMax)
+
+            assert.equals(0, #sent)
+            assert.equals(startTime + config.ChannelSettleTime - 60, db.factionrealm.leaderboard[0].players[2].dingedAt)
+        end)
+
         it("passes nothing on when a sync changed nothing", function()
             channel:NoteSender("Dude")
             tracker:ProcessPlayerInfo(playerInfo("Nubone", 5))
