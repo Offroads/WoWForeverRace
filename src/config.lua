@@ -37,6 +37,14 @@ local WoWForeverRaceConfig = {
     -- the race data from before it. nil falls back to the inferred timestamps and purges nothing.
     RealmLaunchAt = 1793833200,
 
+    -- The characters whose realm-wide reset (Tracker:OnNetReset, sent by the dev command
+    -- /wfr resetall) every client accepts, until the realm launch. The server sets the
+    -- sender of an addon message, so nobody else can pose as them.
+    ResetAuthors = {
+        ["Offroad Dverg"] = true,
+        ["Offroad Hunt"] = true,
+    },
+
     -- OfferSync throttle time window
     RequestSyncWait = 5,
     RetrySyncWait = 30,
@@ -226,6 +234,7 @@ local WoWForeverRaceConfig = {
             ChannelSync = "CHSYNC",
             ChannelOffer = "CHOFFR",
             ChannelMove = "CHMOVE",
+            Reset = "RESET",
         },
     },
     Events = {
@@ -244,6 +253,8 @@ local WoWForeverRaceConfig = {
         ScanFinished = "SCAN_FINISHED",
         RaceFinished = "RACE_FINISHED",
         RefreshGUI = "REFRESH_GUI",
+        -- the race data was reset from the network (Tracker:ApplyReset): start over
+        DataReset = "DATA_RESET",
         MsgStats = "MSG_STATS",
         BuddyUpdate = "BUDDY_UPDATE",
     },

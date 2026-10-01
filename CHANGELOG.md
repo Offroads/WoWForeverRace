@@ -20,6 +20,9 @@ channel, and keeping them in step costs far less once many players use the addon
   whatever was missed.
 - Every player heard on the channel is remembered for 3 days, so your addon can
   keep trading data with them by whisper when the channel is locked or quiet.
+- During the beta the addon's author can reset the leaderboards of every
+  player, to clear out test data. Only the author's characters can do it, and
+  it stops working at the realm launch.
 - The debug window shows the state of the realm channel.
 - The options window shows the addon version.
 

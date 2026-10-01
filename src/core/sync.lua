@@ -1111,7 +1111,9 @@ function WoWForeverRaceSync:SendChannelSync(joinRound)
 
     local fullHash = computeFullHash(self.DB, self.Config, nil, self.Core:MyFaction())
     local ftlHash = computeFTLHash(self.DB, self.Config)
-    self.Network:SendObject(self.Config.Network.Events.ChannelSync, {fullHash, ftlHash}, "RACE")
+    -- the third field is the realm-wide reset we know, see Tracker:OnNetChannelSyncReset
+    self.Network:SendObject(self.Config.Network.Events.ChannelSync,
+            {fullHash, ftlHash, self.DB.factionrealm.resetAt}, "RACE")
 
     local _self = self
     C_Timer.After(self.Config.ChannelSyncWait + 1, function()

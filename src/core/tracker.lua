@@ -60,6 +60,8 @@ function WoWForeverRaceTracker.new(Config, Core, DB, EventBus, Network, Channel)
 
     self.launchPurged = false      -- true once PurgePreLaunchData ran after the realm launch
 
+    self.Core:SetResetTime(self.DB.factionrealm.resetAt)
+
     self:ReinitLeaderboards()
     self:NormalizeDB()
     self:PurgePreLaunchData()
@@ -68,6 +70,9 @@ function WoWForeverRaceTracker.new(Config, Core, DB, EventBus, Network, Channel)
     EventBus:RegisterCallback(self.Config.Network.Events.PlayerInfoBatch, self, self.OnNetPlayerInfoBatch)
     EventBus:RegisterCallback(self.Config.Network.Events.DataAvailable, self, self.OnNetDataAvailable)
     EventBus:RegisterCallback(self.Config.Network.Events.DataRequest, self, self.OnNetDataRequest)
+    EventBus:RegisterCallback(self.Config.Network.Events.Reset, self, self.OnNetReset)
+    EventBus:RegisterCallback(self.Config.Network.Events.ChannelSync, self, self.OnNetChannelSyncReset)
+    EventBus:RegisterCallback(self.Config.Events.ChannelJoined, self, self.OnChannelJoinedReset)
     -- subscribe to local events
     EventBus:RegisterCallback(self.Config.Events.SlashWhoResult, self, self.OnSlashWhoResult)
     EventBus:RegisterCallback(self.Config.Events.SyncResult, self, self.OnSyncResult)
@@ -132,6 +137,40 @@ function WoWForeverRaceTracker:PurgePreLaunchData()
     self.launchPurged = true
 
     local db = self.DB.factionrealm
+    local core = self.Core
+    local purged = self:PurgeRaceData(function(timestamp) return core:PredatesLaunch(timestamp) end)
+
+    -- beta characters don't exist on the released realm, so neither do the buddies met there
+    local buddiesPurged = false
+    for name, buddy in pairs(db.buddies or {}) do
+        if buddy.lastSeen == nil or self.Core:PredatesLaunch(buddy.lastSeen) then
+            db.buddies[name] = nil
+            buddiesPurged = true
+        end
+    end
+    if buddiesPurged then
+        WoWForeverRace:DebugPrint("Dropped buddies from before the realm launch")
+        self.EventBus:PublishEvent(self.Config.Events.BuddyUpdate)
+    end
+
+    if self.Core:PredatesLaunch(db.realmOpenedAt) then
+        db.realmOpenedAt = self.Core:LaunchTime()
+        purged = true
+    end
+
+    if purged then
+        WoWForeverRace:DebugPrint("Dropped race data from before the realm launch")
+        -- a race finished on the beta says nothing about the released one
+        db.finished = false
+        self.EventBus:PublishEvent(self.Config.Events.RefreshGUI)
+    end
+end
+
+-- Drops the race data whose time isStale(time) holds for: leaderboard entries, pioneer
+-- records, history levels, and the race start when it was one of them. Returns whether
+-- anything was dropped.
+function WoWForeverRaceTracker:PurgeRaceData(isStale)
+    local db = self.DB.factionrealm
     local purged = false
 
     for _, boardIndex in ipairs(self.Core:BoardIndexes()) do
@@ -140,7 +179,7 @@ function WoWForeverRaceTracker:PurgePreLaunchData()
             local highestLevel = 1
             local removed = false
             for i = #lb.players, 1, -1 do
-                if self.Core:PredatesLaunch(lb.players[i].dingedAt) then
+                if isStale(lb.players[i].dingedAt) then
                     table.remove(lb.players, i)
                     removed = true
                 else
@@ -159,7 +198,7 @@ function WoWForeverRaceTracker:PurgePreLaunchData()
     local raceStartedAt = nil
     for classFilter, levels in pairs(db.firstToLevel or {}) do
         for level, record in pairs(levels) do
-            if self.Core:PredatesLaunch(record.dingedAt) then
+            if isStale(record.dingedAt) then
                 levels[level] = nil
                 purged = true
             elseif classFilter == 0 and record.dingedAt ~= nil
@@ -171,7 +210,7 @@ function WoWForeverRaceTracker:PurgePreLaunchData()
 
     for name, hist in pairs(db.playerHistory or {}) do
         for level, dingedAt in pairs(hist.levels or {}) do
-            if self.Core:PredatesLaunch(dingedAt) then
+            if isStale(dingedAt) then
                 hist.levels[level] = nil
                 purged = true
             end
@@ -181,32 +220,118 @@ function WoWForeverRaceTracker:PurgePreLaunchData()
         end
     end
 
-    -- beta characters don't exist on the released realm, so neither do the buddies met there
-    local buddiesPurged = false
-    for name, buddy in pairs(db.buddies or {}) do
-        if buddy.lastSeen == nil or self.Core:PredatesLaunch(buddy.lastSeen) then
-            db.buddies[name] = nil
-            buddiesPurged = true
-        end
-    end
-    if buddiesPurged then
-        WoWForeverRace:DebugPrint("Dropped buddies from before the realm launch")
-        self.EventBus:PublishEvent(self.Config.Events.BuddyUpdate)
-    end
-
-    if self.Core:PredatesLaunch(db.raceStartedAt) then
+    if isStale(db.raceStartedAt) then
         db.raceStartedAt = raceStartedAt
     end
-    if self.Core:PredatesLaunch(db.realmOpenedAt) then
-        db.realmOpenedAt = self.Core:LaunchTime()
-        purged = true
-    end
 
-    if purged then
-        WoWForeverRace:DebugPrint("Dropped race data from before the realm launch")
-        -- a race finished on the beta says nothing about the released one
-        db.finished = false
-        self.EventBus:PublishEvent(self.Config.Events.RefreshGUI)
+    return purged
+end
+
+-- A realm-wide reset: the race starts over at resetAt. Drops this faction-realm's race
+-- data from before it, and from then on nothing older is accepted (Core:IsStale), so a
+-- client that missed the reset can't bring the old data back. Settings and buddies stay.
+function WoWForeverRaceTracker:ApplyReset(resetAt)
+    local db = self.DB.factionrealm
+    db.resetAt = resetAt
+    self.Core:SetResetTime(resetAt)
+
+    local core = self.Core
+    self:PurgeRaceData(function(timestamp) return core:PredatesReset(timestamp) end)
+    db.finished = false
+
+    -- what was waiting to be sent is from before the reset
+    self.pendingDings = {}
+    self.pendingChannelDings = {}
+    self.backupSkipped = {}
+
+    WoWForeverRace:DebugPrint("Race data reset, nothing from before " .. tostring(resetAt) .. " counts anymore")
+    -- the scanner and the roster start over, see main.lua
+    self.EventBus:PublishEvent(self.Config.Events.DataReset)
+    self.EventBus:PublishEvent(self.Config.Events.RefreshGUI)
+end
+
+-- Whether a reset time from the network is one to apply: a sane time, newer than the
+-- reset we know, and only until the realm launch (the released race is never reset).
+function WoWForeverRaceTracker:AcceptsReset(resetAt)
+    if type(resetAt) ~= "number" or resetAt ~= resetAt then return false end
+    if self.Core:HasLaunched() then return false end
+
+    local launchAt = self.Core:LaunchTime()
+    local known = self.DB.factionrealm.resetAt
+    return resetAt >= MIN_DINGED_AT and resetAt <= self.Core:Now() + MAX_CLOCK_SKEW
+            and (launchAt == nil or resetAt < launchAt)
+            and (known == nil or resetAt > known)
+end
+
+-- RESET: a realm-wide reset, payload = its time. Only accepted from the characters in
+-- Config.ResetAuthors: addon messages are not signed, but the server sets their sender.
+function WoWForeverRaceTracker:OnNetReset(resetAt, sender)
+    if not self.DB.profile.options.networking then return end
+    if type(sender) ~= "string" then return end
+
+    -- an author is a character of our realm (Network drops the other realms already)
+    local senderName, senderRealm = self.Core:SplitFullPlayer(sender)
+    if not self.Core:IsMyRealm(senderRealm) or not self.Core:IsResetAuthor(senderName) then
+        WoWForeverRace:DebugPrint("Ignored a reset from " .. sender)
+        return
+    end
+    if not self:AcceptsReset(resetAt) then return end
+
+    self:ApplyReset(math.floor(resetAt))
+    WoWForeverRace:PPrint("The leaderboards were reset by " .. senderName .. ".")
+end
+
+-- Resets the race data of every client that accepts us as an author, and our own.
+-- Only called by the dev command /wfr resetall.
+function WoWForeverRaceTracker:SendReset()
+    self:ApplyReset(self.Core:Now())
+    self:AnnounceReset()
+end
+
+-- Sends the reset we hold: to one player, or to everybody we can reach.
+function WoWForeverRaceTracker:AnnounceReset(target)
+    local resetAt = self.DB.factionrealm.resetAt
+    if resetAt == nil then return end
+    if not self.DB.profile.options.networking then return end
+
+    local event = self.Config.Network.Events.Reset
+    if target ~= nil then
+        self.Network:SendObject(event, resetAt, "WHISPER", target)
+        return
+    end
+    self.Network:SendObject(event, resetAt, "RACE")
+    self.Network:SendObject(event, resetAt, "YELL")
+    if IsInGuild() then
+        self.Network:SendObject(event, resetAt, "GUILD")
+    end
+    if GetNumGroupMembers() > 0 then
+        self.Network:SendObject(event, resetAt, "GROUP")
+    end
+end
+
+-- Whether we are an author whose reset still counts: then we keep telling the players
+-- who missed it (they were offline), since only an author's own message is accepted.
+function WoWForeverRaceTracker:IsActiveResetAuthor()
+    return self.DB.factionrealm.resetAt ~= nil and not self.Core:HasLaunched()
+            and self.Core:IsResetAuthor(self.Core:RealMe())
+end
+
+-- we joined the realm channel: everybody on it right now hears the reset we hold
+function WoWForeverRaceTracker:OnChannelJoinedReset()
+    if self:IsActiveResetAuthor() then
+        self:AnnounceReset()
+    end
+end
+
+-- A player announced itself on the realm channel (CHSYNC, field 3 = the reset it knows):
+-- as an author we whisper ours to a player who is behind on it.
+function WoWForeverRaceTracker:OnNetChannelSyncReset(payload, sender)
+    if type(payload) ~= "table" or type(sender) ~= "string" then return end
+    if not self:IsActiveResetAuthor() then return end
+
+    local theirs = payload[3]
+    if type(theirs) ~= "number" or theirs < self.DB.factionrealm.resetAt then
+        self:AnnounceReset(sender)
     end
 end
 
@@ -932,8 +1057,9 @@ function WoWForeverRaceTracker:ProcessPlayerInfo(playerInfo)
         WoWForeverRace:DebugPrint("Ignored player info with invalid dingedAt: " .. tostring(playerInfo.dingedAt))
         return
     end
-    if self.Core:PredatesLaunch(playerInfo.dingedAt) then
-        WoWForeverRace:DebugPrint("Ignored player info from before the realm launch: " .. tostring(playerInfo.dingedAt))
+    if self.Core:IsStale(playerInfo.dingedAt) then
+        WoWForeverRace:DebugPrint("Ignored player info from before the realm launch or the last reset: "
+                .. tostring(playerInfo.dingedAt))
         return
     end
     -- keep timestamps integral: the wire format truncates to whole seconds, so a
@@ -1108,7 +1234,7 @@ function WoWForeverRaceTracker:OnPHSyncResult(batch)
 
             for level, dingedAt in pairs(remote.levels) do
                 if type(level) == "number" and level >= 2 and level <= self.Config.MaxLevel
-                        and type(dingedAt) == "number" and not self.Core:PredatesLaunch(dingedAt) then
+                        and type(dingedAt) == "number" and not self.Core:IsStale(dingedAt) then
                     if hist.levels[level] == nil or dingedAt < hist.levels[level] then
                         hist.levels[level] = math.floor(dingedAt)
                     end
@@ -1139,7 +1265,7 @@ function WoWForeverRaceTracker:OnFTLSyncResult(ftldb, remoteRealmOpenedAt)
                 -- only merge records that fit the wire format; remote data is untrusted
                 if type(level) == "number" and level >= 2 and level <= self.Config.MaxLevel
                         and record.name ~= nil and record.dingedAt ~= nil
-                        and not self.Core:PredatesLaunch(record.dingedAt) then
+                        and not self.Core:IsStale(record.dingedAt) then
                     local merged = mergeFTLRecord(db.firstToLevel[classFilter], level,
                             record.name, record.classIndex, record.dingedAt)
                     if merged and (db.raceStartedAt == nil or record.dingedAt < db.raceStartedAt) then

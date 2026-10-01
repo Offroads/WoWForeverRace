@@ -1208,6 +1208,13 @@ describe("Sync", function()
                 assert.is_nil(sentOf(NetEvents.BuddyPing)[1].payload[4])
             end)
 
+            it("tells which realm-wide reset we know", function()
+                db.factionrealm.resetAt = time - 100
+                channel:TryJoin()
+
+                assert.same({myFullHash, myFTLHash, time - 100}, sent[1].payload)
+            end)
+
             it("stays quiet outside the channel, with sharing off and after the race", function()
                 sync:SendChannelSync()
                 assert.equals(0, #sent)

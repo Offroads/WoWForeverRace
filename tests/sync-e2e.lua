@@ -705,6 +705,65 @@ describe("Sync end to end with real data", function()
         assert.is_nil(countChannels(mark)["CHANNEL"])
     end)
 
+    it("realm-wide reset: an author empties everybody's leaderboards, also for a player who comes later", function()
+        yellReaches = false
+        local printStub = stub(WoWForeverRace, "PPrint")
+        local a = stack("Offroad Dverg", realSavedVariables())
+        local b = stack("Beta Tester", realSavedVariables())
+        settledOnChannel(a, b)
+        assert.equals(50, #b.db.factionrealm.leaderboard[0].players)
+
+        a.tracker:SendReset()
+        pump()
+
+        for _, s in ipairs({a, b}) do
+            assert.equals(now, s.db.factionrealm.resetAt)
+            for _, boardIndex in ipairs(BOARDS) do
+                assert.equals(0, #s.db.factionrealm.leaderboard[boardIndex].players, s.name .. " board " .. boardIndex)
+            end
+            assert.is_nil(next(s.db.factionrealm.playerHistory))
+        end
+
+        -- a player who was offline joins later with the old data: the author tells it
+        advance(60)
+        local c = stack("Gamma Tester", realSavedVariables())
+        c.sync.isReady = true
+        joinChannel(c)
+        advance(Config.ChannelSyncWait + 5)
+
+        assert.equals(a.db.factionrealm.resetAt, c.db.factionrealm.resetAt)
+        assert.equals(0, #c.db.factionrealm.leaderboard[0].players)
+        assert.equals(0, #b.db.factionrealm.leaderboard[0].players, "the old data did not come back")
+        printStub:revert()
+    end)
+
+    it("realm-wide reset: old data from a player who missed it is not taken back", function()
+        yellReaches = false
+        local printStub = stub(WoWForeverRace, "PPrint")
+        local a = stack("Offroad Dverg", realSavedVariables())
+        local b = stack("Beta Tester", realSavedVariables())
+        settledOnChannel(a, b)
+        a.tracker:SendReset()
+        pump()
+        -- the author logs off; a player with the old data trades with b by whisper
+        table.remove(stacks, 1)
+        local c = stack("Gamma Tester", realSavedVariables())
+        c.sync.isReady = true
+        c.db.factionrealm.buddies[b.name] = {lastSeen = now}
+
+        c.sync:SendBuddyPings()
+        advance(5)
+
+        assert.is_true((countEvents()[NetEvents.SyncPayload] or 0) > 0, "c pushed its old leaderboards")
+        assert.equals(0, #b.db.factionrealm.leaderboard[0].players)
+        -- and a stranger can't reset anybody
+        c.tracker:SendReset()
+        b.tracker:ProcessPlayerInfo({name = "Fresh Tester", level = 3, classIndex = 1, raceIndex = 2, dingedAt = now})
+        pump()
+        assert.equals(1, #b.db.factionrealm.leaderboard[0].players)
+        printStub:revert()
+    end)
+
     it("faction lock: an Alliance client ignores the Horde data", function()
         local a = stack("Alpha Tester", realSavedVariables())
         a.sync.isReady = true

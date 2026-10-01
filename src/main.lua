@@ -66,6 +66,12 @@ function WoWForeverRace:OnInitialize()
     -- future profile reset) hands the components fresh tables to bind to
     self.DB.RegisterCallback(self, "OnDatabaseReset", "OnDatabaseReset")
 
+    -- a reset from the network keeps the tables but empties them: scan and read the rosters anew
+    self.EventBus:RegisterCallback(self.Config.Events.DataReset, self, function()
+        self.scanner:ResetState()
+        self.Roster:Refresh()
+    end)
+
     self:DBMigrations()
 
     self.EventBus:RegisterCallback(self.Config.Events.NetworkReady, self, function()
@@ -150,14 +156,17 @@ function WoWForeverRace:MigratePioneerData()
 end
 
 function WoWForeverRace:ResetDB()
-    -- Preserve realmOpenedAt so a manual data reset doesn't lose the realm launch timestamp.
+    -- Preserve realmOpenedAt so a manual data reset doesn't lose the realm launch timestamp,
+    -- and the realm-wide reset we know, so data from before it stays out.
     local realmOpenedAt = self.DB.factionrealm.realmOpenedAt
+    local resetAt = self.DB.factionrealm.resetAt
     -- fires OnDatabaseReset, which re-binds the components to the new tables
     self.DB:ResetDB()
     self.DB.factionrealm.dbversion = self.Config.Version
     if realmOpenedAt then
         self.DB.factionrealm.realmOpenedAt = realmOpenedAt
     end
+    self.DB.factionrealm.resetAt = resetAt
 end
 
 -- AceDB replaces db.factionrealm and db.profile on a reset; everything that

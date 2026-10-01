@@ -830,6 +830,235 @@ describe("Tracker", function()
         end)
     end)
 
+    describe("Realm-wide reset", function()
+        local NetEvents = WoWForeverRace.Config.Network.Events
+        local AUTHOR = "Offroad Dverg"
+        local sent, printStub, startTime
+
+        local function sentOf(event)
+            local out = {}
+            for _, s in ipairs(sent) do
+                if s.event == event then out[#out + 1] = s end
+            end
+            return out
+        end
+
+        -- a tracker of our own for a character that may reset everybody
+        local function authorTracker(channel)
+            local authorCore = WoWForeverRace.Core(WoWForeverRace.Config, AUTHOR, "NubVille")
+            function authorCore:Now() return time end
+            authorCore.RealMe = function() return AUTHOR end
+            return WoWForeverRace.Tracker(config, authorCore, db, WoWForeverRace.EventBus(), network, channel), authorCore
+        end
+
+        before_each(function()
+            startTime = time
+            _G.SetIsInGuild(false)
+            sent = {}
+            network.SendObject = function(_, event, payload, distribution, target)
+                sent[#sent + 1] = {event = event, payload = payload, channel = distribution, target = target}
+            end
+            printStub = stub(WoWForeverRace, "PPrint")
+
+            -- before the reset: two players, pioneers and history
+            tracker:ProcessPlayerInfo(playerInfo("Old One", 10, DRUIDIDX, time - 500))
+            tracker:ProcessPlayerInfo(playerInfo("Old Two", 9, WARRIORIDX, time - 400))
+            db.factionrealm.buddies["Bob Faraway"] = {lastSeen = time - 450}
+        end)
+
+        after_each(function()
+            time = startTime
+            printStub:revert()
+            _G.SetChatChannels(nil)
+        end)
+
+        it("drops the race data from before it and keeps what came after", function()
+            tracker:ProcessPlayerInfo(playerInfo("New One", 5, PRIESTIDX, time - 50))
+            local resets = 0
+            eventbus:RegisterCallback(Events.DataReset, {}, function() resets = resets + 1 end)
+            db.factionrealm.finished = true
+
+            tracker:ApplyReset(time - 100)
+
+            assert.equals(time - 100, db.factionrealm.resetAt)
+            assert.equals(1, #db.factionrealm.leaderboard[0].players)
+            assert.equals("New One", db.factionrealm.leaderboard[0].players[1].name)
+            assert.equals(0, #db.factionrealm.leaderboard[DRUIDIDX].players)
+            assert.equals(0, #db.factionrealm.leaderboard[WARRIORIDX].players)
+            assert.is_nil(db.factionrealm.firstToLevel[0][10])
+            assert.equals("New One", db.factionrealm.firstToLevel[0][5].name)
+            assert.is_nil(db.factionrealm.playerHistory["Old One"])
+            assert.is_table(db.factionrealm.playerHistory["New One"])
+            assert.equals(time - 50, db.factionrealm.raceStartedAt)
+            assert.is_false(db.factionrealm.finished)
+            -- settings and buddies are not race data
+            assert.is_table(db.factionrealm.buddies["Bob Faraway"])
+            assert.equals(1, resets)
+        end)
+
+        it("accepts nothing from before it afterwards, by any path", function()
+            tracker:ApplyReset(time - 100)
+
+            tracker:ProcessPlayerInfo(playerInfo("Old One", 10, DRUIDIDX, time - 500))
+            tracker:OnSyncResult({ playerInfo("Old Two", 9, WARRIORIDX, time - 400), })
+            tracker:OnFTLSyncResult({[0] = {[10] = {name = "Old One", classIndex = DRUIDIDX, dingedAt = time - 500}}})
+            tracker:OnPHSyncResult({["Old One"] = {classIndex = DRUIDIDX, levels = {[10] = time - 500}}})
+
+            assert.equals(0, #db.factionrealm.leaderboard[0].players)
+            assert.is_nil(db.factionrealm.firstToLevel[0][10])
+            assert.is_nil((db.factionrealm.playerHistory["Old One"] or {levels = {}}).levels[10])
+
+            -- the same player seen again after the reset counts
+            tracker:ProcessPlayerInfo(playerInfo("Old One", 10, DRUIDIDX, time - 10))
+            assert.equals(1, #db.factionrealm.leaderboard[0].players)
+        end)
+
+        it("still holds after a /reload", function()
+            tracker:ApplyReset(time - 100)
+
+            local reloadedCore = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
+            function reloadedCore:Now() return time end
+            local reloaded = WoWForeverRace.Tracker(config, reloadedCore, db, WoWForeverRace.EventBus(), network)
+            reloaded:ProcessPlayerInfo(playerInfo("Old One", 10, DRUIDIDX, time - 500))
+
+            assert.equals(0, #db.factionrealm.leaderboard[0].players)
+        end)
+
+        describe("from the network", function()
+            it("is applied when one of the named characters sends it", function()
+                tracker:OnNetReset(time - 100, AUTHOR)
+
+                assert.equals(time - 100, db.factionrealm.resetAt)
+                assert.equals(0, #db.factionrealm.leaderboard[0].players)
+                assert.stub(printStub).was_called(1)
+            end)
+
+            it("is ignored from anybody else", function()
+                for _, sender in ipairs({"Dude", "Offroad", "Offroad Dverg-OtherRealm", "offroad dverg"}) do
+                    tracker:OnNetReset(time - 100, sender)
+                end
+                tracker:OnNetReset(time - 100, nil)
+
+                assert.is_nil(db.factionrealm.resetAt)
+                assert.equals(2, #db.factionrealm.leaderboard[0].players)
+                assert.stub(printStub).was_not_called()
+            end)
+
+            it("is ignored when it is not newer than the reset we know", function()
+                tracker:OnNetReset(time - 100, AUTHOR)
+                tracker:ProcessPlayerInfo(playerInfo("New One", 5, PRIESTIDX, time - 50))
+
+                tracker:OnNetReset(time - 100, AUTHOR)
+                tracker:OnNetReset(time - 200, "Offroad Hunt")
+
+                assert.equals(time - 100, db.factionrealm.resetAt)
+                assert.equals(1, #db.factionrealm.leaderboard[0].players)
+            end)
+
+            it("is ignored when the time is not a sane one", function()
+                for _, resetAt in ipairs({"junk", {}, true, 0, -5, 0 / 0, time + 3600}) do
+                    tracker:OnNetReset(resetAt, AUTHOR)
+                end
+
+                assert.is_nil(db.factionrealm.resetAt)
+                assert.equals(2, #db.factionrealm.leaderboard[0].players)
+            end)
+
+            it("is ignored with sharing turned off", function()
+                db.profile.options.networking = false
+                tracker:OnNetReset(time - 100, AUTHOR)
+
+                assert.is_nil(db.factionrealm.resetAt)
+            end)
+
+            it("is ignored once the realm has launched", function()
+                core.Config = setmetatable({RealmLaunchAt = time - 1000}, {__index = WoWForeverRace.Config})
+
+                tracker:OnNetReset(time - 100, AUTHOR)
+
+                assert.is_nil(db.factionrealm.resetAt)
+                assert.equals(2, #db.factionrealm.leaderboard[0].players)
+            end)
+
+            it("reaches the tracker as the RESET network event", function()
+                eventbus:PublishEvent(NetEvents.Reset, time - 100, AUTHOR, "CHANNEL")
+
+                assert.equals(time - 100, db.factionrealm.resetAt)
+            end)
+        end)
+
+        describe("sending", function()
+            it("resets our own data and tells everybody we can reach", function()
+                _G.SetIsInGuild(true)
+                _G.SetGroupState(2, false, false)
+
+                tracker:SendReset()
+
+                assert.equals(time, db.factionrealm.resetAt)
+                assert.equals(0, #db.factionrealm.leaderboard[0].players)
+                local resets = sentOf(NetEvents.Reset)
+                local channels = {}
+                for _, s in ipairs(resets) do
+                    assert.equals(time, s.payload)
+                    channels[#channels + 1] = s.channel
+                end
+                assert.same({"RACE", "YELL", "GUILD", "GROUP"}, channels)
+                assert.equals(#resets, #sent)
+            end)
+
+            it("an author tells the channel again whenever it joins it", function()
+                local authors = authorTracker()
+                authors:ApplyReset(time - 100)
+                sent = {}
+
+                authors:OnChannelJoinedReset()
+
+                assert.equals(time - 100, sentOf(NetEvents.Reset)[1].payload)
+                assert.equals("RACE", sentOf(NetEvents.Reset)[1].channel)
+            end)
+
+            it("an author whispers the reset to a player who announces an older one, or none", function()
+                local authors = authorTracker()
+                authors:ApplyReset(time - 100)
+                sent = {}
+
+                authors:OnNetChannelSyncReset({1, 2}, "Late Comer")
+                authors:OnNetChannelSyncReset({1, 2, time - 300}, "Stale Player")
+                authors:OnNetChannelSyncReset({1, 2, time - 100}, "Current Player")
+                authors:OnNetChannelSyncReset("junk", "Odd Player")
+
+                local resets = sentOf(NetEvents.Reset)
+                assert.equals(2, #resets)
+                assert.equals("WHISPER", resets[1].channel)
+                assert.equals("Late Comer", resets[1].target)
+                assert.equals("Stale Player", resets[2].target)
+                assert.equals(time - 100, resets[2].payload)
+            end)
+
+            it("a player who is no author never repeats a reset", function()
+                tracker:OnNetReset(time - 100, AUTHOR)
+                sent = {}
+
+                tracker:OnChannelJoinedReset()
+                tracker:OnNetChannelSyncReset({1, 2}, "Late Comer")
+
+                assert.equals(0, #sent)
+            end)
+
+            it("an author stops repeating it once the realm has launched", function()
+                local authors, authorCore = authorTracker()
+                authors:ApplyReset(time - 100)
+                sent = {}
+                authorCore.Config = setmetatable({RealmLaunchAt = time - 50}, {__index = WoWForeverRace.Config})
+
+                authors:OnChannelJoinedReset()
+                authors:OnNetChannelSyncReset({1, 2}, "Late Comer")
+
+                assert.equals(0, #sentOf(NetEvents.Reset))
+            end)
+        end)
+    end)
+
     describe("Realm launch", function()
         local launchAt = time - 1000
 
