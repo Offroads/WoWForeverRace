@@ -712,24 +712,68 @@ describe("Sync", function()
             assert.equals(0, count)
         end)
 
-        it("drops buddies not seen for BuddyMaxAge at login", function()
+        it("drops buddies not seen for BuddyMaxAge a while after the login sync, not at login", function()
             local maxAge = WoWForeverRace.Config.BuddyMaxAge
+            local syncWait = WoWForeverRace.Config.RequestSyncWait
+            local pruneDelay = WoWForeverRace.Config.BuddyPruneDelay
             db.factionrealm.buddies = {
                 ["Stale Buddy"] = {lastSeen = time - maxAge - 1},
                 ["Unseen Buddy"] = {},
                 ["Fresh Buddy"] = {lastSeen = time - 60},
-                ["Edge Buddy"] = {lastSeen = time - maxAge},
+                ["Edge Buddy"] = {lastSeen = time - maxAge + syncWait + pruneDelay},
             }
             local updates = 0
             eventbus:RegisterCallback(Events.BuddyUpdate, {}, function() updates = updates + 1 end)
 
+            -- a login builds the addon anew: nothing is dropped yet
             WoWForeverRace.Sync(WoWForeverRace.Config, core, db, eventbus, network)
+            assert.is_table(db.factionrealm.buddies["Stale Buddy"])
+
+            -- nor when the login sync is done
+            sync:InitSync()
+            AdvanceClock(syncWait)
+            assert.is_true(sync.isReady)
+            assert.is_table(db.factionrealm.buddies["Stale Buddy"])
+            assert.is_table(db.factionrealm.buddies["Unseen Buddy"])
+            assert.equals(0, updates)
+
+            AdvanceClock(pruneDelay)
 
             assert.is_nil(db.factionrealm.buddies["Stale Buddy"])
             assert.is_nil(db.factionrealm.buddies["Unseen Buddy"])
             assert.is_table(db.factionrealm.buddies["Fresh Buddy"])
             assert.is_table(db.factionrealm.buddies["Edge Buddy"])
             assert.equals(1, updates)
+        end)
+
+        it("keeps the buddies who are online when we were away for longer than BuddyMaxAge", function()
+            local stale = time - WoWForeverRace.Config.BuddyMaxAge - 1
+            db.factionrealm.buddies = {
+                ["Offline Buddy"] = {lastSeen = stale},
+                ["Online Buddy"] = {lastSeen = stale},
+                ["Channel Buddy"] = {lastSeen = stale},
+            }
+            local pinged = {}
+            network.SendObject = function(_, event, _, channel, target)
+                if event == NetEvents.BuddyPing and channel == "WHISPER" then
+                    pinged[target] = true
+                end
+            end
+
+            -- the login sync ends with a ping to the buddies, stale or not
+            sync:InitSync()
+            AdvanceClock(WoWForeverRace.Config.RequestSyncWait)
+            assert.same({["Offline Buddy"] = true, ["Online Buddy"] = true, ["Channel Buddy"] = true}, pinged)
+
+            -- one answers it, another is heard on the realm channel
+            sync:OnNetBuddyPong({}, "Online Buddy")
+            eventbus:PublishEvent(Events.ChannelHeard, "Channel Buddy")
+
+            AdvanceClock(WoWForeverRace.Config.BuddyPruneDelay)
+
+            assert.is_nil(db.factionrealm.buddies["Offline Buddy"])
+            assert.is_table(db.factionrealm.buddies["Online Buddy"])
+            assert.is_table(db.factionrealm.buddies["Channel Buddy"])
         end)
 
         it("keeps any number of recent buddies and stays quiet when nothing is stale", function()
@@ -740,7 +784,8 @@ describe("Sync", function()
             local updates = 0
             eventbus:RegisterCallback(Events.BuddyUpdate, {}, function() updates = updates + 1 end)
 
-            WoWForeverRace.Sync(WoWForeverRace.Config, core, db, eventbus, network)
+            sync:InitSync()
+            AdvanceClock(WoWForeverRace.Config.RequestSyncWait + WoWForeverRace.Config.BuddyPruneDelay)
 
             local count = 0
             for _ in pairs(db.factionrealm.buddies) do count = count + 1 end

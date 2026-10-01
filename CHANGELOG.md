@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Logging in after more than 3 days away no longer forgets every player your
+  addon traded data with. The players who are online get a minute to answer
+  first, and only those not heard from are dropped.
+
 ## v0.1.0-beta12 - 2026-10-01
 
 A repackaged v0.1.0-beta11. No changes to the addon itself.
