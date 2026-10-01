@@ -11,17 +11,11 @@ channel, and keeping them in step costs far less once many players use the addon
   within seconds, wherever they are, with one small message. The channel is
   joined a few seconds after login, shows up in no chat window and is gone
   when you remove the addon.
-- When somebody locks the channel with a password, the addon moves on to
-  another channel. The players still inside the locked channel follow once one
-  of them hears from a player on the new one.
 - About once per hour, and right after you log in, your leaderboards are
   compared with the channel and traded with one other player to catch
   whatever was missed.
 - Every player heard on the channel is remembered for 3 days, so your addon can
   keep trading data with them by whisper when the channel is locked or quiet.
-- During the beta the addon's author can reset the leaderboards of every
-  player, to clear out test data. Only the author's characters can do it, and
-  it stops working at the realm launch.
 - The debug window shows the state of the realm channel.
 - The options window shows the addon version.
 
