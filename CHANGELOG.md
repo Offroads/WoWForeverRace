@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.0-beta13 - 2026-10-01
 
 ### Fixed
 - Logging in after more than 3 days away no longer forgets every player your
