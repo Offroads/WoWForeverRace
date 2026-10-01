@@ -71,4 +71,13 @@ describe("Config", function()
         -- a peer that reports no race board at all does not track races
         assert.same({0, 1}, config:BoardIndexes("Alliance", {[1] = 1, [2] = 2}))
     end)
+
+    it("shows the packaged version, or development for an unpackaged checkout", function()
+        local version = config.Version
+        config.Version = "v0.1.0-beta10"
+        assert.equals("v0.1.0-beta10", config:DisplayVersion())
+        config.Version = "@" .. "project-version@"
+        assert.equals("development", config:DisplayVersion())
+        config.Version = version
+    end)
 end)

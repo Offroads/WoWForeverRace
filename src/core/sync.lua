@@ -148,6 +148,7 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network)
     self.lastSync = nil
     self.guildOffers = nil  -- non-nil only during active guild sync window
     self.guildPHWanted = false  -- whether the open guild window should also pull player history
+    self.groupRound = nil  -- our latest group ping, see SendGroupSync
 
     EventBus:RegisterCallback(self.Config.Network.Events.RequestSync, self, self.OnNetRequestSync)
     EventBus:RegisterCallback(self.Config.Network.Events.OfferSync, self, self.OnNetOfferSync)
@@ -160,7 +161,29 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network)
     EventBus:RegisterCallback(self.Config.Network.Events.FTLSync, self, self.OnNetFTLSync)
     EventBus:RegisterCallback(self.Config.Network.Events.PlayerHistorySync, self, self.OnNetPHSync)
 
+    self:PruneBuddies()
+
     return self
+end
+
+-- Every sender of OFFERSYNC, BPING and BPONG becomes a buddy, so on a busy realm the
+-- list grows into thousands of entries and most random pings would go to players
+-- who stopped playing. Runs once per login / reload; there is no cap on the count.
+function WoWForeverRaceSync:PruneBuddies()
+    local buddies = self.DB.factionrealm.buddies
+    local oldest = self.Core:Now() - self.Config.BuddyMaxAge
+    local pruned = 0
+    for name, buddy in pairs(buddies) do
+        if buddy.lastSeen == nil or buddy.lastSeen < oldest then
+            buddies[name] = nil
+            pruned = pruned + 1
+        end
+    end
+    if pruned > 0 then
+        WoWForeverRace:DebugPrint("Dropped " .. pruned .. " buddies not seen for "
+                .. (self.Config.BuddyMaxAge / 86400) .. " days")
+        self.EventBus:PublishEvent(self.Config.Events.BuddyUpdate)
+    end
 end
 
 function WoWForeverRaceSync:InitSync()
@@ -374,10 +397,38 @@ function WoWForeverRaceSync:DoSync()
     end
 end
 
-function WoWForeverRaceSync:Sync(syncTo, classIndex)
+-- channel: "WHISPER" (default) to syncTo, or "GROUP" for every member of our group
+function WoWForeverRaceSync:Sync(syncTo, classIndex, channel)
     local batchstr = WoWForeverRace.Serializer.SerializePlayerInfoBatch(self.DB.factionrealm.leaderboard[classIndex].players)
 
-    self.Network:SendObject(self.Config.Network.Events.SyncPayload, batchstr, "WHISPER", syncTo)
+    self.Network:SendObject(self.Config.Network.Events.SyncPayload, batchstr, channel or "WHISPER", syncTo)
+end
+
+-- Our per-board hash table as sent in BPING / BPONG / STARTSYNC: index i+1 = leaderboard[i]
+-- (classes and races), 0 for a board we don't have.
+function WoWForeverRaceSync:MyBoardHashes()
+    local hashes = {}
+    for _, boardIndex in ipairs(self.Core:BoardIndexes()) do
+        local lb = self.DB.factionrealm.leaderboard[boardIndex]
+        hashes[boardIndex + 1] = lb and WoWForeverRace.Leaderboard.ComputeHash(lb) or 0
+    end
+    return hashes
+end
+
+-- The boards we have players on whose hash differs from a peer's per-board hash table,
+-- over the boards that peer tracks (see Config:BoardIndexes).
+function WoWForeverRaceSync:DifferingBoards(peerHashes)
+    local boards = {}
+    for _, boardIndex in ipairs(self.Core:BoardIndexes(peerHashes)) do
+        local lb = self.DB.factionrealm.leaderboard[boardIndex]
+        if lb and #lb.players > 0 then
+            local theirHash = peerHashes and peerHashes[boardIndex + 1] or 0
+            if WoWForeverRace.Leaderboard.ComputeHash(lb) ~= theirHash then
+                boards[#boards + 1] = boardIndex
+            end
+        end
+    end
+    return boards
 end
 
 function WoWForeverRaceSync:OnNetStartSync(payload, sender)
@@ -390,22 +441,22 @@ function WoWForeverRaceSync:OnNetStartSync(payload, sender)
         requesterClassIndex = payload[1]
 
         if type(payload[2]) == "table" then
-            -- guild sync: payload[2] is per-board hashes (classes and races) - send every leaderboard that differs
+            -- guild sync, or a group pinger picking us to answer its ping:
+            -- {classIndex, perBoardHashes, ftlHash, phHash, toGroup}.
+            -- payload[2] is per-board hashes (classes and races) - send every leaderboard that differs
             local perClassHashes = payload[2]
-            for _, boardIndex in ipairs(self.Core:BoardIndexes(perClassHashes)) do
-                local lb = self.DB.factionrealm.leaderboard[boardIndex]
-                if lb and #lb.players > 0 then
-                    local myHash = WoWForeverRace.Leaderboard.ComputeHash(lb)
-                    if myHash ~= (perClassHashes[boardIndex + 1] or 0) then
-                        self:Sync(sender, boardIndex)
-                    end
-                end
+            -- toGroup: send to our whole group, which hears it in one message each
+            local toGroup = payload[5] == true
+            if toGroup and GetNumGroupMembers() == 0 then return end
+            local channel = toGroup and "GROUP" or "WHISPER"
+            for _, boardIndex in ipairs(self:DifferingBoards(perClassHashes)) do
+                self:Sync(sender, boardIndex, channel)
             end
             -- payload[3] is the requester's FTL hash; only send FTL when it differs
             -- (older clients don't include it - send unconditionally for those)
             local guildFTLHash = payload[3]
             if guildFTLHash == nil or guildFTLHash ~= computeFTLHash(self.DB, self.Config, perClassHashes) then
-                self:SyncFTL(sender)
+                self:SyncFTL(sender, channel)
             end
             -- payload[4] is the requester's history hash, only present on their
             -- once-per-login pull; never send history to clients that didn't ask
@@ -601,54 +652,55 @@ function WoWForeverRaceSync:SendBuddyPings()
     end
 end
 
--- Received BPING from a buddy: update their last-seen, push leaderboards they're missing, ack with BPONG.
+-- Whether a peer's hashes (full hash chained over the boards it tracks, FTL hash)
+-- differ from ours. A missing FTL hash (older client) counts as differing.
+local function leaderboardsDifferFrom(self, peerFullHash, peerHashes)
+    return computeFullHash(self.DB, self.Config, peerHashes, self.Core:MyFaction()) ~= peerFullHash
+end
+local function ftlDiffersFrom(self, peerFTLHash, peerHashes)
+    return peerFTLHash == nil or peerFTLHash ~= computeFTLHash(self.DB, self.Config, peerHashes)
+end
+
+-- Received BPING, either whispered by a buddy or sent to the whole group by a member.
+-- Buddy ping: update their last-seen, push leaderboards they're missing, ack with BPONG.
 -- BPONG includes our own hashes so the sender can also push what we're missing (bidirectional in one round trip).
+-- Group ping: only answer with our hashes, see SendGroupSync.
 function WoWForeverRaceSync:OnNetBuddyPing(payload, sender, distribution)
     if not self.DB.profile.options.networking then return end
     self:AddBuddy(sender)
 
     local myFullHash = computeFullHash(self.DB, self.Config, nil, self.Core:MyFaction())
-    local myPerClassHashes = {}
-    for _, boardIndex in ipairs(self.Core:BoardIndexes()) do
-        local lb = self.DB.factionrealm.leaderboard[boardIndex]
-        myPerClassHashes[boardIndex + 1] = lb and WoWForeverRace.Leaderboard.ComputeHash(lb) or 0
-    end
+    local myPerClassHashes = self:MyBoardHashes()
     local myFTLHash = computeFTLHash(self.DB, self.Config)
 
-    local senderFullHash = payload[1]
-    local senderFTLHash = payload[3]
-
     -- compare over the leaderboards the sender tracks, see Config:BoardIndexes
-    local leaderboardsDiffer = computeFullHash(self.DB, self.Config, payload[2], self.Core:MyFaction()) ~= senderFullHash
-    local ftlDiffers = senderFTLHash == nil
-            or senderFTLHash ~= computeFTLHash(self.DB, self.Config, payload[2])
+    local leaderboardsDiffer = leaderboardsDifferFrom(self, payload[1], payload[2])
+    local ftlDiffers = ftlDiffersFrom(self, payload[3], payload[2])
 
-    -- ack with our hashes so the sender knows we're online and can push back. A group
-    -- ping reaches every member at once: when we already agree, a pong tells the
-    -- sender nothing and a raid would answer every periodic ping with N-1 whispers.
-    local inSyncGroupPing = GROUP_DISTRIBUTIONS[distribution] and self.isReady
-            and not leaderboardsDiffer and not ftlDiffers
-    if not inSyncGroupPing then
+    if GROUP_DISTRIBUTIONS[distribution] then
+        -- A group ping reaches every member at once: when we already agree, a pong
+        -- tells the sender nothing and a raid would answer every periodic ping with
+        -- N-1 whispers. When we differ we only whisper our hashes back (flagged as a
+        -- group pong): the pinger sends what anyone lacks to the group once and picks
+        -- one member to do the same, instead of every member trading with it.
+        if self.isReady and not leaderboardsDiffer and not ftlDiffers then return end
         self.Network:SendObject(self.Config.Network.Events.BuddyPong,
-                {myFullHash, myPerClassHashes, myFTLHash}, "WHISPER", sender)
+                {myFullHash, myPerClassHashes, myFTLHash, true}, "WHISPER", sender)
+        return
     end
+
+    -- ack with our hashes so the sender knows we're online and can push back
+    self.Network:SendObject(self.Config.Network.Events.BuddyPong,
+            {myFullHash, myPerClassHashes, myFTLHash}, "WHISPER", sender)
 
     if not self.isReady then return end
     if not leaderboardsDiffer and not ftlDiffers then return end
 
     local diffClasses = {}
     if leaderboardsDiffer then
-        local senderPerClassHashes = payload[2]
-        for _, boardIndex in ipairs(self.Core:BoardIndexes(senderPerClassHashes)) do
-            local lb = self.DB.factionrealm.leaderboard[boardIndex]
-            if lb and #lb.players > 0 then
-                local myHash = myPerClassHashes[boardIndex + 1]
-                local theirHash = senderPerClassHashes and senderPerClassHashes[boardIndex + 1] or 0
-                if myHash ~= theirHash then
-                    diffClasses[#diffClasses + 1] = boardIndex
-                    self:Sync(sender, boardIndex)
-                end
-            end
+        diffClasses = self:DifferingBoards(payload[2])
+        for _, boardIndex in ipairs(diffClasses) do
+            self:Sync(sender, boardIndex)
         end
     end
 
@@ -656,12 +708,11 @@ function WoWForeverRaceSync:OnNetBuddyPing(payload, sender, distribution)
         self:SyncFTL(sender)
     end
 
-    if leaderboardsDiffer or ftlDiffers then
-        WoWForeverRace:AddHashLog(sender, ">", diffClasses, ftlDiffers)
-    end
+    WoWForeverRace:AddHashLog(sender, ">", diffClasses, ftlDiffers)
 end
 
--- Received BPONG from a buddy: update their last-seen, push any leaderboards / FTL they're missing.
+-- Received BPONG. From a buddy: update their last-seen, push any leaderboards / FTL
+-- they're missing. Flagged as an answer to our group ping (payload[4]): see OnGroupPong.
 function WoWForeverRaceSync:OnNetBuddyPong(payload, sender)
     if not self.DB.profile.options.networking then return end
     self:AddBuddy(sender)
@@ -672,26 +723,20 @@ function WoWForeverRaceSync:OnNetBuddyPong(payload, sender)
     local senderFullHash = payload[1]
     if not senderFullHash then return end
 
-    local senderFTLHash = payload[3]
+    if payload[4] == true then
+        self:OnGroupPong(payload, sender)
+        return
+    end
 
     -- compare over the leaderboards the sender tracks, see Config:BoardIndexes
-    local leaderboardsDiffer = computeFullHash(self.DB, self.Config, payload[2], self.Core:MyFaction()) ~= senderFullHash
-    local ftlDiffers = senderFTLHash == nil
-            or senderFTLHash ~= computeFTLHash(self.DB, self.Config, payload[2])
+    local leaderboardsDiffer = leaderboardsDifferFrom(self, senderFullHash, payload[2])
+    local ftlDiffers = ftlDiffersFrom(self, payload[3], payload[2])
 
     local diffClasses = {}
     if leaderboardsDiffer then
-        local senderPerClassHashes = payload[2]
-        for _, boardIndex in ipairs(self.Core:BoardIndexes(senderPerClassHashes)) do
-            local lb = self.DB.factionrealm.leaderboard[boardIndex]
-            if lb and #lb.players > 0 then
-                local myHash = WoWForeverRace.Leaderboard.ComputeHash(lb)
-                local theirHash = senderPerClassHashes and senderPerClassHashes[boardIndex + 1] or 0
-                if myHash ~= theirHash then
-                    diffClasses[#diffClasses + 1] = boardIndex
-                    self:Sync(sender, boardIndex)
-                end
-            end
+        diffClasses = self:DifferingBoards(payload[2])
+        for _, boardIndex in ipairs(diffClasses) do
+            self:Sync(sender, boardIndex)
         end
     end
 
@@ -704,12 +749,13 @@ function WoWForeverRaceSync:OnNetBuddyPong(payload, sender)
     end
 end
 
--- Whispers our complete firstToLevel dataset to the target player.
+-- Whispers our complete firstToLevel dataset to the target player, or sends it to
+-- our group with channel "GROUP".
 -- Payload is a table {ftlBatchString, realmOpenedAt} so both are synced together.
-function WoWForeverRaceSync:SyncFTL(syncTo)
+function WoWForeverRaceSync:SyncFTL(syncTo, channel)
     local ftlstr = WoWForeverRace.Serializer.SerializeFTLBatch(self.DB.factionrealm.firstToLevel or {})
     local payload = {ftlstr, self.DB.factionrealm.realmOpenedAt}
-    self.Network:SendObject(self.Config.Network.Events.FTLSync, payload, "WHISPER", syncTo)
+    self.Network:SendObject(self.Config.Network.Events.FTLSync, payload, channel or "WHISPER", syncTo)
 end
 
 -- Received a firstToLevel sync payload - deserialize and forward to tracker for merging.
@@ -790,18 +836,101 @@ function WoWForeverRaceSync:ScheduleGroupSync()
     end)
 end
 
+-- A group ping opens a round. Members whose data differs whisper back their hashes
+-- (a flagged BPONG, see OnNetBuddyPing); after GroupSyncWait we send every board any
+-- of them lacks to the group once, and ask one of them, picked at random, to send its
+-- differing boards to the group too (a STARTSYNC with the toGroup flag). So a ping
+-- costs at most two senders of data, heard by every member, instead of every
+-- differing pair trading whispers in both directions. What the other members hold
+-- that nobody sent this round goes out on their own ping (roster change, login, ticker).
 function WoWForeverRaceSync:SendGroupSync()
     if GetNumGroupMembers() == 0 then return end
     WoWForeverRace:DebugPrint("GroupSync: sending BPING to GROUP")
 
+    -- pongs: {name, fullHash, boardHashes, ftlHash}, at most one per member (latest wins)
+    local round = {pongs = {}, pushed = {}, ftlPushed = false, responder = nil, closed = false}
+    self.groupRound = round
+
     local myFullHash = computeFullHash(self.DB, self.Config, nil, self.Core:MyFaction())
-    local myPerClassHashes = {}
-    for _, boardIndex in ipairs(self.Core:BoardIndexes()) do
-        local lb = self.DB.factionrealm.leaderboard[boardIndex]
-        myPerClassHashes[boardIndex + 1] = lb and WoWForeverRace.Leaderboard.ComputeHash(lb) or 0
-    end
     local myFTLHash = computeFTLHash(self.DB, self.Config)
-    self.Network:SendObject(self.Config.Network.Events.BuddyPing, {myFullHash, myPerClassHashes, myFTLHash}, "GROUP")
+    self.Network:SendObject(self.Config.Network.Events.BuddyPing, {myFullHash, self:MyBoardHashes(), myFTLHash}, "GROUP")
+
+    local _self = self
+    C_Timer.After(self.Config.GroupSyncWait, function()
+        _self:CloseGroupRound(round)
+    end)
+end
+
+-- A member answered our group ping with its hashes.
+function WoWForeverRaceSync:OnGroupPong(payload, sender)
+    local round = self.groupRound
+    if round == nil then return end
+
+    local pong = {name = sender, fullHash = payload[1], boardHashes = payload[2], ftlHash = payload[3]}
+    if not round.closed then
+        for i, existing in ipairs(round.pongs) do
+            if existing.name == sender then
+                round.pongs[i] = pong
+                return
+            end
+        end
+        round.pongs[#round.pongs + 1] = pong
+        return
+    end
+
+    -- late for the window (its queue was busy): still send what it lacks and nobody
+    -- sent yet this round, and let it answer if nobody was picked
+    self:PushGroupRound(round, {pong})
+    if round.responder == nil then
+        self:AskGroupResponder(round, sender)
+    end
+end
+
+function WoWForeverRaceSync:CloseGroupRound(round)
+    -- a newer ping replaced this round
+    if round ~= self.groupRound or round.closed then return end
+    round.closed = true
+
+    if #round.pongs == 0 or GetNumGroupMembers() == 0 then return end
+
+    self:PushGroupRound(round, round.pongs)
+    self:AskGroupResponder(round, round.pongs[math.random(1, #round.pongs)].name)
+end
+
+-- Sends to the group every board (and the pioneers) that one of these pongs lacks,
+-- each at most once per round: the group channel reaches every member at once.
+function WoWForeverRaceSync:PushGroupRound(round, pongs)
+    local boards, ftlSent = {}, false
+    for _, pong in ipairs(pongs) do
+        if leaderboardsDifferFrom(self, pong.fullHash, pong.boardHashes) then
+            for _, boardIndex in ipairs(self:DifferingBoards(pong.boardHashes)) do
+                if not round.pushed[boardIndex] then
+                    round.pushed[boardIndex] = true
+                    boards[#boards + 1] = boardIndex
+                    self:Sync(nil, boardIndex, "GROUP")
+                end
+            end
+        end
+        if not round.ftlPushed and ftlDiffersFrom(self, pong.ftlHash, pong.boardHashes) then
+            round.ftlPushed = true
+            ftlSent = true
+            self:SyncFTL(nil, "GROUP")
+        end
+    end
+
+    if #boards > 0 or ftlSent then
+        WoWForeverRace:AddHashLog("(group)", ">", boards, ftlSent)
+    end
+end
+
+-- Asks one member that answered our group ping to send its boards that differ from
+-- ours to the group, so what it holds reaches everyone too (see OnNetStartSync).
+-- No player history: group sync never negotiates it.
+function WoWForeverRaceSync:AskGroupResponder(round, name)
+    round.responder = name
+    WoWForeverRace:DebugPrint("GroupSync: asking " .. name .. " to answer to the group")
+    self.Network:SendObject(self.Config.Network.Events.StartSync,
+            {self.classIndex, self:MyBoardHashes(), computeFTLHash(self.DB, self.Config), nil, true}, "WHISPER", name)
 end
 
 -- Start the periodic group sync ticker: members who stay in the same group are
@@ -822,8 +951,10 @@ function WoWForeverRaceSync:InitBuddyTicker()
 end
 
 -- Called after the guild offer window closes.
--- Picks the offer with the lowest loginTime (longest uptime = most authoritative)
--- and requests all missing leaderboards from that partner via STARTSYNC with per-class hashes.
+-- Picks a random offer and requests all missing leaderboards from that partner via
+-- STARTSYNC with per-class hashes. Always picking the same member (the one online the
+-- longest, as this used to) made that member serve everyone in the guild whose data
+-- differed; a random pick spreads that load over every member who offered.
 function WoWForeverRaceSync:DoGuildSync()
     local offers = self.guildOffers
     self.guildOffers = nil
@@ -833,13 +964,7 @@ function WoWForeverRaceSync:DoGuildSync()
         return
     end
 
-    -- pick longest-uptime partner (lowest loginTime)
-    local best = offers[1]
-    for _, offer in ipairs(offers) do
-        if offer.loginTime ~= nil and (best.loginTime == nil or offer.loginTime < best.loginTime) then
-            best = offer
-        end
-    end
+    local best = self:SelectPartnerFromList(offers)
 
     WoWForeverRace:DebugPrint("DoGuildSync with " .. best.name)
 

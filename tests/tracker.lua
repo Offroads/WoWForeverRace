@@ -951,6 +951,318 @@ describe("Tracker", function()
         end)
     end)
 
+    describe("Discovery", function()
+        local NetEvents = WoWForeverRace.Config.Network.Events
+        local sent, startTime
+
+        local function sentOf(event)
+            local out = {}
+            for _, s in ipairs(sent) do
+                if s.event == event then out[#out + 1] = s end
+            end
+            return out
+        end
+
+        before_each(function()
+            startTime = time
+            sent = {}
+            network.SendObject = function(_, event, payload, channel, target)
+                sent[#sent + 1] = {event = event, payload = payload, channel = channel, target = target}
+            end
+        end)
+
+        after_each(function()
+            time = startTime
+        end)
+
+        describe("data requests", function()
+            before_each(function()
+                tracker:ProcessPlayerInfo(playerInfo("Nub One", 20, DRUIDIDX))
+            end)
+
+            it("asks at most one beacon per DataRequestInterval", function()
+                local interval = config.DataRequestInterval
+
+                tracker:OnNetDataAvailable(12345, "Ann Wanderer")
+                assert.equals(1, #sentOf(NetEvents.DataRequest))
+                assert.equals("Ann Wanderer", sent[1].target)
+
+                time = time + interval - 1
+                tracker:OnNetDataAvailable(12345, "Bob Faraway")
+                assert.equals(1, #sentOf(NetEvents.DataRequest), "still waiting for Ann's answer")
+
+                time = time + 1
+                tracker:OnNetDataAvailable(12345, "Cid Later")
+                assert.equals(2, #sentOf(NetEvents.DataRequest))
+                assert.equals("Cid Later", sent[2].target)
+            end)
+
+            it("does not start waiting for a beacon that matches our data", function()
+                tracker:OnNetDataAvailable(tracker:ComputeFullHash(), "Ann Wanderer")
+                assert.equals(0, #sent)
+
+                tracker:OnNetDataAvailable(12345, "Bob Faraway")
+                assert.equals(1, #sentOf(NetEvents.DataRequest))
+            end)
+        end)
+
+        describe("answers", function()
+            -- the overall board holds 5 warriors, the druid board adds one player of its own:
+            -- a yell answer is 3 chunks of the overall board and 1 of the druid board
+            local function requesterHashes()
+                local hashes = {}
+                for _, boardIndex in ipairs(core:BoardIndexes()) do
+                    hashes[boardIndex + 1] = 5381
+                end
+                return hashes
+            end
+
+            local function hashOf(players)
+                return WoWForeverRace.Leaderboard.ComputeHash({players = players})
+            end
+
+            -- the hash our answer carries for a board: of the players we send for it
+            local function boardHash(boardIndex)
+                return hashOf(tracker:BatchPlayers(boardIndex))
+            end
+
+            -- names of the players we yelled for a board
+            local function yelledNames(sends, boardIndex)
+                local names = {}
+                for _, s in ipairs(sends) do
+                    if s.event == NetEvents.PlayerInfoBatch and s.channel == "YELL" and s.payload[3] == boardIndex then
+                        for _, p in ipairs(WoWForeverRace.Serializer.DeserializePlayerInfoBatch(s.payload[1])) do
+                            names[p.name] = true
+                        end
+                    end
+                end
+                return names
+            end
+
+            -- a data request from someone whose boards equal those of `ofDb` except the druid board
+            local function druidOnlyRequest(ofDb)
+                local hashes = {}
+                for _, boardIndex in ipairs(core:BoardIndexes()) do
+                    hashes[boardIndex + 1] = WoWForeverRace.Leaderboard.ComputeHash(ofDb.factionrealm.leaderboard[boardIndex])
+                end
+                hashes[DRUIDIDX + 1] = 5381
+                return hashes
+            end
+
+            local function yellChunks(boardIndex)
+                local count = 0
+                for _, s in ipairs(sentOf(NetEvents.PlayerInfoBatch)) do
+                    if s.channel == "YELL" and s.payload[3] == boardIndex then count = count + 1 end
+                end
+                return count
+            end
+
+            local function hearYell(sender, payload)
+                tracker:OnNetPlayerInfoBatch(payload, sender, "YELL")
+            end
+
+            -- another player's discovery yell for a board, in chunks like SendBatches sends it;
+            -- chunks: optional number of chunks to deliver (default all)
+            local function hearAnswer(sender, boardIndex, players, chunks)
+                local hash = hashOf(players)
+                local size = config.YellChunkSize
+                local total = math.ceil(#players / size)
+                for i = 0, (chunks or total) - 1 do
+                    local chunk = {}
+                    for j = i * size + 1, math.min((i + 1) * size, #players) do chunk[#chunk + 1] = players[j] end
+                    hearYell(sender, {WoWForeverRace.Serializer.SerializePlayerInfoBatch(chunk), true, boardIndex, hash})
+                end
+            end
+
+            before_each(function()
+                config = merge(WoWForeverRace.Config, {MaxLeaderboardSize = 5, YellChunkSize = 2})
+                tracker = WoWForeverRace.Tracker(config, core, db, eventbus, network)
+                for i = 1, 5 do
+                    tracker:ProcessPlayerInfo(playerInfo("Warrior " .. string.char(64 + i), 30 + i, WARRIORIDX))
+                end
+                tracker:ProcessPlayerInfo(playerInfo("Druid Low", 10, DRUIDIDX))
+                sent = {}
+            end)
+
+            -- opens our window and has two players ask, so the answer is yelled
+            local function beaconWithTwoRequesters()
+                tracker:SendDiscoveryBeacon()
+                tracker:OnNetDataRequest(requesterHashes(), "Ann Wanderer")
+                tracker:OnNetDataRequest(requesterHashes(), "Bob Faraway")
+            end
+
+            -- closes the window, then lets every yell chunk go out (the timer stub fires
+            -- a timer scheduled from a callback on the next Advance, unless it is due now)
+            local function answer()
+                _G.C_Timer.Advance(config.RequestSyncWait)
+                _G.C_Timer.Advance(10)
+            end
+
+            it("yells every board, marked as a discovery answer with the hash of what it sends", function()
+                beaconWithTwoRequesters()
+                answer()
+
+                assert.equals(3, yellChunks(0))
+                assert.equals(1, yellChunks(DRUIDIDX))
+                for _, s in ipairs(sentOf(NetEvents.PlayerInfoBatch)) do
+                    assert.is_true(s.payload[2])
+                    assert.equals(boardHash(s.payload[3]), s.payload[4])
+                end
+            end)
+
+            it("skips a board another player yelled with the same data since our window opened", function()
+                beaconWithTwoRequesters()
+                hearAnswer("Zed Other", 0, tracker:BatchPlayers(0))
+                answer()
+
+                assert.equals(0, yellChunks(0))
+                assert.equals(1, yellChunks(DRUIDIDX), "a board nobody yelled is still sent")
+            end)
+
+            it("still yells a board another player yelled with different data", function()
+                beaconWithTwoRequesters()
+                local fewer = {}
+                for i = 1, 4 do fewer[i] = tracker:BatchPlayers(0)[i] end
+                hearAnswer("Zed Other", 0, fewer)
+                answer()
+
+                assert.equals(3, yellChunks(0))
+            end)
+
+            it("does not skip for a yell that only claims our data", function()
+                beaconWithTwoRequesters()
+                -- our hash, but none of the players
+                hearYell("Zed Other", {"", true, 0, boardHash(0)})
+                answer()
+
+                assert.equals(3, yellChunks(0))
+            end)
+
+            it("counts another player's answer only once all its chunks arrived", function()
+                beaconWithTwoRequesters()
+                hearAnswer("Zed Other", 0, tracker:BatchPlayers(0), 2)
+                answer()
+
+                assert.equals(3, yellChunks(0))
+            end)
+
+            it("never skips a board for a ding push", function()
+                beaconWithTwoRequesters()
+                hearYell("Zed Other", {"", false, 0})
+                answer()
+
+                assert.equals(3, yellChunks(0))
+            end)
+
+            it("ignores a yell heard before our window opened", function()
+                time = time - 10
+                hearAnswer("Zed Other", 0, tracker:BatchPlayers(0))
+                time = time + 10
+                beaconWithTwoRequesters()
+                answer()
+
+                assert.equals(3, yellChunks(0))
+            end)
+
+            it("finishes a board it started when its name is the lower one", function()
+                beaconWithTwoRequesters()
+                _G.C_Timer.Advance(config.RequestSyncWait)
+                assert.equals(1, yellChunks(0), "first chunk out")
+
+                hearAnswer("Zzz Later", 0, tracker:BatchPlayers(0))
+                _G.C_Timer.Advance(10)
+
+                assert.equals(3, yellChunks(0))
+            end)
+
+            it("stops a board it started when the other owner's name is lower", function()
+                beaconWithTwoRequesters()
+                _G.C_Timer.Advance(config.RequestSyncWait)
+                assert.equals(1, yellChunks(0), "first chunk out")
+
+                hearAnswer("Aaa First", 0, tracker:BatchPlayers(0))
+                _G.C_Timer.Advance(10)
+
+                assert.equals(1, yellChunks(0))
+                assert.equals(1, yellChunks(DRUIDIDX))
+            end)
+
+            it("whispers a single requester whatever it heard", function()
+                tracker:SendDiscoveryBeacon()
+                tracker:OnNetDataRequest(requesterHashes(), "Ann Wanderer")
+                hearAnswer("Zed Other", 0, tracker:BatchPlayers(0))
+                _G.C_Timer.Advance(config.RequestSyncWait)
+
+                local whispers = sentOf(NetEvents.PlayerInfoBatch)
+                assert.equals(2, #whispers)
+                for _, s in ipairs(whispers) do
+                    assert.equals("WHISPER", s.channel)
+                    assert.equals("Ann Wanderer", s.target)
+                    assert.is_true(s.payload[2])
+                    assert.equals(boardHash(s.payload[3]), s.payload[4])
+                end
+            end)
+
+            it("still yells a player another owner's answer for the same board left out", function()
+                -- A holds the same druid board as we do, but knows one warrior less, so Druid X
+                -- sits on A's overall board and A's druid answer leaves Druid X out
+                local dbA = LibStub("AceDB-3.0"):New({}, WoWForeverRace.DefaultDB, true)
+                local coreA = WoWForeverRace.Core(WoWForeverRace.Config, "Aaa Other", "NubVille")
+                function coreA:Now() return time end
+                local sentA = {}
+                local networkA = {SendObject = function(_, event, payload, channel)
+                    sentA[#sentA + 1] = {event = event, payload = payload, channel = channel}
+                end}
+                local trackerA = WoWForeverRace.Tracker(config, coreA, dbA, WoWForeverRace.EventBus(), networkA)
+                for i = 1, 4 do
+                    trackerA:ProcessPlayerInfo(playerInfo("Warrior " .. string.char(64 + i), 30 + i, WARRIORIDX))
+                end
+                trackerA:ProcessPlayerInfo(playerInfo("Druid Low", 10, DRUIDIDX))
+                trackerA:ProcessPlayerInfo(playerInfo("Druid X", 20, DRUIDIDX))
+                tracker:ProcessPlayerInfo(playerInfo("Druid X", 20, DRUIDIDX))
+                sent = {}
+                local druidBoardHash = WoWForeverRace.Leaderboard.ComputeHash
+                assert.equals(druidBoardHash(db.factionrealm.leaderboard[DRUIDIDX]),
+                        druidBoardHash(dbA.factionrealm.leaderboard[DRUIDIDX]), "equal druid boards")
+
+                -- both answer players who lack only the druid board, A a second earlier
+                trackerA:SendDiscoveryBeacon()
+                trackerA:OnNetDataRequest(druidOnlyRequest(dbA), "Ann Wanderer")
+                trackerA:OnNetDataRequest(druidOnlyRequest(dbA), "Bob Faraway")
+                _G.C_Timer.Advance(1)
+                tracker:SendDiscoveryBeacon()
+                tracker:OnNetDataRequest(druidOnlyRequest(db), "Cid Other")
+                tracker:OnNetDataRequest(druidOnlyRequest(db), "Dan Other")
+                _G.C_Timer.Advance(config.RequestSyncWait - 1)
+                assert.same({["Druid Low"] = true}, yelledNames(sentA, DRUIDIDX), "A leaves Druid X out")
+
+                -- we hear A's answer before our own window closes
+                for _, s in ipairs(sentA) do
+                    if s.event == NetEvents.PlayerInfoBatch and s.channel == "YELL" then
+                        hearYell("Aaa Other", s.payload)
+                    end
+                end
+                _G.C_Timer.Advance(1)
+                _G.C_Timer.Advance(10)
+
+                assert.is_true(yelledNames(sent, DRUIDIDX)["Druid X"])
+                assert.equals(0, yellChunks(0), "our requesters need only the druid board")
+            end)
+
+            it("skips a class board when another owner's answer sent the same players", function()
+                tracker:ProcessPlayerInfo(playerInfo("Druid X", 20, DRUIDIDX))
+                sent = {}
+                tracker:SendDiscoveryBeacon()
+                tracker:OnNetDataRequest(druidOnlyRequest(db), "Cid Other")
+                tracker:OnNetDataRequest(druidOnlyRequest(db), "Dan Other")
+                hearAnswer("Aaa Other", DRUIDIDX, tracker:BatchPlayers(DRUIDIDX))
+                answer()
+
+                assert.equals(0, yellChunks(DRUIDIDX))
+            end)
+        end)
+    end)
+
     describe("Race leaderboards", function()
         local HUMAN, NIGHTELF, SKYBORNE = 1, 4, 95
 

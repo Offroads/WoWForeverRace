@@ -1,7 +1,23 @@
 # Changelog
 
-All user-visible changes to WoWForeverRace. The BigWigs packager ships this
-file in the release zip and posts it as the CurseForge release notes.
+## Unreleased
+
+Keeping the leaderboards in step costs far less once many players use the addon.
+
+### Added
+- The options window shows the addon version.
+
+### Changed
+- A party or raid whose members know different players gets in step within a
+  minute instead of several, with a fraction of the addon traffic: only the
+  member who asked and one other member send what is missing, to the whole
+  group at once, instead of every pair of members trading their leaderboards.
+- Guild members no longer all fetch missing leaderboards from the same member.
+  Each picks a random one of those who offered, so one player no longer has to
+  serve the whole guild.
+- In a crowded zone you ask for the leaderboards of at most one player every
+  10 seconds instead of answering every player who announces theirs, and you
+  no longer shout leaderboards to the zone that another player just shouted.
 
 ## v0.1.0-beta10 - 2026-09-29
 

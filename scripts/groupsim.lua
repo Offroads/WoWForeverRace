@@ -1,22 +1,25 @@
--- Group / raid traffic simulation: N complete addon stacks (Core, EventBus, Network,
--- Tracker, Sync, Roster) in one group, talking through the real network envelope.
+-- Group / raid / guild / zone traffic simulation: N complete addon stacks (Core,
+-- EventBus, Network, Tracker, Sync, Roster) talking through the real network envelope.
 -- Each client's outgoing traffic is paced by a ChatThrottleLib model (800 B/s, 4 KB
 -- burst), so the report shows queueing and time to get back in sync, not just counts.
 --
 -- Run from the repo root (in the dev container: `make sim`):
 --   lua scripts/groupsim.lua [scenario] [sizes] [savedvariables]
---     scenario        all (default), steady, reload, levelup, scan, diverge, drift
---     sizes           comma separated group sizes, default 5,40
+--     scenario        all (default), steady, reload, levelup, scan, diverge, drift, guild, zone
+--     sizes           comma separated numbers of clients, default 5,40
 --     savedvariables  optional SavedVariables file (a path inside the checkout) to
 --                     seed every client with, instead of tests/fixtures/horde-pve-factionrealm.lua;
 --                     its "Horde - PvE" factionrealm block is used (FACTION and REALM below)
 --
--- The model: every client stays online, in yell range of the others and in the same
--- group, with no guild. Message sizes are the serialized envelope times the
--- compression ratio measured on real beta leaderboards (not a real Huffman run per
--- message), each client sends its queue in order, and the server's own addon message
--- limit is not modelled. Older checkouts without the group ticker run as well, so the
--- same script compares two versions.
+-- The model: every client stays online. In the group scenarios (all but guild and
+-- zone) they are in yell range of each other and in the same group, with no guild;
+-- guild puts them in one guild, out of yell range and not grouped, each logged in at a
+-- different time; zone puts them in yell range, not grouped and in no guild. Message
+-- sizes are the serialized envelope times the compression ratio measured on real beta
+-- leaderboards (not a real Huffman run per message, see scripts/netsize.lua for that),
+-- each client sends its queue in order, and the server's own addon message limit is
+-- not modelled. Older checkouts without the group ticker run as well, so the same
+-- script compares two versions: copy it into a checkout of the older version and run it there.
 package.path = "./src/?.lua;./src/?/?.lua;./libs/?.lua;./libs/?/?.lua;./tests/?.lua;./tests/?/?.lua;"
         .. package.path
 
@@ -93,6 +96,8 @@ local VERSION = version()
 -- world: every client queues its messages, the throttle model releases them
 -- ---------------------------------------------------------------------------
 local stacks, now, activeStack, log
+-- who hears whom: {group = bool, yell = bool, guild = bool}, set per scenario
+local world
 
 local function wireSize(text)
     local bytes = math.ceil(#text * COMPRESSION)
@@ -112,13 +117,14 @@ AceComm.SendCommMessage = function(_, prefix, text, channel, target)
                                queuedAt = now}
 end
 
-local function resetWorld()
+local function resetWorld(flags)
     stacks, log = {}, {}
+    world = flags
     now = START
     _G.SetTime(now)
     _G.C_Timer.Reset()
     _G.SetFaction(FACTION)
-    _G.SetIsInGuild(false)
+    _G.SetIsInGuild(flags.guild)
 end
 
 local function deliver(msg)
@@ -131,9 +137,13 @@ local function deliver(msg)
             local wanted
             if msg.channel == "WHISPER" then
                 wanted = other.name == msg.target
+            elseif msg.channel == "GUILD" then
+                wanted = world.guild
+            elseif msg.channel == "YELL" then
+                wanted = world.yell
             else
-                -- YELL, RAID, PARTY, INSTANCE_CHAT: the whole group stands together (no guild)
-                wanted = msg.channel ~= "GUILD"
+                -- RAID, PARTY, INSTANCE_CHAT
+                wanted = world.group
             end
             if wanted then
                 other.network:HandleAddonMessage(msg.prefix, msg.text, msg.channel, s.name)
@@ -232,7 +242,7 @@ end
 -- n clients online for a while (ready, tickers at random phases), just grouped up;
 -- keep < 1 gives each client only part of the boards
 local function makeGroup(n, keep, seed)
-    resetWorld()
+    resetWorld({group = true, yell = true, guild = false})
     math.randomseed(seed)
     memberLevels = {}
     for i = 1, n do
@@ -250,6 +260,33 @@ local function makeGroup(n, keep, seed)
             s.tracker:InitDiscoveryTicker()
             s.sync:InitBuddyTicker()
             if HAS_GROUP_TICKER then s.sync:InitGroupTicker() end
+        end)
+    end
+end
+
+-- n clients online for a while, not grouped (flags: the guild and yell range), each
+-- keeping part of the boards. Everyone logged in at a different time: the guild sync
+-- of older versions picks the member online the longest.
+local function makeCrowd(n, keep, seed, flags)
+    resetWorld(flags)
+    math.randomseed(seed)
+    _G.SetGroupMembers(nil)
+    for i = 1, n do
+        local fr = loadFactionRealm()
+        if keep < 1 then forget(fr, keep) end
+        local s = newStack(memberName(i), {factionrealm = {[aceDBKey] = fr}})
+        s.sync.isReady = true
+        s.core.loginTime = START - i * 60
+    end
+    for _, s in ipairs(stacks) do
+        _G.C_Timer.After(math.random(0, 300), function()
+            s.tracker:InitDiscoveryTicker()
+            s.sync:InitBuddyTicker()
+            if flags.guild then
+                -- the first guild round, then one every GuildSyncInterval
+                s.sync:SendGuildSync()
+                s.sync:InitGuildTicker()
+            end
         end)
     end
 end
@@ -386,7 +423,21 @@ scenarios.drift = function(n)
             since)
 end
 
-local ORDER = {"steady", "reload", "levelup", "scan", "diverge", "drift"}
+scenarios.guild = function(n)
+    makeCrowd(n, 0.6, 8, {group = false, yell = false, guild = true})
+    local since = resetCounters()
+    untilInSync(string.format("%d guild members out of yell range, each knowing 60%% of the boards, until in sync",
+            n), since)
+end
+
+scenarios.zone = function(n)
+    makeCrowd(n, 0.6, 7, {group = false, yell = true, guild = false})
+    local since = resetCounters()
+    untilInSync(string.format("%d players in yell range, not grouped, no guild, each knowing 60%% of the boards, "
+            .. "until in sync", n), since)
+end
+
+local ORDER = {"steady", "reload", "levelup", "scan", "diverge", "drift", "guild", "zone"}
 if SCENARIO ~= "all" and scenarios[SCENARIO] == nil then
     error("unknown scenario " .. SCENARIO .. ", expected all or one of: " .. table.concat(ORDER, ", "))
 end
