@@ -227,6 +227,16 @@ local WoWForeverRaceConfig = {
 }
 WoWForeverRace.Config = WoWForeverRaceConfig
 
+-- The version to show to the player. An unpackaged checkout still holds the packager's
+-- placeholder (it starts with "@"; not spelled out here, the packager would replace it too).
+function WoWForeverRaceConfig:DisplayVersion()
+    local version = self.Version
+    if type(version) ~= "string" or version == "" or version:sub(1, 1) == "@" then
+        return "development"
+    end
+    return version
+end
+
 function WoWForeverRaceConfig:IsValidClassIndex(classIndex)
     for _, validClassIndex in ipairs(self.MopClassIndexes) do
         if classIndex == validClassIndex then

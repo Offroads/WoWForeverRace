@@ -17,7 +17,14 @@ function WoWForeverRace:RegisterOptions()
     local configOptions = {
         type = "group",
         args = {
+            version = {
+                order = 1,
+                name = "Version: " .. WHITE .. WoWForeverRace.Config:DisplayVersion() .. "|r",
+                type = "description",
+                fontSize = "medium",
+            },
             enable = {
+                order = 2,
                 name = "Show Minimap Icon",
                 desc = "Enables / disables the minimap icon",
                 type = "toggle",

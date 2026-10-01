@@ -7,6 +7,9 @@ file in the release zip and posts it as the CurseForge release notes.
 
 Keeping the leaderboards in step costs far less once many players use the addon.
 
+### Added
+- The options window shows the addon version.
+
 ### Changed
 - A party or raid whose members know different players gets in step within a
   minute instead of several, with a fraction of the addon traffic: only the
