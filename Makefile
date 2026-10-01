@@ -19,10 +19,12 @@ TESTS ?= .*
 TESTOPTS ?=
 # busted run configuration from .busted: default (with coverage) or quick
 BUSTED_RUN ?= default
-# traffic simulation, see scripts/groupsim.lua (SV is also used by netsize)
+# traffic simulation, see scripts/groupsim.lua (SV is also used by netsize);
+# CHANNEL=nochannel keeps every client out of the realm channel
 SCENARIO ?= all
 SIZES ?= 5,40
 SV ?=
+CHANNEL ?=
 
 # if UPLOADRELEASE is set to anything (y, n, maybe, w/e) then we do -d during the `release` step
 # which will attempt to upload the release
@@ -39,7 +41,7 @@ help:
 	@echo "  lint            run luacheck on src/, tests/ and scripts/"
 	@echo "  tests           run the busted test suite (INCLUDES=<file pattern> TESTS=<name pattern>)"
 	@echo "  check           lint + tests"
-	@echo "  sim             simulate addon traffic in a party, raid, guild or zone (SCENARIO=<name> SIZES=5,40 SV=<file>)"
+	@echo "  sim             simulate addon traffic in a party, raid, guild, zone or realm (SCENARIO=<name> SIZES=5,40 SV=<file> CHANNEL=nochannel)"
 	@echo "  netsize         message sizes of a full update through the real compression (SV=<file>)"
 	@echo "  libs            download external libraries into ./libs (only if missing)"
 	@echo "  fetch-libs      force a fresh download of ./libs"
@@ -97,7 +99,7 @@ check: lint tests
 # SV: optional SavedVariables file inside the checkout to seed every client with
 #
 sim: libs
-	lua scripts/groupsim.lua $(SCENARIO) $(SIZES) $(SV)
+	lua scripts/groupsim.lua $(SCENARIO) $(SIZES) $(or $(SV),-) $(CHANNEL)
 
 #
 # -- netsize --

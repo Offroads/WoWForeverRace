@@ -15,6 +15,8 @@ local LibStub = _G.LibStub
 ---       event bus to facilitate communication between components
 ---@field Network       WoWForeverRaceNetwork
 ---       bridge between AceComms and our EventBus
+---@field Channel       WoWForeverRaceChannel
+---       keeps us in the hidden realm channel that reaches every addon user of our faction
 ---@field Scanner       WoWForeverRaceScanner
 ---       contains ticker to start Scans and publishes events based of Scan results
 ---@field Tracker       WoWForeverRaceTracker
@@ -44,10 +46,11 @@ function WoWForeverRace:OnInitialize()
     -- init components (should have minimal side effects)
     self.Core = WoWForeverRace.Core(self.Config, player, realm)
     self.EventBus = WoWForeverRace.EventBus()
-    self.Network = WoWForeverRace.Network(self.Core, self.EventBus)
-    self.Tracker = WoWForeverRace.Tracker(self.Config, self.Core, self.DB, self.EventBus, self.Network)
+    self.Channel = WoWForeverRace.Channel(self.Config, self.Core, self.DB, self.EventBus)
+    self.Network = WoWForeverRace.Network(self.Core, self.EventBus, self.Channel)
+    self.Tracker = WoWForeverRace.Tracker(self.Config, self.Core, self.DB, self.EventBus, self.Network, self.Channel)
     self.ChatNotifier = WoWForeverRace.ChatNotifier(self.Config, self.Core, self.DB, self.EventBus)
-    self.Sync = WoWForeverRace.Sync(self.Config, self.Core, self.DB, self.EventBus, self.Network)
+    self.Sync = WoWForeverRace.Sync(self.Config, self.Core, self.DB, self.EventBus, self.Network, self.Channel)
     self.updater = WoWForeverRace.Updater(self.Core, self.EventBus)
     self.Roster = WoWForeverRace.Roster(self.Core, self.DB, self.EventBus)
     self.StatusFrame = WoWForeverRace.StatusFrame(self.Config, self.Core, self.DB, self.EventBus)
@@ -85,11 +88,13 @@ function WoWForeverRace:OnEnable()
     self:DebugPrint("me: " .. self.Core:RealMe())
 
     self.Network:Init()
+    self.Channel:Init()
 
     self.Tracker:InitDiscoveryTicker()
     self.Sync:InitGuildTicker()
     self.Sync:InitBuddyTicker()
     self.Sync:InitGroupTicker()
+    self.Sync:InitChannelTicker()
     self.Roster:InitGuildRosterTicker()
 
     local groupEventFrame = CreateFrame("Frame")

@@ -111,7 +111,10 @@ function WoWForeverRace:RegisterOptions()
                         descStyle = "inline",
                         width = "full",
                         type = "toggle",
-                        set = function(_, val) _self.DB.profile.options.networking = val end,
+                        set = function(_, val)
+                            _self.DB.profile.options.networking = val
+                            _self.Channel:OnNetworkingChanged()
+                        end,
                         get = function() return _self.DB.profile.options.networking end,
                     },
                     keypressScanning = {

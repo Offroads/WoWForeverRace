@@ -15,6 +15,7 @@ to us through the EventBus.
 ---@field Core WoWForeverRaceCore
 ---@field EventBus WoWForeverRaceEventBus
 ---@field Network WoWForeverRaceNetwork
+---@field Channel WoWForeverRaceChannel
 ---@field lbGlobal WoWForeverRaceLeaderboard
 ---@field lbPerClass table<string, WoWForeverRaceLeaderboard>
 ---@field lbPerRace table<number, WoWForeverRaceLeaderboard>
@@ -35,7 +36,8 @@ setmetatable(WoWForeverRaceTracker, {
     end,
 })
 
-function WoWForeverRaceTracker.new(Config, Core, DB, EventBus, Network)
+-- Channel: optional, the realm channel (see Channel); without it only the older flows run
+function WoWForeverRaceTracker.new(Config, Core, DB, EventBus, Network, Channel)
     local self = setmetatable({}, WoWForeverRaceTracker)
 
     self.Config = Config
@@ -43,6 +45,7 @@ function WoWForeverRaceTracker.new(Config, Core, DB, EventBus, Network)
     self.DB = DB
     self.EventBus = EventBus
     self.Network = Network
+    self.Channel = Channel
 
     self.pendingRequesters = nil   -- non-nil only during active discovery window
     self.discoveryOpenedAt = nil   -- when our latest discovery window opened
@@ -51,6 +54,8 @@ function WoWForeverRaceTracker.new(Config, Core, DB, EventBus, Network)
     self.boardYellParts = {}       -- [boardIndex][sender] = {hash, at, players}: yells still arriving, see CollectBoardYell
     self.pendingDings = {}
     self.dingPushPending = false
+    self.pendingChannelDings = {}  -- [name] = playerInfo: dings waiting to go to the realm channel
+    self.channelDingPending = false
 
     self.launchPurged = false      -- true once PurgePreLaunchData ran after the realm launch
 
@@ -259,6 +264,16 @@ function WoWForeverRaceTracker:PrunePlayerHistory()
     end
 end
 
+function WoWForeverRaceTracker:ChannelJoined()
+    return self.Channel ~= nil and self.Channel:IsJoined()
+end
+
+-- While the realm channel carries traffic it reaches every addon user of our faction,
+-- and the yells, guild, group and buddy pushes are only its backup.
+function WoWForeverRaceTracker:ChannelLive()
+    return self.Channel ~= nil and self.Channel:IsLive()
+end
+
 function WoWForeverRaceTracker:OnScanFinished(endofrace)
     -- the scanner believes the race may be over; verify against the actual boards
     if endofrace then
@@ -304,7 +319,12 @@ function WoWForeverRaceTracker:OnNetPlayerInfoBatch(payload, sender, distributio
             and type(payload[4]) == "number" and type(sender) == "string" then
         self:CollectBoardYell(payload[3], sender, payload[4], batch)
     end
-    self:ProcessPlayerInfoBatch(batch)
+    local changed = self:ProcessPlayerInfoBatch(batch)
+    if distribution == "CHANNEL" then
+        self:DropHeardDings(batch)
+    else
+        self:RelayToChannel(changed)
+    end
 end
 
 -- source: optional, see Config.WhoResultSources
@@ -321,14 +341,36 @@ function WoWForeverRaceTracker:OnSlashWhoResult(playerInfoBatch, source)
     end
 end
 
+-- leaderboards synced by whisper or over the group, never over the realm channel
 function WoWForeverRaceTracker:OnSyncResult(playerInfoBatch)
-    self:ProcessPlayerInfoBatch(playerInfoBatch)
+    self:RelayToChannel(self:ProcessPlayerInfoBatch(playerInfoBatch))
+end
+
+-- What reached us outside the realm channel (a whisper, the group, the guild, a yell) and
+-- changed our leaderboards is news to the channel too: the player who sent it is not on
+-- the channel, or held something the channel never heard. So one sync with a single
+-- player brings it to everyone. Not right after joining: then we are the one behind,
+-- and what we gain is what the channel already has.
+function WoWForeverRaceTracker:RelayToChannel(changedPlayers)
+    if #changedPlayers == 0 then return end
+    if not self.DB.profile.options.networking then return end
+    if self.DB.factionrealm.finished then return end
+    if not self:ChannelJoined() or self.Channel:SettleDelay() > 0 then return end
+
+    self:ScheduleChannelDingPush(changedPlayers)
 end
 
 -- toGroup: also push to our group; not for levels every group member reads itself
 function WoWForeverRaceTracker:ScheduleDingPush(changedPlayers, toGroup)
     if not self.DB.profile.options.networking then return end
     if self.DB.factionrealm.finished then return end
+
+    -- the realm channel reaches every addon user of our faction with one message;
+    -- everything below is the backup for when nobody is heard there
+    if self:ChannelJoined() then
+        self:ScheduleChannelDingPush(changedPlayers)
+        if self:ChannelLive() then return end
+    end
 
     -- YELL immediately so zone players get real-time updates
     local batchstr = WoWForeverRace.Serializer.SerializePlayerInfoBatch(changedPlayers)
@@ -394,10 +436,99 @@ function WoWForeverRaceTracker:FlushDingPush()
     end
 end
 
-function WoWForeverRaceTracker:ProcessPlayerInfoBatch(playerInfoBatch)
-    for _, playerInfo in ipairs(playerInfoBatch) do
-        self:ProcessPlayerInfo(playerInfo)
+-- Queues dings for the realm channel: what we spotted ourselves, and what we learned
+-- outside the channel (RelayToChannel). They go out as one message after a short random
+-- delay: many clients spot the same level-up within seconds of each other, and whoever
+-- sends first makes the others drop theirs (DropHeardDings). Right after joining the
+-- channel they also wait for the join sync (Channel:SettleDelay).
+function WoWForeverRaceTracker:ScheduleChannelDingPush(changedPlayers)
+    for _, p in ipairs(changedPlayers) do
+        self.pendingChannelDings[p.name] = p
     end
+
+    if self.channelDingPending then return end
+    self.channelDingPending = true
+
+    local delay = self.Config.ChannelDingDelayMin
+            + math.random() * (self.Config.ChannelDingDelayMax - self.Config.ChannelDingDelayMin)
+    local _self = self
+    C_Timer.After(math.max(delay, self.Channel:SettleDelay()), function()
+        _self:FlushChannelDingPush()
+    end)
+end
+
+function WoWForeverRaceTracker:FlushChannelDingPush()
+    self.channelDingPending = false
+
+    local pending = self.pendingChannelDings
+    self.pendingChannelDings = {}
+
+    if not self.DB.profile.options.networking then return end
+    if self.DB.factionrealm.finished then return end
+
+    local players = {}
+    for _, p in pairs(pending) do
+        if self:DingStillStands(p) then
+            players[#players + 1] = p
+        end
+    end
+    if #players == 0 then return end
+    table.sort(players, function(a, b) return a.name < b.name end)
+
+    local batchstr = WoWForeverRace.Serializer.SerializePlayerInfoBatch(players)
+    self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, {batchstr, false, 0}, "RACE")
+end
+
+-- Whether a ding we spotted is still what our leaderboards say about that player. A
+-- sync or another player's push may have brought a higher level or an earlier time
+-- since, and then ours is old news: that is how a client that was behind when it
+-- spotted the "ding" keeps quiet once it caught up.
+function WoWForeverRaceTracker:DingStillStands(playerInfo)
+    local boards = {0}
+    if self.Config:IsValidClassIndex(playerInfo.classIndex) then
+        boards[#boards + 1] = playerInfo.classIndex
+    end
+    if self.Core:IsValidRaceIndex(playerInfo.raceIndex) then
+        boards[#boards + 1] = self.Config:RaceBoardIndex(playerInfo.raceIndex)
+    end
+
+    for _, boardIndex in ipairs(boards) do
+        for _, player in ipairs(self.DB.factionrealm.leaderboard[boardIndex].players) do
+            if player.name == playerInfo.name then
+                if player.level == playerInfo.level and player.dingedAt == playerInfo.dingedAt then
+                    return true
+                end
+                break
+            end
+        end
+    end
+    return false
+end
+
+-- The realm channel just told everyone about these players: a ding of ours that is
+-- still waiting to go there is no news anymore, unless ours has the higher level or
+-- the earlier time (that one every client keeps, so it still has to go out).
+function WoWForeverRaceTracker:DropHeardDings(batch)
+    for _, heard in ipairs(batch) do
+        local pending = heard.name ~= nil and self.pendingChannelDings[heard.name] or nil
+        if pending ~= nil and type(heard.level) == "number" and type(heard.dingedAt) == "number"
+                and (heard.level > pending.level
+                or (heard.level == pending.level and heard.dingedAt <= pending.dingedAt)) then
+            self.pendingChannelDings[heard.name] = nil
+        end
+    end
+end
+
+-- returns the players that changed a leaderboard
+function WoWForeverRaceTracker:ProcessPlayerInfoBatch(playerInfoBatch)
+    local changed = {}
+    for _, playerInfo in ipairs(playerInfoBatch) do
+        local normalizedInfo, isChanged = self:ProcessPlayerInfo(playerInfo)
+        if isChanged then
+            changed[#changed + 1] = normalizedInfo
+        end
+    end
+    return changed
 end
 
 -- djb2 chain over all leaderboards in fixed order (global=0, classes, races), see Config:BoardIndexes.
@@ -617,11 +748,13 @@ end
 -- Every BroadcastInterval seconds: announce our hash to YELL and open a
 -- 5-second window for others to request our data.
 -- Guild sync is handled separately by Sync:InitGuildTicker().
+-- Not while the realm channel carries traffic: the zone hears everything there.
 function WoWForeverRaceTracker:SendDiscoveryBeacon()
     -- the ticker doubles as the clock that notices the realm launch passing mid-session
     self:PurgePreLaunchData()
     if self.DB.factionrealm.finished then return end
     if not self.DB.profile.options.networking then return end
+    if self:ChannelLive() then return end
     if #self.DB.factionrealm.leaderboard[0].players == 0 then return end
 
     local fullHash = self:ComputeFullHash()

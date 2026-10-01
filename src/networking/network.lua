@@ -51,6 +51,7 @@ and broadcast them as events once received fully over our EventBus.
 ---@class WoWForeverRaceNetwork
 ---@field Core WoWForeverRaceCore
 ---@field EventBus WoWForeverRaceEventBus
+---@field Channel WoWForeverRaceChannel
 local WoWForeverRaceNetwork = {}
 WoWForeverRaceNetwork.__index = WoWForeverRaceNetwork
 WoWForeverRace.Network = WoWForeverRaceNetwork
@@ -63,11 +64,13 @@ setmetatable(WoWForeverRaceNetwork, {
 
 ---@param Core WoWForeverRaceCore
 ---@param EventBus WoWForeverRaceEventBus
-function WoWForeverRaceNetwork.new(Core, EventBus)
+---@param Channel WoWForeverRaceChannel optional, without it there is no "RACE" distribution
+function WoWForeverRaceNetwork.new(Core, EventBus, Channel)
     local self = setmetatable({}, WoWForeverRaceNetwork)
 
     self.Core = Core
     self.EventBus = EventBus
+    self.Channel = Channel
 
     AceComm:RegisterComm(WoWForeverRace.Config.Network.Prefix, function(...)
         self:HandleAddonMessage(...)
@@ -148,6 +151,10 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
         debugLogPayload(event, payload)
 
         self:TrackMessage("recv", event)
+        -- a player of our faction on a chat channel: the realm channel carries traffic
+        if distribution == "CHANNEL" and self.Channel ~= nil then
+            self.Channel:NoteSender(senderName)
+        end
         self.EventBus:PublishEvent(event, payload, sender, distribution)
     end)
 
@@ -169,6 +176,15 @@ function WoWForeverRaceNetwork:ResolveGroupChannel()
         return "PARTY"
     end
     return nil
+end
+
+-- Resolves the virtual "RACE" channel to the number of the realm channel (see
+-- Channel) as the "CHANNEL" target, or nil when we are not in it.
+function WoWForeverRaceNetwork:ResolveRaceChannel()
+    if self.Channel == nil or not self.Channel:IsJoined() then
+        return nil
+    end
+    return tostring(self.Channel:Number())
 end
 
 function WoWForeverRaceNetwork:IsLockedDown()
@@ -239,7 +255,7 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
     end
 
     -- resolve the channel first so nothing is serialized, logged or counted
-    -- for a group message that has nowhere to go
+    -- for a group or realm channel message that has nowhere to go
     if channel == "GROUP" then
         channel = self:ResolveGroupChannel()
         if channel == nil then
@@ -247,6 +263,13 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
             return
         end
         target = nil
+    elseif channel == "RACE" then
+        target = self:ResolveRaceChannel()
+        if target == nil then
+            WoWForeverRace:DebugPrint("Dropped " .. event .. " -> RACE (not in the realm channel)")
+            return
+        end
+        channel = "CHANNEL"
     end
 
     -- the third element locks the data to our faction, see HandleAddonMessage;

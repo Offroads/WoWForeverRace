@@ -25,6 +25,7 @@ src\util\list-helpers.lua
 src\util\table-helpers.lua
 src\util\chat.lua
 src\networking\network.lua
+src\networking\channel.lua
 src\core\event-bus.lua
 src\core\core.lua
 src\core\tracker.lua

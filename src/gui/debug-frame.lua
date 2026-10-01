@@ -40,6 +40,8 @@ local EVENT_NAMES = {
     BPONG     = "BuddyPong",
     FTLSYNC   = "FTLSync",
     PHSYNC    = "PlayerHistorySync",
+    CHSYNC    = "ChannelSync",
+    CHOFFR    = "ChannelOffer",
 }
 
 local function formatAge(timestamp)
@@ -273,10 +275,35 @@ end
 function WoWForeverRaceDebugFrame:Render()
     if not self.scroll then return end
     self.scroll:ReleaseChildren()
+    self:RenderChannel()
     self:RenderMsgStats()
     self:RenderHashLog()
     self:RenderBuddies()
     self.scroll:DoLayout()
+end
+
+-- The realm channel: whether we are in it, and whether it carries traffic (while it
+-- does, the yell, guild, group and buddy sync stay quiet).
+function WoWForeverRaceDebugFrame:RenderChannel()
+    local channel = WoWForeverRace.Channel
+    if type(channel) ~= "table" or channel.Status == nil or channel.status == nil then return end
+
+    local state
+    if channel:IsLive() then
+        state = GREEN .. "live|r"
+    elseif channel:IsJoined() then
+        state = ORANGE .. "joined, nobody heard|r"
+    else
+        state = GRAY .. channel:Status() .. "|r"
+    end
+
+    local label = AceGUI:Create("Label")
+    label:SetFullWidth(true)
+    label:SetText(YELLOW .. "Realm channel|r " .. WHITE .. channel:Name() .. "|r " .. state
+            .. GRAY .. "  #" .. tostring(channel:Number() or "-") .. ", " .. channel:Size() .. " heard|r")
+    self.scroll:AddChild(label)
+
+    self:AddSpacer()
 end
 
 function WoWForeverRaceDebugFrame:RenderMsgStats()

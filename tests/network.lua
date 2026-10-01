@@ -75,6 +75,93 @@ describe("Network", function()
         end)
     end)
 
+    describe("RACE channel", function()
+        local RACE_CHANNEL = WoWForeverRace.Config.RaceChannelPrefix .. "Alliance"
+        local core, eventbus, channel, network, commSpy
+
+        before_each(function()
+            _G.C_Timer.Reset()
+            SetChatChannels({"General", "Trade", RACE_CHANNEL})
+            local db = LibStub("AceDB-3.0"):New("WoWForeverRace_DB", WoWForeverRace.DefaultDB, true)
+            db:ResetDB()
+            core = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
+            eventbus = WoWForeverRace.EventBus()
+            channel = WoWForeverRace.Channel(WoWForeverRace.Config, core, db, eventbus)
+            network = WoWForeverRace.Network(core, eventbus, channel)
+            commSpy = spy.on(AceComm, "SendCommMessage")
+        end)
+
+        after_each(function()
+            commSpy:revert()
+            SetChatChannels(nil)
+            SetChatLockdown(false)
+        end)
+
+        it("goes to the realm channel by its current number", function()
+            channel:TryJoin()
+            network:SendObject(NetworkEvents.ChannelSync, {1}, "RACE")
+            assert.spy(commSpy).was_called_with(match.is_ref(AceComm),
+                    WoWForeverRace.Config.Network.Prefix, match.is_string(), "CHANNEL", "3", "BULK")
+
+            -- the number moves when the player's channel list changes
+            SetChatChannels({"General", RACE_CHANNEL})
+            network:SendObject(NetworkEvents.ChannelSync, {1}, "RACE")
+            assert.spy(commSpy).was_called_with(match.is_ref(AceComm),
+                    WoWForeverRace.Config.Network.Prefix, match.is_string(), "CHANNEL", "2", "BULK")
+        end)
+
+        it("is dropped when we are not in the realm channel", function()
+            -- the channel exists in the player's list, but our join was never confirmed
+            network:SendObject(NetworkEvents.ChannelSync, {1}, "RACE")
+            assert.spy(commSpy).was_not_called()
+
+            channel:TryJoin()
+            SetChatChannels({"General", "Trade"})
+            network:SendObject(NetworkEvents.ChannelSync, {1}, "RACE")
+            assert.spy(commSpy).was_not_called()
+        end)
+
+        it("is dropped without a channel component", function()
+            network = WoWForeverRace.Network(core, eventbus)
+            network:SendObject(NetworkEvents.ChannelSync, {1}, "RACE")
+            assert.spy(commSpy).was_not_called()
+        end)
+
+        it("is resolved when a lockdown ends, not when the message was held", function()
+            channel:TryJoin()
+            SetChatLockdown(true)
+            network:SendObject(NetworkEvents.PlayerInfoBatch, {"a", false, 0}, "RACE")
+            SetChatChannels({"General", RACE_CHANNEL})
+            SetChatLockdown(false)
+            _G.C_Timer.Advance(6)
+
+            assert.spy(commSpy).was_called_with(match.is_ref(AceComm),
+                    WoWForeverRace.Config.Network.Prefix, match.is_string(), "CHANNEL", "2", "BULK")
+        end)
+
+        it("notes who was heard on a chat channel", function()
+            channel:TryJoin()
+            local Prefix = WoWForeverRace.Config.Network.Prefix
+            assert.is_false(channel:IsLive())
+
+            -- a whisper says nothing about the channel, and neither does the other faction
+            network:HandleAddonMessage(Prefix, encodeEnvelope({NetworkEvents.ChannelSync, {1}, "Alliance"}),
+                    "WHISPER", "Dude")
+            network:HandleAddonMessage(Prefix, encodeEnvelope({NetworkEvents.ChannelSync, {1}, "Horde"}),
+                    "CHANNEL", "Dude")
+            -- our own messages come back to us on a channel
+            network:HandleAddonMessage(Prefix, encodeEnvelope({NetworkEvents.ChannelSync, {1}, "Alliance"}),
+                    "CHANNEL", "Nub")
+            assert.is_false(channel:IsLive())
+            assert.equals(0, channel:Size())
+
+            network:HandleAddonMessage(Prefix, encodeEnvelope({NetworkEvents.ChannelSync, {1}, "Alliance"}),
+                    "CHANNEL", "Dude")
+            assert.is_true(channel:IsLive())
+            assert.equals(1, channel:Size())
+        end)
+    end)
+
     it("drops malformed payloads without raising a receive error", function()
         local core = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
         local eventbus = WoWForeverRace.EventBus()

@@ -178,6 +178,25 @@ local WoWForeverRaceConfig = {
 
     DingPushDelay = 10,        -- seconds to batch dings before pushing to guild + buddies
 
+    -- Realm channel: a hidden player-made chat channel per faction (RaceChannelPrefix .. faction)
+    -- that every addon user of the faction joins. While it carries traffic it is the main
+    -- path, and yell, guild, group and buddy sync only run as its backup, see Channel:IsLive.
+    RaceChannelPrefix = "WFRace",
+    ChannelJoinDelay = 10,     -- seconds after login before the first join attempt
+    ChannelJoinRetry = 5,      -- seconds between join checks
+    ChannelJoinMaxWait = 60,   -- join anyway when the client's own channels didn't show up by then
+    ChannelJoinAttempts = 5,   -- joins tried before giving up for the session
+    -- the channel counts as live this long after another player was heard on it: longer than
+    -- the longest gap between two full syncs of one player, so two players keep it live
+    ChannelLiveTTL = 4800,
+    ChannelSettleTime = 60,    -- after joining, our own dings wait this long for the join sync (they may be old news)
+    ChannelDingDelayMin = 2,   -- a ding goes to the channel after a random delay in this range: of the
+    ChannelDingDelayMax = 6,   -- clients that spot the same ding, the first to send makes the others drop theirs
+    ChannelSyncInterval = 3600, -- full sync over the channel, about once per hour (+-25%)
+    ChannelSyncWait = 10,      -- seconds to collect channel offers before picking a partner
+    ChannelFollowUp = 300,     -- a full sync that brought us new players is followed by another one this soon
+    ChannelOfferTarget = 5,    -- offers a channel sync should draw, however many players are on the channel
+
     -- playerHistory sync: potentially large (hundreds of players x dozens of levels),
     -- so it's transferred only once per login (pull-only, toward the player who just
     -- logged in) and chunked to stay friendly to the addon channel throttle
@@ -200,10 +219,13 @@ local WoWForeverRaceConfig = {
             BuddyPong = "BPONG",
             FTLSync = "FTLSYNC",
             PlayerHistorySync = "PHSYNC",
+            ChannelSync = "CHSYNC",
+            ChannelOffer = "CHOFFR",
         },
     },
     Events = {
         NetworkReady = "NETWORK_READY",
+        ChannelJoined = "CHANNEL_JOINED",
         SlashWhoResult = "WHO_RESULT",
         SyncResult = "SYNC_RESULT",
         FTLSyncResult = "FTL_SYNC_RESULT",

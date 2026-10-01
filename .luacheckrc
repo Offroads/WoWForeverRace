@@ -46,5 +46,6 @@ files["tests"] = {
         "SetTime", "SetWhoResults", "GetWhoQuery", "ResetWhoQuery", "SetWhoPanelVisible", "SetChatLockdown",
         "SetIsInGuild", "SetGroupState", "SetGroupMembers", "SetGuildRoster", "GetGuildRosterRequests",
         "SetFaction", "SetRaceNames", "SetInCombat",
+        "SetChatChannels", "SetChannelJoinRefused", "GetChannelJoinRequests",
     },
 }

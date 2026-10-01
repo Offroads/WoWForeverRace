@@ -334,6 +334,294 @@ describe("Tracker", function()
         end)
     end)
 
+    describe("Realm channel", function()
+        local NetEvents = WoWForeverRace.Config.Network.Events
+        local RACE_CHANNEL = WoWForeverRace.Config.RaceChannelPrefix .. "Alliance"
+        local channel, sent, startTime, originalRandom
+
+        local function sentTo(distribution)
+            local out = {}
+            for _, s in ipairs(sent) do
+                if s.channel == distribution then out[#out + 1] = s end
+            end
+            return out
+        end
+
+        -- the players of the one batch sent to the realm channel
+        local function channelBatch()
+            local toChannel = sentTo("RACE")
+            assert.equals(1, #toChannel)
+            assert.equals(NetEvents.PlayerInfoBatch, toChannel[1].event)
+            assert.is_false(toChannel[1].payload[2])
+            return WoWForeverRace.Serializer.DeserializePlayerInfoBatch(toChannel[1].payload[1])
+        end
+
+        local function batchPayload(players)
+            return {WoWForeverRace.Serializer.SerializePlayerInfoBatch(players), false, 0}
+        end
+
+        before_each(function()
+            startTime = time
+            originalRandom = _G.math.random
+            _G.SetIsInGuild(false)
+            _G.SetChatChannels({"General", RACE_CHANNEL})
+
+            sent = {}
+            network.SendObject = function(_, event, payload, distribution, target)
+                sent[#sent + 1] = {event = event, payload = payload, channel = distribution, target = target}
+            end
+            local bus = WoWForeverRace.EventBus()
+            channel = WoWForeverRace.Channel(config, core, db, bus)
+            channel:TryJoin()
+            assert.is_true(channel:IsJoined())
+            tracker = WoWForeverRace.Tracker(config, core, db, bus, network, channel)
+            -- joined a while ago: our dings don't wait for the join sync anymore
+            time = time + config.ChannelSettleTime
+        end)
+
+        after_each(function()
+            time = startTime
+            _G.math.random = originalRandom
+            _G.SetChatChannels(nil)
+        end)
+
+        it("sends a ding to the channel after a short delay, next to the backup while nobody is heard", function()
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            -- the backup: the zone hears it right away
+            assert.equals(1, #sentTo("YELL"))
+            assert.equals(0, #sentTo("RACE"))
+
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+            local players = channelBatch()
+            assert.equals(1, #players)
+            assert.equals("Nubone", players[1].name)
+            assert.equals(5, players[1].level)
+        end)
+
+        it("only sends to the channel while it is live", function()
+            _G.SetIsInGuild(true)
+            _G.SetGroupState(2, false, false)
+            db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
+            channel:NoteSender("Dude")
+
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            _G.C_Timer.Advance(config.DingPushDelay)
+
+            assert.equals(1, #sent)
+            assert.equals("Nubone", channelBatch()[1].name)
+        end)
+
+        it("falls back to the other pushes when the channel went quiet", function()
+            channel:NoteSender("Dude")
+            time = time + config.ChannelLiveTTL + 1
+
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+
+            assert.equals(1, #sentTo("YELL"))
+        end)
+
+        it("waits a random time within the delay range", function()
+            _G.math.random = function() return 0 end
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            _G.C_Timer.Advance(config.ChannelDingDelayMin - 0.1)
+            assert.equals(0, #sentTo("RACE"))
+            _G.C_Timer.Advance(0.1)
+            assert.equals(1, #sentTo("RACE"))
+
+            _G.math.random = function() return 0.999 end
+            tracker:OnSlashWhoResult({ playerInfo("Nubtwo", 6), })
+            _G.C_Timer.Advance(config.ChannelDingDelayMax - 0.1)
+            assert.equals(1, #sentTo("RACE"))
+            _G.C_Timer.Advance(0.1)
+            assert.equals(2, #sentTo("RACE"))
+        end)
+
+        it("sends the dings of several results as one message", function()
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            tracker:OnSlashWhoResult({ playerInfo("Nubtwo", 6, WARRIORIDX), playerInfo("Nubone", 6), })
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            local players = channelBatch()
+            assert.equals(2, #players)
+            assert.equals("Nubone", players[1].name)
+            assert.equals(6, players[1].level)
+            assert.equals("Nubtwo", players[2].name)
+        end)
+
+        it("drops a waiting ding that another player sent to the channel first", function()
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), playerInfo("Nubtwo", 6, WARRIORIDX), })
+
+            -- the same level-up, spotted in the same second
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubone", 5), }), "Dude", "CHANNEL")
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            local players = channelBatch()
+            assert.equals(1, #players)
+            assert.equals("Nubtwo", players[1].name)
+        end)
+
+        it("sends nothing when the channel heard everything that was waiting", function()
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+
+            -- somebody saw the next level already
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubone", 6), }), "Dude", "CHANNEL")
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            assert.equals(0, #sent)
+        end)
+
+        it("still sends a waiting ding that is earlier than what the channel heard", function()
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubone", 5, DRUIDIDX, time + 3), }),
+                    "Dude", "CHANNEL")
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            -- every client keeps the earliest time, so ours has to reach them
+            assert.equals(time, channelBatch()[1].dingedAt)
+        end)
+
+        it("still sends a waiting ding that was only heard outside the channel", function()
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubone", 5), }), "Dude", "YELL")
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            assert.equals("Nubone", channelBatch()[1].name)
+        end)
+
+        it("drops a waiting ding that the join sync showed to be old news", function()
+            -- we just joined, and our first scan looks like news to us
+            time = startTime
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({
+                playerInfo("Nubone", 5), playerInfo("Nubtwo", 6, WARRIORIDX), playerInfo("Nubthree", 7, PRIESTIDX),
+            })
+
+            -- we were behind: our partner knew Nubone at that level for a while, and Nubtwo is higher by now
+            tracker:OnSyncResult({ playerInfo("Nubone", 5, DRUIDIDX, time - 3600), playerInfo("Nubtwo", 8, WARRIORIDX), })
+            _G.C_Timer.Advance(config.ChannelSettleTime)
+
+            -- neither our stale sightings nor what the partner sent goes to the channel
+            local players = channelBatch()
+            assert.equals(1, #players)
+            assert.equals("Nubthree", players[1].name)
+        end)
+
+        it("passes on to the channel what a sync outside of it changed", function()
+            channel:NoteSender("Dude")
+
+            -- a whispered leaderboard: one new player, one we knew at that level already
+            tracker:ProcessPlayerInfo(playerInfo("Nubtwo", 6, WARRIORIDX))
+            tracker:OnSyncResult({ playerInfo("Nubone", 5), playerInfo("Nubtwo", 6, WARRIORIDX, time + 5), })
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            local players = channelBatch()
+            assert.equals(1, #players)
+            assert.equals("Nubone", players[1].name)
+            assert.equals(1, #sent, "and nowhere else")
+        end)
+
+        it("passes on a ding heard by yell or whisper, but not one from the channel itself", function()
+            channel:NoteSender("Dude")
+
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubone", 5), }), "Ann Wanderer", "YELL")
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubtwo", 6, WARRIORIDX), }), "Bob Faraway", "WHISPER")
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubthree", 7, PRIESTIDX), }), "Dude", "CHANNEL")
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            local players = channelBatch()
+            assert.equals(2, #players)
+            assert.equals("Nubone", players[1].name)
+            assert.equals("Nubtwo", players[2].name)
+        end)
+
+        it("passes nothing on when a sync changed nothing", function()
+            channel:NoteSender("Dude")
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 5))
+
+            tracker:OnSyncResult({ playerInfo("Nubone", 5), })
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubone", 5), }), "Ann Wanderer", "WHISPER")
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            assert.equals(0, #sent)
+        end)
+
+        it("passes nothing on right after joining: what we gain then, the channel already has", function()
+            time = startTime
+            channel:NoteSender("Dude")
+
+            tracker:OnSyncResult({ playerInfo("Nubone", 5), })
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubtwo", 6, WARRIORIDX), }), "Ann Wanderer", "YELL")
+            _G.C_Timer.Advance(config.ChannelSettleTime + config.ChannelDingDelayMax)
+
+            assert.equals(0, #sent)
+        end)
+
+        it("passes nothing on without the channel, or with sharing off", function()
+            _G.SetChatChannels({"General"})
+            tracker:OnSyncResult({ playerInfo("Nubone", 5), })
+
+            _G.SetChatChannels({"General", RACE_CHANNEL})
+            db.profile.options.networking = false
+            tracker:OnSyncResult({ playerInfo("Nubtwo", 6, WARRIORIDX), })
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            assert.equals(0, #sent)
+        end)
+
+        it("holds dings back until the join sync had its time", function()
+            time = startTime
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+            assert.equals(0, #sent)
+
+            _G.C_Timer.Advance(config.ChannelSettleTime)
+            assert.equals("Nubone", channelBatch()[1].name)
+        end)
+
+        it("sends nothing to the channel after sharing was turned off", function()
+            channel:NoteSender("Dude")
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            db.profile.options.networking = false
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            assert.equals(0, #sent)
+        end)
+
+        it("sends no discovery beacon while the channel is live", function()
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 5))
+
+            channel:NoteSender("Dude")
+            tracker:SendDiscoveryBeacon()
+            assert.equals(0, #sent)
+
+            time = time + config.ChannelLiveTTL + 1
+            tracker:SendDiscoveryBeacon()
+            assert.equals(1, #sent)
+            assert.equals(NetEvents.DataAvailable, sent[1].event)
+            assert.equals("YELL", sent[1].channel)
+        end)
+
+        it("still answers a beacon and a data request while the channel is live", function()
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 5))
+            channel:NoteSender("Dude")
+
+            -- a player who is not in the channel announces different data
+            tracker:OnNetDataAvailable(12345, "Ann Wanderer")
+            assert.equals(1, #sent)
+            assert.equals(NetEvents.DataRequest, sent[1].event)
+            assert.equals("Ann Wanderer", sent[1].target)
+        end)
+    end)
+
     describe("Pioneers", function()
         it("UpdatePioneers sets raceStartedAt on first player", function()
             tracker:ProcessPlayerInfo(playerInfo("Alice", 15, DRUIDIDX, time))
