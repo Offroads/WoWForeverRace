@@ -1,8 +1,5 @@
 # Changelog
 
-All user-visible changes to WoWForeverRace. The BigWigs packager ships this
-file in the release zip and posts it as the CurseForge release notes.
-
 ## Unreleased
 
 Keeping the leaderboards in step costs far less once many players use the addon.
