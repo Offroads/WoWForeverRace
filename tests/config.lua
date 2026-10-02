@@ -80,4 +80,18 @@ describe("Config", function()
         assert.equals("development", config:DisplayVersion())
         config.Version = version
     end)
+
+    it("announces the build of a packaged version only", function()
+        local version, buildTime = config.Version, config.BuildTime
+        assert.is_nil(config:BuildInfo())
+
+        config.Version = "v0.1.0-beta14"
+        assert.is_nil(config:BuildInfo(), "a version without a build time")
+        config.BuildTime = "1790000000"
+        assert.same({1790000000, "v0.1.0-beta14"}, config:BuildInfo())
+        config.Version = version
+        assert.is_nil(config:BuildInfo(), "a build time without a version")
+
+        config.BuildTime = buildTime
+    end)
 end)

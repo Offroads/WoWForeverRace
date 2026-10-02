@@ -20,6 +20,8 @@ WoWForeverRace.Colors = WoWForeverRaceColors
 ---@class WoWForeverRaceConfig
 local WoWForeverRaceConfig = {
     Version = "@project-version@",
+    -- commit time of the packaged build (UTC epoch): builds are compared by it, see VersionCheck
+    BuildTime = "@project-timestamp@",
     Debug = false,
     Trace = false,
     --@debug@
@@ -210,6 +212,11 @@ local WoWForeverRaceConfig = {
     ChannelFollowUp = 300,     -- a full sync that brought us new players is followed by another one this soon
     ChannelOfferTarget = 5,    -- offers a channel sync should draw, however many players are on the channel
 
+    -- Version check: every client tells its build in its channel sync, its guild sync and
+    -- its buddy pings and pongs, see VersionCheck
+    VersionWarnDelay = 10,     -- seconds after login before the warning about a build an earlier session heard of
+    VersionMaxLength = 32,     -- longest version string accepted from another client
+
     -- playerHistory sync: potentially large (hundreds of players x dozens of levels),
     -- so it's transferred only once per login (pull-only, toward the player who just
     -- logged in) and chunked to stay friendly to the addon channel throttle
@@ -276,6 +283,16 @@ function WoWForeverRaceConfig:DisplayVersion()
         return "development"
     end
     return version
+end
+
+-- The build we announce to other clients, {buildTime, version}: see VersionCheck. nil for
+-- an unpackaged checkout, which has neither and so takes no part in the version check.
+function WoWForeverRaceConfig:BuildInfo()
+    local buildTime = tonumber(self.BuildTime)
+    if buildTime == nil or self:DisplayVersion() ~= self.Version then
+        return nil
+    end
+    return {buildTime, self.Version}
 end
 
 function WoWForeverRaceConfig:IsValidClassIndex(classIndex)

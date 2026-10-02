@@ -53,6 +53,7 @@ require("core.sync")
 require("core.serializer")
 require("core.chat-notifier")
 require("core.roster")
+require("core.version-check")
 require("networking.network")
 require("networking.channel")
 
