@@ -40,15 +40,12 @@ end
 -- to the other stacks' Network:HandleAddonMessage like the addon channel would
 -- ---------------------------------------------------------------------------
 local stacks, queue, activeStack, log, undelivered, now
--- false: the stacks are out of yell range of each other
-local yellReaches
 -- wireFault(msg, event): what happens to a message on its way, nil for a clean wire.
 -- "drop": it never arrives; "garble": it arrives with a packet missing
 local wireFault
 
 local function resetWorld()
     stacks, queue, log, undelivered = {}, {}, {}, {}
-    yellReaches = true
     wireFault = nil
     activeStack = nil
     now = START
@@ -88,8 +85,6 @@ local function pump()
                     wanted = stack.name == msg.target
                 elseif msg.channel == "GUILD" then
                     wanted = _G.IsInGuild()
-                elseif msg.channel == "YELL" then
-                    wanted = yellReaches
                 elseif msg.channel == "CHANNEL" then
                     -- the realm channel: every stack that joined it
                     wanted = stack.channel:IsJoined()
@@ -265,44 +260,37 @@ describe("Sync end to end with real data", function()
         assert.same(template.playerHistory, a.db.factionrealm.playerHistory)
     end)
 
-    it("login zone sync: a fresh client pulls overall, own class, pioneers and history", function()
+    it("login sync: a fresh client is ready at once and pulls what it lacks from a buddy", function()
         local a = stack("Alpha Tester", realSavedVariables())
         a.sync.isReady = true
         local before = hashes(a)
         local b = stack("Beta Tester", {})
+        b.db.factionrealm.buddies[a.name] = {lastSeen = now}
 
         b.sync:InitSync()
-        pump()
-        assert.equals(1, countEvents()[NetEvents.RequestSync])
-        assert.equals(1, countEvents()[NetEvents.OfferSync], "source should offer")
-
-        advance(Config.RequestSyncWait)
-        assert.equals(1, countEvents()[NetEvents.StartSync])
-        advance(historyPullTime(a))
-
+        -- nothing in the zone can answer (the client refuses addon messages to YELL), so
+        -- nothing is waited for: the buddy ping goes out right away
         assert.is_true(b.sync.isReady)
-        assertBoardEqual(a, b, 0)
-        assertBoardEqual(a, b, a.sync.classIndex)
+        pump()
+        assert.is_nil(countEvents()[NetEvents.RequestSync])
+        assert.equals(1, countEvents()[NetEvents.BuddyPing])
+        advance(2)
+
+        assertAllBoardsEqual(a, b)
         assertFTLEqual(a, b)
-        assertHistoryCovered(a, b)
         -- the source is untouched by handing out its data
         assert.same(before, hashes(a))
-        -- no retry: the partner answered
-        advance(Config.RetrySyncWait)
-        assert.equals(1, countEvents()[NetEvents.StartSync])
     end)
 
-    it("login zone sync: a client with identical data gets no offer", function()
+    it("login sync: a client with nobody to ask stays quiet", function()
         local a = stack("Alpha Tester", realSavedVariables())
         a.sync.isReady = true
         local b = stack("Beta Tester", realSavedVariables())
 
         b.sync:InitSync()
-        pump()
-        advance(Config.RequestSyncWait)
+        advance(Config.RetrySyncWait)
 
-        assert.is_nil(countEvents()[NetEvents.OfferSync])
-        assert.is_nil(countEvents()[NetEvents.SyncPayload])
+        assert.same({}, countEvents())
         assert.is_true(b.sync.isReady)
     end)
 
@@ -483,8 +471,7 @@ describe("Sync end to end with real data", function()
         assertFTLEqual(responder, c)
     end)
 
-    it("group sync: members out of yell range converge through the group alone", function()
-        yellReaches = false
+    it("group sync: members converge through the group alone", function()
         _G.SetGroupState(3, true, false)
         local a = stack("Alpha Tester", realSavedVariables())
         local b = stack("Beta Tester", realSavedVariables())
@@ -514,48 +501,28 @@ describe("Sync end to end with real data", function()
         assert.is_nil(after[NetEvents.SyncPayload])
     end)
 
-    it("discovery beacon: a zone listener with a different hash gets the missing boards", function()
-        local a = stack("Alpha Tester", realSavedVariables())
-        local b = stack("Beta Tester", {})
-
-        a.tracker:SendDiscoveryBeacon()
-        pump()
-        assert.equals(1, countEvents()[NetEvents.DataRequest])
-        advance(Config.RequestSyncWait)
-
-        assert.is_true((countEvents()[NetEvents.PlayerInfoBatch] or 0) >= 1)
-        assertAllBoardsEqual(a, b)
-
-        -- once equal the next beacon draws no request
-        local mark = #log + 1
-        a.tracker:SendDiscoveryBeacon()
-        advance(Config.RequestSyncWait)
-        assert.is_nil(countEvents(mark)[NetEvents.DataRequest])
-    end)
-
-    it("ding push: a scan result reaches the zone by YELL and the guild after the delay", function()
+    it("ding push: a scan result reaches the guild after the delay", function()
         _G.SetIsInGuild(true)
         local a = stack("Alpha Tester", realSavedVariables())
         local b = stack("Beta Tester", realSavedVariables())
         a.sync.isReady, b.sync.isReady = true, true
 
         b.eventbus:PublishEvent(Events.SlashWhoResult, {
-            {name = "Yell Tester", level = 21, classIndex = 4, raceIndex = 8},
+            {name = "Guild Tester", level = 21, classIndex = 4, raceIndex = 8},
         })
         pump()
-
-        assert.equals(1, countEvents()[NetEvents.PlayerInfoBatch])
-        assert.equals("Yell Tester", a.db.factionrealm.leaderboard[0].players[1].name)
-        assert.equals(8, a.db.factionrealm.leaderboard[0].players[1].raceIndex)
-        assertAllBoardsEqual(a, b)
+        -- nothing right away: there is no zone push, the client refuses addon messages to YELL
+        assert.is_nil(countEvents()[NetEvents.PlayerInfoBatch])
 
         advance(Config.DingPushDelay)
-        assert.equals(2, countEvents()[NetEvents.PlayerInfoBatch], "guild push after DingPushDelay")
+        assert.equals(1, countEvents()[NetEvents.PlayerInfoBatch], "guild push after DingPushDelay")
+        assert.equals("Guild Tester", a.db.factionrealm.leaderboard[0].players[1].name)
+        assert.equals(8, a.db.factionrealm.leaderboard[0].players[1].raceIndex)
         assertAllBoardsEqual(a, b)
     end)
 
     -- ---------------------------------------------------------------------------
-    -- the realm channel: the stacks are out of yell range, in no guild and not grouped
+    -- the realm channel: the stacks are in no guild and not grouped
     -- ---------------------------------------------------------------------------
     local RACE_CHANNEL = Config.RaceChannelPrefix .. FACTION
 
@@ -587,7 +554,6 @@ describe("Sync end to end with real data", function()
     end
 
     it("realm channel: joining pulls every leaderboard, the pioneers and the history from one partner", function()
-        yellReaches = false
         local a = stack("Alpha Tester", realSavedVariables())
         a.sync.isReady = true
         joinChannel(a)
@@ -617,7 +583,6 @@ describe("Sync end to end with real data", function()
     end)
 
     it("realm channel: a player on an older version hears about the newer one another player runs", function()
-        yellReaches = false
         local printStub = stub(WoWForeverRace, "PPrint")
         finally(function() printStub:revert() end)
         local old = stack("Alpha Tester", realSavedVariables(), {"v0.1.0-beta13", START - 3000})
@@ -637,7 +602,6 @@ describe("Sync end to end with real data", function()
     end)
 
     it("version: a guild member outside the realm channel hears about the newer one in the guild sync", function()
-        yellReaches = false
         local printStub = stub(WoWForeverRace, "PPrint")
         finally(function() printStub:revert() end)
         _G.SetIsInGuild(true)
@@ -655,7 +619,6 @@ describe("Sync end to end with real data", function()
     end)
 
     it("version: buddies hear about the newer one in a ping and in its answer", function()
-        yellReaches = false
         local printStub = stub(WoWForeverRace, "PPrint")
         finally(function() printStub:revert() end)
         local old = stack("Alpha Tester", realSavedVariables(), {"v0.1.0-beta13", START - 3000})
@@ -680,8 +643,7 @@ describe("Sync end to end with real data", function()
         assert.same({[NetEvents.BuddyPing] = 2, [NetEvents.BuddyPong] = 2}, countEvents())
     end)
 
-    it("realm channel: a ding reaches a player out of yell range in one message", function()
-        yellReaches = false
+    it("realm channel: a ding reaches a player anywhere on the realm in one message", function()
         local a = stack("Alpha Tester", realSavedVariables())
         local b = stack("Beta Tester", realSavedVariables())
         settledOnChannel(a, b)
@@ -698,7 +660,6 @@ describe("Sync end to end with real data", function()
     end)
 
     it("realm channel: of the clients that spot the same ding, one sends it", function()
-        yellReaches = false
         local a = stack("Alpha Tester", realSavedVariables())
         local b = stack("Beta Tester", realSavedVariables())
         local c = stack("Gamma Tester", realSavedVariables())
@@ -727,7 +688,6 @@ describe("Sync end to end with real data", function()
     end)
 
     it("realm channel: the hourly sync trades what each side lacks, then goes quiet", function()
-        yellReaches = false
         local a = stack("Alpha Tester", realSavedVariables())
         local b = stack("Beta Tester", realSavedVariables())
         a.sync.isReady, b.sync.isReady = true, true
@@ -761,7 +721,6 @@ describe("Sync end to end with real data", function()
     end)
 
     it("realm channel: what one player alone knows reaches everyone through a single trade", function()
-        yellReaches = false
         local a = stack("Alpha Tester", realSavedVariables())
         local b = stack("Beta Tester", realSavedVariables())
         local c = stack("Gamma Tester", realSavedVariables())
@@ -786,7 +745,7 @@ describe("Sync end to end with real data", function()
         assert.equals(2, countChannels(mark)["CHANNEL"])
     end)
 
-    it("realm channel: while it is live, the yells, guild, group and buddy sync stay quiet", function()
+    it("realm channel: while it is live, the guild, group and buddy sync stay quiet", function()
         _G.SetIsInGuild(true)
         _G.SetGroupState(2, false, false)
         local a = stack("Alpha Tester", realSavedVariables())
@@ -797,7 +756,6 @@ describe("Sync end to end with real data", function()
         local mark = #log + 1
 
         for _, s in ipairs(stacks) do
-            s.tracker:SendDiscoveryBeacon()
             s.sync:SendBuddyPings()
             s.sync:ScheduleGroupSync()
         end
@@ -811,7 +769,6 @@ describe("Sync end to end with real data", function()
     end)
 
     it("realm channel: a player outside the channel is still served by whisper", function()
-        yellReaches = false
         local a = stack("Alpha Tester", realSavedVariables())
         local b = stack("Beta Tester", realSavedVariables())
         settledOnChannel(a, b)
@@ -830,7 +787,6 @@ describe("Sync end to end with real data", function()
     end)
 
     it("realm-wide reset: an author empties everybody's leaderboards, also for a player who comes later", function()
-        yellReaches = false
         local printStub = stub(WoWForeverRace, "PPrint")
         local a = stack("Offroad Dverg", realSavedVariables())
         local b = stack("Beta Tester", realSavedVariables())
@@ -862,7 +818,6 @@ describe("Sync end to end with real data", function()
     end)
 
     it("realm-wide reset: old data from a player who missed it is not taken back", function()
-        yellReaches = false
         local printStub = stub(WoWForeverRace, "PPrint")
         local a = stack("Offroad Dverg", realSavedVariables())
         local b = stack("Beta Tester", realSavedVariables())
@@ -892,14 +847,17 @@ describe("Sync end to end with real data", function()
         local a = stack("Alpha Tester", realSavedVariables())
         a.sync.isReady = true
         local b = stack("Beta Tester", {})
+        b.sync.isReady = true
+        b.db.factionrealm.buddies[a.name] = {lastSeen = now}
         -- b's messages carry "Alliance", a's carry "Horde"
         a.core.MyFaction = function() return "Horde" end
         b.core.MyFaction = function() return "Alliance" end
 
-        b.sync:InitSync()
-        advance(Config.RequestSyncWait)
+        b.sync:SendBuddyPings()
+        advance(2)
 
-        assert.is_nil(countEvents()[NetEvents.OfferSync])
+        assert.equals(1, countEvents()[NetEvents.BuddyPing])
+        assert.is_nil(countEvents()[NetEvents.BuddyPong], "a drops the ping of the other faction")
         assert.equals(0, #b.db.factionrealm.leaderboard[0].players)
     end)
 end)

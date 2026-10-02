@@ -5,7 +5,7 @@ faction-realm in the race to max level, overall and per class, and records who
 was first to reach every level. Data is gathered with `/who` scans, from the
 guild roster and from your party or raid, and shared between addon users over
 the addon channel: realm-wide through a hidden chat channel per faction, with
-yells, guild, group and whispers as the backup.
+the guild, your group and whispers as the backup.
 
 Built for WoW Forever: the race goes to level 60 and Paladins and Shamans are
 tracked on both factions. Other WoW clients are not supported.

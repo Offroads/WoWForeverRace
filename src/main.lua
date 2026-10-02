@@ -99,7 +99,7 @@ function WoWForeverRace:OnEnable()
     self.Network:Init()
     self.Channel:Init()
 
-    self.Tracker:InitDiscoveryTicker()
+    self.Tracker:InitLaunchTicker()
     self.Sync:InitGuildTicker()
     self.Sync:InitBuddyTicker()
     self.Sync:InitGroupTicker()

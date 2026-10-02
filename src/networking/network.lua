@@ -64,10 +64,8 @@ local function debugLogPayload(event, payload)
             WoWForeverRace:DebugPrint("  malformed payload: " .. tostring(payload))
             return
         end
-        local batchstr, isDiscoveryAnswer, boardIndex = payload[1], payload[2], payload[3]
-        local players = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(batchstr)
-        WoWForeverRace:DebugPrint("  discovery=" .. tostring(isDiscoveryAnswer) ..
-                " board=" .. tostring(boardIndex or 0) .. " count=" .. #players)
+        local players = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(payload[1])
+        WoWForeverRace:DebugPrint("  count=" .. #players)
         for _, p in ipairs(players) do
             WoWForeverRace:DebugPrint("  " .. p.name .. " lvl" .. p.level .. " [" .. tostring(p.classIndex) .. "]")
         end
@@ -434,9 +432,10 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio, 
 end
 
 -- The client took a message, or refused a packet of it. A refused message is sent again,
--- unless the client keeps refusing everything on that distribution (on the beta: every
--- addon message to YELL): after Config.SendRefusalLimit refusals in a row there, nothing
--- is sent a second time until a message gets through again.
+-- unless the client keeps refusing everything on that distribution: after
+-- Config.SendRefusalLimit refusals in a row there, nothing is sent a second time until a
+-- message gets through again. (That is how the beta client turned out to refuse every
+-- addon message to YELL, result 4 InvalidChatType; the addon sends none there anymore.)
 function WoWForeverRaceNetwork:OnMessageSent(refused, result, event, object, channel, target, prio, attempt)
     self.refusals = self.refusals or {}
     if not refused then

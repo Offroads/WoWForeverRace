@@ -1,11 +1,11 @@
--- Group / raid / guild / zone / realm traffic simulation: N complete addon stacks (Core,
+-- Group / raid / guild / realm traffic simulation: N complete addon stacks (Core,
 -- EventBus, Network, Tracker, Sync, Roster, Channel) talking through the real network envelope.
 -- Each client's outgoing traffic is paced by a ChatThrottleLib model (800 B/s, 4 KB
 -- burst), so the report shows queueing and time to get back in sync, not just counts.
 --
 -- Run from the repo root (in the dev container: `make sim`):
 --   lua scripts/groupsim.lua [scenario] [sizes] [savedvariables] [nochannel]
---     scenario        all (default), steady, reload, levelup, scan, diverge, drift, guild, zone,
+--     scenario        all (default), steady, reload, levelup, scan, diverge, drift, guild,
 --                     realm, realmlogin, realmnews, realmdiverge
 --     sizes           comma separated numbers of clients, default 5,40
 --     savedvariables  optional SavedVariables file (a path inside the checkout) to
@@ -14,18 +14,19 @@
 --                     Pass - to keep the fixture and still give a fourth argument
 --     nochannel       nobody is in the realm channel, to measure the backup flows alone
 --
--- The model: every client stays online. In the group scenarios (all but guild, zone and
--- the realm ones) they are in yell range of each other and in the same group, with no guild;
--- guild puts them in one guild, out of yell range and not grouped, each logged in at a
--- different time; zone puts them in yell range, not grouped and in no guild; the realm
--- scenarios put them out of yell range, not grouped and in no guild, so only the realm
--- channel connects them. On a checkout with the realm channel every client is in it
--- (joined a while ago) in every scenario, unless nochannel is given. Message
--- sizes are the serialized envelope times the compression ratio measured on real beta
--- leaderboards (not a real Huffman run per message, see scripts/netsize.lua for that),
--- each client sends its queue in order, and the server's own addon message limit is
--- not modelled. Older checkouts without the group ticker run as well, so the same
--- script compares two versions: copy it into a checkout of the older version and run it there.
+-- The model: every client stays online. In the group scenarios (all but guild and the
+-- realm ones) they are in the same group, with no guild; guild puts them in one guild and
+-- not grouped, each logged in at a different time; the realm scenarios put them not
+-- grouped and in no guild, so only the realm channel connects them. On a checkout with
+-- the realm channel every client is in it (joined a while ago) in every scenario, unless
+-- nochannel is given. Nothing sent to YELL reaches anybody, like on the real client,
+-- which refuses addon messages there (older checkouts still send a zone sync and a
+-- discovery beacon that way). Message sizes are the serialized envelope times the
+-- compression ratio measured on real beta leaderboards (not a real Huffman run per
+-- message, see scripts/netsize.lua for that), each client sends its queue in order, and
+-- the server's own addon message limit is not modelled. Older checkouts without the
+-- group ticker run as well, so the same script compares two versions: copy it into a
+-- checkout of the older version and run it there.
 package.path = "./src/?.lua;./src/?/?.lua;./libs/?.lua;./libs/?/?.lua;./tests/?.lua;./tests/?/?.lua;"
         .. package.path
 
@@ -53,6 +54,8 @@ local CTL_CPS, CTL_BURST, CTL_OVERHEAD = 800, 4000, #Config.Network.Prefix + 40
 
 local aceDBKey = AceDB:New({}, WoWForeverRace.DefaultDB, true).keys.factionrealm
 local HAS_GROUP_TICKER = WoWForeverRace.Sync.InitGroupTicker ~= nil
+-- older checkouts yell a discovery beacon into the zone, which the client refuses
+local HAS_DISCOVERY_TICKER = WoWForeverRace.Tracker.InitDiscoveryTicker ~= nil
 -- older checkouts have no realm channel
 local USE_CHANNEL = WoWForeverRace.Channel ~= nil and arg[4] ~= "nochannel"
 local RACE_CHANNEL = USE_CHANNEL and (Config.RaceChannelPrefix .. FACTION) or nil
@@ -105,7 +108,7 @@ local VERSION = version()
 -- world: every client queues its messages, the throttle model releases them
 -- ---------------------------------------------------------------------------
 local stacks, now, activeStack, log
--- who hears whom: {group = bool, yell = bool, guild = bool}, set per scenario
+-- who hears whom: {group = bool, guild = bool}, set per scenario
 local world
 
 local function wireSize(text)
@@ -150,7 +153,9 @@ local function deliver(msg)
             elseif msg.channel == "GUILD" then
                 wanted = world.guild
             elseif msg.channel == "YELL" then
-                wanted = world.yell
+                -- the client refuses addon messages to YELL: an older checkout's zone
+                -- sync and discovery beacon reach nobody
+                wanted = false
             elseif msg.channel == "CHANNEL" then
                 -- the realm channel reaches every client that is in it, wherever it is
                 wanted = other.channel:IsJoined()
@@ -274,7 +279,7 @@ end
 -- n clients online for a while (ready, tickers at random phases), just grouped up;
 -- keep < 1 gives each client only part of the boards
 local function makeGroup(n, keep, seed)
-    resetWorld({group = true, yell = true, guild = false})
+    resetWorld({group = true, guild = false})
     math.randomseed(seed)
     memberLevels = {}
     for i = 1, n do
@@ -291,16 +296,16 @@ local function makeGroup(n, keep, seed)
     for _, s in ipairs(stacks) do s.sync:OnGroupRosterUpdate() end
     for _, s in ipairs(stacks) do
         _G.C_Timer.After(math.random(0, 300), function()
-            s.tracker:InitDiscoveryTicker()
+            if HAS_DISCOVERY_TICKER then s.tracker:InitDiscoveryTicker() end
             s.sync:InitBuddyTicker()
             if HAS_GROUP_TICKER then s.sync:InitGroupTicker() end
         end)
     end
 end
 
--- n clients online for a while, not grouped (flags: the guild and yell range), each
--- keeping part of the boards. Everyone logged in at a different time: the guild sync
--- of older versions picks the member online the longest.
+-- n clients online for a while, not grouped (flags: the guild), each keeping part of
+-- the boards. Everyone logged in at a different time: the guild sync of older versions
+-- picks the member online the longest.
 local function makeCrowd(n, keep, seed, flags)
     resetWorld(flags)
     math.randomseed(seed)
@@ -315,7 +320,7 @@ local function makeCrowd(n, keep, seed, flags)
     settleOnChannel()
     for _, s in ipairs(stacks) do
         _G.C_Timer.After(math.random(0, 300), function()
-            s.tracker:InitDiscoveryTicker()
+            if HAS_DISCOVERY_TICKER then s.tracker:InitDiscoveryTicker() end
             s.sync:InitBuddyTicker()
             if flags.guild then
                 -- the first guild round, then one every GuildSyncInterval
@@ -416,7 +421,6 @@ scenarios.reload = function(n)
     -- one member reloads: it isn't ready until its login sync ran
     local s = stacks[1]
     s.sync.isReady = false
-    s.sync.offers = {}
     s.sync:InitSync()
     tick(60)
     summarize(string.format("%d players, one member /reloads (first 60s)", n), since, 60)
@@ -460,23 +464,16 @@ scenarios.drift = function(n)
 end
 
 scenarios.guild = function(n)
-    makeCrowd(n, 0.6, 8, {group = false, yell = false, guild = true})
+    makeCrowd(n, 0.6, 8, {group = false, guild = true})
     local since = resetCounters()
-    untilInSync(string.format("%d guild members out of yell range, each knowing 60%% of the boards, until in sync",
+    untilInSync(string.format("%d guild members, not grouped, each knowing 60%% of the boards, until in sync",
             n), since)
-end
-
-scenarios.zone = function(n)
-    makeCrowd(n, 0.6, 7, {group = false, yell = true, guild = false})
-    local since = resetCounters()
-    untilInSync(string.format("%d players in yell range, not grouped, no guild, each knowing 60%% of the boards, "
-            .. "until in sync", n), since)
 end
 
 -- ---------------------------------------------------------------------------
 -- realm scenarios: only the realm channel connects the clients
 -- ---------------------------------------------------------------------------
-local REALM_WORLD = {group = false, yell = false, guild = false}
+local REALM_WORLD = {group = false, guild = false}
 
 -- a character name: letters only, the serializer keeps digits out of names
 local function runnerName(i)
@@ -556,7 +553,7 @@ scenarios.realmdiverge = function(n)
             .. "(after the join sync with one partner each)", n), since)
 end
 
-local ORDER = {"steady", "reload", "levelup", "scan", "diverge", "drift", "guild", "zone",
+local ORDER = {"steady", "reload", "levelup", "scan", "diverge", "drift", "guild",
                "realm", "realmlogin", "realmnews", "realmdiverge"}
 if SCENARIO ~= "all" and scenarios[SCENARIO] == nil then
     error("unknown scenario " .. SCENARIO .. ", expected all or one of: " .. table.concat(ORDER, ", "))
