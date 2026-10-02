@@ -48,6 +48,7 @@ local EVENT_NAMES = {
     CHOFFR    = "ChannelOffer",
     CHMOVE    = "ChannelMove",
     RESET     = "Reset",
+    VERSION   = "Version",
 }
 
 local function formatAge(timestamp)
