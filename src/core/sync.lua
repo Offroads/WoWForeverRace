@@ -658,8 +658,9 @@ function WoWForeverRaceSync:SendGuildSync(withPlayerHistory)
     local fullHash = computeFullHash(self.DB, self.Config, nil, self.Core:MyFaction())
     local ftlHash = computeFTLHash(self.DB, self.Config)
     local phHash = withPlayerHistory and computePHHash(self.DB, self.Config, self.Core:MyFaction()) or nil
+    -- the sixth field is the build we run, see VersionCheck
     self.Network:SendObject(self.Config.Network.Events.GuildSync,
-            {self.classIndex, fullHash, self.Core:LoginTime(), ftlHash, phHash}, "GUILD")
+            {self.classIndex, fullHash, self.Core:LoginTime(), ftlHash, phHash, self.Config:BuildInfo()}, "GUILD")
 
     local _self = self
     C_Timer.After(self.Config.GuildSyncWait + 1, function()
@@ -788,7 +789,8 @@ function WoWForeverRaceSync:SendBuddyPings()
         myPerClassHashes[boardIndex + 1] = lb and WoWForeverRace.Leaderboard.ComputeHash(lb) or 0
     end
     local myFTLHash = computeFTLHash(self.DB, self.Config)
-    local payload = {myFullHash, myPerClassHashes, myFTLHash}
+    -- the fifth field of every BPING and BPONG is the build we run, see VersionCheck
+    local payload = {myFullHash, myPerClassHashes, myFTLHash, nil, self.Config:BuildInfo()}
 
     WoWForeverRace:DebugPrint("BuddyPing: pinging " .. #selected .. " of " .. #names .. " buddies")
     for _, name in ipairs(selected) do
@@ -831,13 +833,13 @@ function WoWForeverRaceSync:OnNetBuddyPing(payload, sender, distribution)
         -- one member to do the same, instead of every member trading with it.
         if self.isReady and not leaderboardsDiffer and not ftlDiffers then return end
         self.Network:SendObject(self.Config.Network.Events.BuddyPong,
-                {myFullHash, myPerClassHashes, myFTLHash, true}, "WHISPER", sender)
+                {myFullHash, myPerClassHashes, myFTLHash, true, self.Config:BuildInfo()}, "WHISPER", sender)
         return
     end
 
     -- ack with our hashes so the sender knows we're online and can push back
     self.Network:SendObject(self.Config.Network.Events.BuddyPong,
-            {myFullHash, myPerClassHashes, myFTLHash}, "WHISPER", sender)
+            {myFullHash, myPerClassHashes, myFTLHash, nil, self.Config:BuildInfo()}, "WHISPER", sender)
 
     if not self.isReady then return end
 
@@ -1061,7 +1063,8 @@ function WoWForeverRaceSync:SendGroupSync()
 
     local myFullHash = computeFullHash(self.DB, self.Config, nil, self.Core:MyFaction())
     local myFTLHash = computeFTLHash(self.DB, self.Config)
-    self.Network:SendObject(self.Config.Network.Events.BuddyPing, {myFullHash, self:MyBoardHashes(), myFTLHash}, "GROUP")
+    self.Network:SendObject(self.Config.Network.Events.BuddyPing,
+            {myFullHash, self:MyBoardHashes(), myFTLHash, nil, self.Config:BuildInfo()}, "GROUP")
 
     local _self = self
     C_Timer.After(self.Config.GroupSyncWait, function()
@@ -1261,9 +1264,10 @@ function WoWForeverRaceSync:SendChannelSync(joinRound)
 
     local fullHash = computeFullHash(self.DB, self.Config, nil, self.Core:MyFaction())
     local ftlHash = computeFTLHash(self.DB, self.Config)
-    -- the third field is the realm-wide reset we know, see Tracker:OnNetChannelSyncReset
+    -- the third field is the realm-wide reset we know, see Tracker:OnNetChannelSyncReset,
+    -- the fourth the build we run, see VersionCheck
     self.Network:SendObject(self.Config.Network.Events.ChannelSync,
-            {fullHash, ftlHash, self.DB.factionrealm.resetAt}, "RACE")
+            {fullHash, ftlHash, self.DB.factionrealm.resetAt, self.Config:BuildInfo()}, "RACE")
 
     local _self = self
     C_Timer.After(self.Config.ChannelSyncWait + 1, function()
@@ -1350,7 +1354,7 @@ function WoWForeverRaceSync:DoChannelSync()
         self.Channel:Settle()
     end
     self.Network:SendObject(self.Config.Network.Events.BuddyPing,
-            {myFullHash, self:MyBoardHashes(), myFTLHash, myPHHash}, "WHISPER", best.name)
+            {myFullHash, self:MyBoardHashes(), myFTLHash, myPHHash, self.Config:BuildInfo()}, "WHISPER", best.name)
     self:NotePeer(best.name, myPHHash ~= nil)
 
     local round = {partner = best.name, gained = false}

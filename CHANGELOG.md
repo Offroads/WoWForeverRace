@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+- The addon tells you when a newer version is out on CurseForge. Players who
+  already updated let the others know, so from this version on you get one
+  line in chat per session, and the options window and the minimap tooltip
+  name the new version until you update.
+
 ### Fixed
 - Leaderboards and player history sent from one player to another could arrive
   with pieces missing, or not at all, when the sender's addon sent several chat

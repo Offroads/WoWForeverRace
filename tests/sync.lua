@@ -1260,6 +1260,15 @@ describe("Sync", function()
                 assert.same({myFullHash, myFTLHash, time - 100}, sent[1].payload)
             end)
 
+            it("tells which build we run, once packaged", function()
+                local version, buildTime = Config.Version, Config.BuildTime
+                Config.Version, Config.BuildTime = "v0.1.0-beta14", "1790000000"
+                channel:TryJoin()
+                Config.Version, Config.BuildTime = version, buildTime
+
+                assert.same({myFullHash, myFTLHash, nil, {1790000000, "v0.1.0-beta14"}}, sent[1].payload)
+            end)
+
             it("stays quiet outside the channel, with sharing off and after the race", function()
                 sync:SendChannelSync()
                 assert.equals(0, #sent)

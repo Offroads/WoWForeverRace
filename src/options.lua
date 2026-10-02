@@ -19,7 +19,14 @@ function WoWForeverRace:RegisterOptions()
         args = {
             version = {
                 order = 1,
-                name = "Version: " .. WHITE .. WoWForeverRace.Config:DisplayVersion() .. "|r",
+                name = function()
+                    local name = "Version: " .. WHITE .. WoWForeverRace.Config:DisplayVersion() .. "|r"
+                    local newer = _self.VersionCheck:NewerVersion()
+                    if newer ~= nil then
+                        name = name .. "  " .. BROWN .. newer .. " is available on CurseForge|r"
+                    end
+                    return name
+                end,
                 type = "description",
                 fontSize = "medium",
             },
@@ -176,6 +183,10 @@ function WoWForeverRace:RegisterOptions()
                  BROWN .. "Right-Click|r to open options dialog."
     function ldb.OnTooltipShow(tt)
         tt:AddLine(hint, 0.2, 1, 0.2, 1)
+        local newer = _self.VersionCheck:NewerVersion()
+        if newer ~= nil then
+            tt:AddLine(BROWN .. "Version " .. newer .. " is available on CurseForge.|r")
+        end
     end
 
 end
