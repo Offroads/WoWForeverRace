@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.0-beta14 - 2026-10-02
 
 ### Added
 - The addon tells you when a newer version is out on CurseForge. Players who
