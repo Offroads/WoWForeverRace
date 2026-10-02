@@ -15,7 +15,9 @@
   apart, so longer messages arrive whole.
 - Damaged data that still looked valid could end up in your player history,
   as wrong level times or names that don't exist. Every message now carries a
-  checksum, and a damaged one is thrown away.
+  checksum, and one that doesn't match its checksum is thrown away. Messages
+  from players on older versions carry none, so those can still arrive
+  damaged.
 - When something a player sent you arrives damaged, your addon notices and asks
   that player again about a minute later, instead of staying without that data
   until your next login. Both players need this version for that.
