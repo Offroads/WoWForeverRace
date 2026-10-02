@@ -196,6 +196,9 @@ end
 function WoWForeverRaceSync:OnMessageGarbled(sender, distribution)
     if distribution ~= "WHISPER" or type(sender) ~= "string" then return end
     if self.peers[sender] == nil and self.DB.factionrealm.buddies[sender] == nil then return end
+    -- An older client sends in bursts, which lose packets every time: asking it again
+    -- brings the same damage and makes it send everything once more.
+    if self.Network.IsVerified == nil or not self.Network:IsVerified(sender) then return end
 
     self.peers[sender] = self.Core:Now()
     self:ScheduleRepair(sender, self.historyAsked[sender] == true)
@@ -704,6 +707,11 @@ function WoWForeverRaceSync:OnNetGuildOffer(offer, sender)
     -- one is taken after all; else that round found nobody although a member answered.
     local late = self.guildOffers == nil
     if late and (self.guildLateUntil == nil or self.Core:Now() > self.guildLateUntil) then return end
+    -- that player is sending us data right now: the next round compares again
+    if late and self.peers[sender] ~= nil
+            and self.Core:Now() - self.peers[sender] < self.Config.RepairQuiet then
+        return
+    end
 
     local classIndex, lastSync, fullHash, globalHash, classHash, loginTime, ftlHash, phHash =
             offer[1], offer[2], offer[3], offer[4], offer[5], offer[6], offer[7], offer[8]

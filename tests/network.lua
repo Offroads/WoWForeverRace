@@ -311,6 +311,95 @@ describe("Network", function()
         WoWForeverRace.DB = nil
     end)
 
+    describe("checksum", function()
+        local network, eventbus, commStub, sent, garbled, received
+
+        before_each(function()
+            local core = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
+            eventbus = WoWForeverRace.EventBus()
+            network = WoWForeverRace.Network(core, eventbus)
+            sent, garbled, received = {}, {}, {}
+            commStub = stub(AceComm, "SendCommMessage", function(_, _, message)
+                sent[#sent + 1] = message
+            end)
+            eventbus:RegisterCallback(Events.MessageGarbled, garbled, function(_, sender)
+                garbled[#garbled + 1] = sender
+            end)
+            eventbus:RegisterCallback(NetworkEvents.SyncPayload, received, function(_, payload)
+                received[#received + 1] = payload
+            end)
+        end)
+
+        after_each(function()
+            commStub:revert()
+        end)
+
+        it("travels behind the envelope, where an older client doesn't read it", function()
+            network:SendObject(NetworkEvents.SyncPayload, "batch", "WHISPER", "Dude")
+
+            local ok, envelope, check = Serializer:Deserialize(LibCompress:Decompress(EncodeTable:Decode(sent[1])))
+            assert.is_true(ok)
+            assert.same({NetworkEvents.SyncPayload, "batch", "Alliance"}, envelope)
+            assert.is_number(check)
+        end)
+
+        it("lets a whole message through and remembers that its sender checks", function()
+            network:SendObject(NetworkEvents.SyncPayload, "1000000000$301.2Racer Nub0$", "WHISPER", "Dude")
+            assert.is_false(network:IsVerified("Dude"))
+
+            network:HandleAddonMessage(WoWForeverRace.Config.Network.Prefix, sent[1], "WHISPER", "Dude")
+
+            assert.same({"1000000000$301.2Racer Nub0$"}, received)
+            assert.same({}, garbled)
+            assert.is_true(network:IsVerified("Dude"))
+        end)
+
+        it("catches a message with a hole in its payload that still decodes", function()
+            network:SendObject(NetworkEvents.SyncPayload, "1000000000$301.2Racer Nub0$302.2Other Nub5$",
+                    "WHISPER", "Dude")
+            -- a packet lost from the middle joins two records
+            local damaged = string.gsub(sent[1], "Racer~`Nub0%$302%.2Other", "Racer")
+            assert.not_equals(sent[1], damaged)
+
+            network:HandleAddonMessage(WoWForeverRace.Config.Network.Prefix, damaged, "WHISPER", "Dude")
+
+            assert.same({}, received)
+            assert.same({"Dude"}, garbled)
+            assert.is_false(network:IsVerified("Dude"))
+        end)
+
+        it("catches it when the decoder left junk behind the damaged message", function()
+            network:SendObject(NetworkEvents.SyncPayload, "1000000000$301.2Racer Nub0$302.2Other Nub5$",
+                    "WHISPER", "Dude")
+            local damaged = string.gsub(sent[1], "Racer~`Nub0%$302%.2Other", "Racer") .. "aa"
+
+            network:HandleAddonMessage(WoWForeverRace.Config.Network.Prefix, damaged, "WHISPER", "Dude")
+
+            assert.same({}, received)
+            assert.same({"Dude"}, garbled)
+        end)
+
+        it("expects one on every message of a sender that checks", function()
+            network:SendObject(NetworkEvents.SyncPayload, "batch", "WHISPER", "Dude")
+            network:HandleAddonMessage(WoWForeverRace.Config.Network.Prefix, sent[1], "WHISPER", "Dude")
+
+            -- the end of a message lost on the way, and what is left still decodes
+            network:HandleAddonMessage(WoWForeverRace.Config.Network.Prefix,
+                    encodeEnvelope({NetworkEvents.SyncPayload, "half a batch", "Alliance"}), "WHISPER", "Dude")
+
+            assert.same({"batch"}, received)
+            assert.same({"Dude"}, garbled)
+        end)
+
+        it("takes a message of an older client without one as it is", function()
+            network:HandleAddonMessage(WoWForeverRace.Config.Network.Prefix,
+                    encodeEnvelope({NetworkEvents.SyncPayload, "batch", "Alliance"}), "WHISPER", "Dude")
+
+            assert.same({"batch"}, received)
+            assert.is_false(network:IsVerified("Dude"))
+        end)
+    end)
+
     it("tells the other components about a message that doesn't decode", function()
         local core = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
         local eventbus = WoWForeverRace.EventBus()

@@ -41,6 +41,15 @@ local function splitPackets(text)
     return packets
 end
 
+-- djb2 over the serialized envelope: the sender puts it behind the envelope, see SendObject
+local function checksum(text)
+    local hash = 5381
+    for i = 1, #text do
+        hash = ((hash * 33) + string.byte(text, i)) % 2147483647
+    end
+    return hash
+end
+
 local NetworkEvents = {}
 for _, event in pairs(WoWForeverRace.Config.Network.Events) do
     NetworkEvents[event] = true
@@ -96,6 +105,7 @@ function WoWForeverRaceNetwork.new(Core, EventBus, Channel)
     self.Core = Core
     self.EventBus = EventBus
     self.Channel = Channel
+    self.verified = {}  -- [sender] = true: sent us a message with a checksum, see IsVerified
 
     AceComm:RegisterComm(WoWForeverRace.Config.Network.Prefix, function(...)
         self:HandleAddonMessage(...)
@@ -152,6 +162,21 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
             return
         end
 
+        -- A message can lose a packet from its middle and still decode, with a hole in
+        -- its payload. A sender that knows about that puts a checksum behind the envelope
+        -- (SendObject); what doesn't match it is damaged. Not anchored at the end: the
+        -- Huffman decoder leaves junk behind the terminator of a damaged message. A sender
+        -- that checks does so on every message, so one without a checksum lost it on the way.
+        local envelope, check = string.match(decompressed, "^%^1(.+%^t)%^N(%d+)%^%^")
+        if envelope ~= nil and checksum(envelope) == tonumber(check) then
+            self.verified[sender] = true
+        elseif envelope ~= nil or self.verified[sender] then
+            WoWForeverRace:DebugPrint("Checksum error: a message of " .. tostring(sender)
+                    .. " was damaged on the way")
+            self.EventBus:PublishEvent(WoWForeverRace.Config.Events.MessageGarbled, sender, distribution)
+            return
+        end
+
         local ok2, object = Serializer:Deserialize(decompressed)
         if not ok2 then
             WoWForeverRace:DebugPrint("Deserialize error: " .. tostring(object))
@@ -196,6 +221,14 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
     if not ok then
         WoWForeverRace:PPrint("Network receive error: " .. tostring(err))
     end
+end
+
+-- Whether that player's client puts a checksum on its messages. Such a client also sends
+-- its packets one at a time (Transmit), so what it sends arrives, and asking it again for
+-- something that got damaged is worth it. An older client sends in bursts that lose
+-- packets every time.
+function WoWForeverRaceNetwork:IsVerified(sender)
+    return self.verified[sender] == true
 end
 
 -- Resolves the virtual "GROUP" channel to the addon channel that actually
@@ -382,6 +415,9 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio, 
     -- the third element locks the data to our faction, see HandleAddonMessage;
     -- older clients only read the first two. The fourth is our realm channel number
     local payload = Serializer:Serialize({event, object, self.Core:MyFaction(), self:ChannelIndexTag()})
+    -- "^1" envelope "^^": the checksum of the envelope goes in as a second serialized value,
+    -- which a client that doesn't know it never reads (see HandleAddonMessage)
+    payload = string.sub(payload, 1, -3) .. "^N" .. checksum(string.sub(payload, 3, -3)) .. "^^"
     local compressed = LibCompress:CompressHuffman(payload)
     local encoded = EncodeTable:Encode(compressed)
 

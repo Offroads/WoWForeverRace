@@ -189,6 +189,17 @@ describe("Serializer", function()
             assert.equals(2, total)
         end)
 
+        it("drops a record with anything but level groups in it", function()
+            -- what arrived from an older client with a packet lost from the middle
+            local batch = DeserPHBatch("1790966019$07Vipin Noname:30111$07Wannacry Forever:281ate:30111$"
+                    .. "01Zero Fcsgiven:2969:301213为:3084$04Palamedes Naupliades:5a6xat21:62$02Yy Xp:29177$")
+
+            assert.same({
+                ["Vipin Noname"] = {classIndex = 7, levels = {[30] = 1790966130}},
+                ["Yy Xp"] = {classIndex = 2, levels = {[29] = 1790966196}},
+            }, batch)
+        end)
+
         it("reads a chunk an older client sent without a number", function()
             local batch, index, total = DeserPHBatch("1000000000$03Alice:15100$01Bob:100$")
 

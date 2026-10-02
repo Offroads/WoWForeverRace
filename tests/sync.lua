@@ -1800,6 +1800,17 @@ describe("Sync", function()
             assert.same({"Late Dude"}, started)
         end)
 
+        it("is left alone while that player is sending us data", function()
+            AdvanceClock(Config.GuildSyncWait + 1)
+            sync:OnNetSyncPayload(WoWForeverRace.Serializer.SerializePlayerInfoBatch({
+                {name = "Racer", level = 5, classIndex = 11, dingedAt = time},
+            }), "Late Dude")
+
+            offer("Late Dude")
+
+            assert.same({}, started)
+        end)
+
         it("is dropped when it comes much later, or when a partner was found in time", function()
             AdvanceClock(Config.GuildSyncWait + 1)
             AdvanceClock(Config.GuildSyncLateOffer + 1)
@@ -1818,13 +1829,18 @@ describe("Sync", function()
         local Config = WoWForeverRace.Config
         local repairs
 
+        -- the players whose client sends with a checksum, and so one packet at a time
+        local updated
+
         before_each(function()
             repairs = {}
+            updated = {Dude = true, Buddy = true, Stranger = true}
             network.SendObject = function(_, event, payload, channel, target)
                 if event == NetEvents.StartSync then
                     repairs[#repairs + 1] = {payload = payload, channel = channel, target = target}
                 end
             end
+            network.IsVerified = function(_, name) return updated[name] == true end
         end)
 
         local function garbled(sender, distribution)
@@ -1861,6 +1877,15 @@ describe("Sync", function()
 
             assert.equals(1, #repairs)
             assert.equals("Buddy", repairs[1].target)
+        end)
+
+        it("leaves a player on an older version alone, whose answer would be damaged again", function()
+            sync:NotePeer("Old Client")
+
+            garbled("Old Client")
+            AdvanceClock(Config.RepairDelay)
+
+            assert.equals(0, #repairs)
         end)
 
         it("leaves a damaged message to the zone, guild, group or channel alone", function()

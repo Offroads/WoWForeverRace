@@ -13,14 +13,17 @@
   with pieces missing, or not at all, when the sender's addon sent several chat
   packets at once. The addon now sends its packets one at a time, a moment
   apart, so longer messages arrive whole.
-- When something a player sent you still arrives damaged, your addon notices
-  and asks that player again about a minute later, instead of staying without
-  that data until your next login. This also works with players on older
-  versions.
+- Damaged data that still looked valid could end up in your player history,
+  as wrong level times or names that don't exist. Every message now carries a
+  checksum, and a damaged one is thrown away.
+- When something a player sent you arrives damaged, your addon notices and asks
+  that player again about a minute later, instead of staying without that data
+  until your next login. Both players need this version for that.
 - A history transfer now tells how many parts it has, so missing parts are
   noticed and fetched again.
 - A message the game client refused to send is sent again a few seconds later
-  instead of being dropped silently.
+  instead of being dropped silently, unless the client refuses everything sent
+  that way.
 - The periodic guild sync no longer skips a round when the only answer arrives
   a few seconds late.
 

@@ -205,6 +205,15 @@ function WoWForeverRaceSerializer.SerializePlayerHistoryChunks(playerHistory, na
     return chunks
 end
 
+-- Whether the levels of a history record are level groups and nothing else. A chunk that
+-- lost a packet from its middle on the way still parses, with the halves of two records
+-- joined: what is left over between the groups gives that away.
+local function validLevels(levelstr)
+    local rest = string.gsub(levelstr, ":!%d+,%d+", "")
+    rest = string.gsub(rest, ":%d%d%d+", "")
+    return rest == ""
+end
+
 -- Deserializes a single playerHistory chunk produced by SerializePlayerHistoryChunks.
 -- Returns {[name] = {classIndex = ci, levels = {[level] = dingedAt}}}, and the chunk's
 -- number and the number of chunks of its transfer when the sender numbered it.
@@ -225,7 +234,7 @@ function WoWForeverRaceSerializer.DeserializePlayerHistoryBatch(str)
                 chunkIndex, chunkTotal = tonumber(index), tonumber(total)
             end
         end
-        if ci and name and levelstr then
+        if ci and name and levelstr and validLevels(levelstr) then
             local levels = {}
             local count = 0
             local function addLevel(level, delta)
