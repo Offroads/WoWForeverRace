@@ -123,7 +123,7 @@ local function stack(name, savedVariables, build)
     local network = WoWForeverRace.Network(core, eventbus, channel)
     local tracker = WoWForeverRace.Tracker(Config, core, db, eventbus, network, channel)
     local sync = WoWForeverRace.Sync(config, core, db, eventbus, network, channel)
-    local versionCheck = WoWForeverRace.VersionCheck(config, core, db, eventbus, network)
+    local versionCheck = WoWForeverRace.VersionCheck(config, core, db, eventbus)
     local s = {name = name, db = db, core = core, eventbus = eventbus, network = network,
                tracker = tracker, sync = sync, channel = channel, versionCheck = versionCheck}
     -- tag outgoing messages with their stack
@@ -583,31 +583,48 @@ describe("Sync end to end with real data", function()
         assert.same({[NetEvents.ChannelSync] = 2}, countEvents())
     end)
 
-    it("version: a guild member and a buddy outside the realm channel hear about the newer one", function()
+    it("version: a guild member outside the realm channel hears about the newer one in the guild sync", function()
         yellReaches = false
         local printStub = stub(WoWForeverRace, "PPrint")
         finally(function() printStub:revert() end)
         _G.SetIsInGuild(true)
-        local guildie = stack("Alpha Tester", realSavedVariables(), {"v0.1.0-beta13", START - 3000})
+        local old = stack("Alpha Tester", realSavedVariables(), {"v0.1.0-beta13", START - 3000})
         local b = stack("Beta Tester", realSavedVariables(), {"v0.1.0-beta14", START - 2000})
 
-        b.versionCheck:Announce()
-        pump()
-        assert.equals("v0.1.0-beta14", guildie.versionCheck:NewerVersion())
-        assert.same({[NetEvents.Version] = 1}, countEvents())
+        b.sync:SendGuildSync()
+        advance(Config.GuildSyncWait + 1)
 
-        -- a player b traded data with before, in no guild
-        _G.SetIsInGuild(false)
-        local buddy = stack("Gamma Tester", realSavedVariables(), {"v0.1.0-beta13", START - 3000})
-        b.sync:AddBuddy(buddy.name)
-        local mark = #log + 1
-        b.versionCheck:Announce()
-        pump()
+        assert.equals("v0.1.0-beta14", old.versionCheck:NewerVersion())
+        assert.is_nil(b.versionCheck:NewerVersion())
+        assert.stub(printStub).was_called(1)
+        -- the build rode along, nothing else was sent for it
+        assert.same({[NetEvents.GuildSync] = 1}, countEvents())
+    end)
 
-        assert.equals("v0.1.0-beta14", buddy.versionCheck:NewerVersion())
-        assert.same({WHISPER = 1}, countChannels(mark))
+    it("version: buddies hear about the newer one in a ping and in its answer", function()
+        yellReaches = false
+        local printStub = stub(WoWForeverRace, "PPrint")
+        finally(function() printStub:revert() end)
+        local old = stack("Alpha Tester", realSavedVariables(), {"v0.1.0-beta13", START - 3000})
+        local b = stack("Beta Tester", realSavedVariables(), {"v0.1.0-beta14", START - 2000})
+        local alsoOld = stack("Gamma Tester", realSavedVariables(), {"v0.1.0-beta13", START - 3000})
+        for _, s in ipairs(stacks) do s.sync.isReady = true end
+
+        -- the player on the newer version pings a buddy
+        b.sync:AddBuddy(old.name)
+        b.sync:SendBuddyPings()
+        pump()
+        assert.equals("v0.1.0-beta14", old.versionCheck:NewerVersion())
+
+        -- a player on the older version pings it, and reads the newer one in the answer
+        alsoOld.sync:AddBuddy(b.name)
+        alsoOld.sync:SendBuddyPings()
+        pump()
+        assert.equals("v0.1.0-beta14", alsoOld.versionCheck:NewerVersion())
+
         assert.is_nil(b.versionCheck:NewerVersion())
         assert.stub(printStub).was_called(2)
+        assert.same({[NetEvents.BuddyPing] = 2, [NetEvents.BuddyPong] = 2}, countEvents())
     end)
 
     it("realm channel: a ding reaches a player out of yell range in one message", function()

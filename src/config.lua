@@ -212,9 +212,8 @@ local WoWForeverRaceConfig = {
     ChannelFollowUp = 300,     -- a full sync that brought us new players is followed by another one this soon
     ChannelOfferTarget = 5,    -- offers a channel sync should draw, however many players are on the channel
 
-    -- Version check: every client tells its build in its channel sync, and once per
-    -- login to the guild and its buddies, see VersionCheck
-    VersionAnnounceDelay = 15, -- seconds after login before the build goes to the guild and the buddies
+    -- Version check: every client tells its build in its channel sync, its guild sync and
+    -- its buddy pings and pongs, see VersionCheck
     VersionWarnDelay = 10,     -- seconds after login before the warning about a build an earlier session heard of
     VersionMaxLength = 32,     -- longest version string accepted from another client
 
@@ -244,7 +243,6 @@ local WoWForeverRaceConfig = {
             ChannelOffer = "CHOFFR",
             ChannelMove = "CHMOVE",
             Reset = "RESET",
-            Version = "VERSION",
         },
     },
     Events = {
