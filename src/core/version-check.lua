@@ -162,5 +162,5 @@ function WoWForeverRaceVersionCheck:Warn()
 
     self.warned = true
     WoWForeverRace:PPrint("A newer version is available: " .. newer .. " (you have "
-            .. self.Config:DisplayVersion() .. "). Update it with your addon manager or from CurseForge.")
+            .. self.Config:DisplayVersion() .. "). Download the latest version on CurseForge.")
 end

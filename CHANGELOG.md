@@ -3,10 +3,10 @@
 ## Unreleased
 
 ### Added
-- The addon tells you when a newer version is out. Players who already
-  updated let the others know, so from this version on you get one line in
-  chat per session, and the options window and the minimap tooltip name the
-  new version until you update.
+- The addon tells you when a newer version is out on CurseForge. Players who
+  already updated let the others know, so from this version on you get one
+  line in chat per session, and the options window and the minimap tooltip
+  name the new version until you update.
 
 ## v0.1.0-beta13 - 2026-10-01
 

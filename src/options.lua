@@ -23,7 +23,7 @@ function WoWForeverRace:RegisterOptions()
                     local name = "Version: " .. WHITE .. WoWForeverRace.Config:DisplayVersion() .. "|r"
                     local newer = _self.VersionCheck:NewerVersion()
                     if newer ~= nil then
-                        name = name .. "  " .. BROWN .. newer .. " is available|r"
+                        name = name .. "  " .. BROWN .. newer .. " is available on CurseForge|r"
                     end
                     return name
                 end,
@@ -185,7 +185,7 @@ function WoWForeverRace:RegisterOptions()
         tt:AddLine(hint, 0.2, 1, 0.2, 1)
         local newer = _self.VersionCheck:NewerVersion()
         if newer ~= nil then
-            tt:AddLine(BROWN .. "Version " .. newer .. " is available.|r")
+            tt:AddLine(BROWN .. "Version " .. newer .. " is available on CurseForge.|r")
         end
     end
 

@@ -151,6 +151,7 @@ describe("VersionCheck", function()
             local message = printSpy.calls[1].vals[2]
             assert.is_truthy(message:find("v0.1.0-beta14", 1, true))
             assert.is_truthy(message:find("v0.1.0-beta13", 1, true))
+            assert.is_truthy(message:find("CurseForge", 1, true))
         end)
 
         it("tells the player once per session", function()
