@@ -48,12 +48,9 @@ describe("VersionCheck", function()
     end)
 
     describe("hearing a newer build", function()
-        it("waits for a second player before it tells the player", function()
+        it("tells the player as soon as one player runs a newer build", function()
             announce("Dude", NEWER, "v0.1.0-beta14")
-            assert.is_nil(versionCheck:NewerVersion())
-            assert.spy(printSpy).was_not_called()
 
-            announce("Dudette", NEWER, "v0.1.0-beta14")
             assert.equals("v0.1.0-beta14", versionCheck:NewerVersion())
             assert.same({buildTime = NEWER, version = "v0.1.0-beta14"}, db.global.newerVersion)
             assert.spy(printSpy).was_called(1)
@@ -62,41 +59,27 @@ describe("VersionCheck", function()
             assert.is_truthy(message:find("v0.1.0-beta13", 1, true))
         end)
 
-        it("counts a player once, however often it announces", function()
+        it("tells the player once per session", function()
             announce("Dude", NEWER, "v0.1.0-beta14")
             announce("Dude", NEWER, "v0.1.0-beta14")
-            announce("Dude", NEWEST, "v0.1.0-beta15")
-
-            assert.is_nil(versionCheck:NewerVersion())
-            assert.spy(printSpy).was_not_called()
-        end)
-
-        it("names the build two players run at least", function()
-            announce("Dude", NEWEST, "v0.1.0-beta15")
             announce("Dudette", NEWER, "v0.1.0-beta14")
-            assert.equals("v0.1.0-beta14", versionCheck:NewerVersion())
-
-            -- a second player on the newest build: that one is known now ...
+            -- a still newer build is known from now on, without another chat line
             announce("Dudine", NEWEST, "v0.1.0-beta15")
+
             assert.equals("v0.1.0-beta15", versionCheck:NewerVersion())
-            -- ... but the player was told this session already
             assert.spy(printSpy).was_called(1)
         end)
 
         it("keeps the newest build it knows of", function()
             announce("Dude", NEWEST, "v0.1.0-beta15")
-            announce("Dudette", NEWEST, "v0.1.0-beta15")
-            announce("Dudine", NEWER, "v0.1.0-beta14")
-            announce("Dudon", NEWER, "v0.1.0-beta14")
+            announce("Dudette", NEWER, "v0.1.0-beta14")
 
             assert.equals("v0.1.0-beta15", versionCheck:NewerVersion())
         end)
 
         it("ignores our own build and older ones", function()
-            for _, sender in ipairs({"Dude", "Dudette"}) do
-                announce(sender, MINE, "v0.1.0-beta13")
-                announce(sender, MINE - DAY, "v0.1.0-beta12")
-            end
+            announce("Dude", MINE, "v0.1.0-beta13")
+            announce("Dudette", MINE - DAY, "v0.1.0-beta12")
 
             assert.is_nil(versionCheck:NewerVersion())
             assert.spy(printSpy).was_not_called()
@@ -104,13 +87,11 @@ describe("VersionCheck", function()
 
         it("ignores a client that says nothing about its build", function()
             assert.has_no.errors(function()
-                for _, sender in ipairs({"Dude", "Dudette"}) do
-                    eventbus:PublishEvent(NetEvents.ChannelSync, {123, 456}, sender, "CHANNEL")
-                    eventbus:PublishEvent(NetEvents.ChannelSync, {123, 456, time}, sender, "CHANNEL")
-                    eventbus:PublishEvent(NetEvents.ChannelSync, 42, sender, "CHANNEL")
-                    eventbus:PublishEvent(NetEvents.ChannelSync, {123, 456, nil, "junk"}, sender, "CHANNEL")
-                    eventbus:PublishEvent(NetEvents.ChannelSync, {123, 456, nil, {}}, sender, "CHANNEL")
-                end
+                eventbus:PublishEvent(NetEvents.ChannelSync, {123, 456}, "Dude", "CHANNEL")
+                eventbus:PublishEvent(NetEvents.ChannelSync, {123, 456, time}, "Dude", "CHANNEL")
+                eventbus:PublishEvent(NetEvents.ChannelSync, 42, "Dude", "CHANNEL")
+                eventbus:PublishEvent(NetEvents.ChannelSync, {123, 456, nil, "junk"}, "Dude", "CHANNEL")
+                eventbus:PublishEvent(NetEvents.ChannelSync, {123, 456, nil, {}}, "Dude", "CHANNEL")
             end)
 
             assert.is_nil(versionCheck:NewerVersion())
@@ -133,7 +114,6 @@ describe("VersionCheck", function()
             }
             for _, build in ipairs(forged) do
                 announce("Dude", build[1], build[2])
-                announce("Dudette", build[1], build[2])
             end
 
             assert.is_nil(versionCheck:NewerVersion())
@@ -144,7 +124,6 @@ describe("VersionCheck", function()
         it("an unpackaged checkout never warns", function()
             versionCheck = WoWForeverRace.VersionCheck(WoWForeverRace.Config, core, db, WoWForeverRace.EventBus())
             versionCheck:OnNetChannelSync({123, 456, nil, {NEWER, "v0.1.0-beta14"}}, "Dude")
-            versionCheck:OnNetChannelSync({123, 456, nil, {NEWER, "v0.1.0-beta14"}}, "Dudette")
 
             assert.is_nil(versionCheck:NewerVersion())
             assert.spy(printSpy).was_not_called()
@@ -158,7 +137,6 @@ describe("VersionCheck", function()
             db.global.newerVersion = nil
             create(own)
             announce("Dude", NEWER, version)
-            announce("Dudette", NEWER, version)
             return versionCheck:NewerVersion() ~= nil
         end
 
@@ -193,7 +171,6 @@ describe("VersionCheck", function()
 
             -- once per session
             announce("Dude", NEWEST, "v0.1.0-beta15")
-            announce("Dudette", NEWEST, "v0.1.0-beta15")
             assert.equals("v0.1.0-beta15", versionCheck:NewerVersion())
             assert.spy(printSpy).was_called(1)
         end)

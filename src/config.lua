@@ -213,7 +213,6 @@ local WoWForeverRaceConfig = {
     ChannelOfferTarget = 5,    -- offers a channel sync should draw, however many players are on the channel
 
     -- Version check: every client tells its build in its channel sync, see VersionCheck
-    VersionConfirmations = 2,  -- different players that must announce a newer build before the player is told
     VersionWarnDelay = 10,     -- seconds after login before the warning about a build an earlier session heard of
     VersionMaxLength = 32,     -- longest version string accepted from another client
 

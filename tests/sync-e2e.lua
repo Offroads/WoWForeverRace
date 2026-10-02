@@ -563,7 +563,7 @@ describe("Sync end to end with real data", function()
         assert.is_true(b.channel:IsLive())
     end)
 
-    it("realm channel: a player on an older version hears about the newer one others run", function()
+    it("realm channel: a player on an older version hears about the newer one another player runs", function()
         yellReaches = false
         local printStub = stub(WoWForeverRace, "PPrint")
         finally(function() printStub:revert() end)
@@ -574,19 +574,13 @@ describe("Sync end to end with real data", function()
 
         local b = stack("Beta Tester", realSavedVariables(), {"v0.1.0-beta14", START - 2000})
         joinChannel(b)
-        pump()
-        assert.is_nil(old.versionCheck:NewerVersion(), "one player alone is not believed")
-
-        local c = stack("Gamma Tester", realSavedVariables(), {"v0.1.0-beta14", START - 2000})
-        joinChannel(c)
         advance(Config.ChannelSyncWait + 1)
 
         assert.equals("v0.1.0-beta14", old.versionCheck:NewerVersion())
         assert.is_nil(b.versionCheck:NewerVersion())
-        assert.is_nil(c.versionCheck:NewerVersion())
         assert.stub(printStub).was_called(1)
         -- the build rides along with the join announce, nothing else was sent for it
-        assert.same({[NetEvents.ChannelSync] = 3}, countEvents())
+        assert.same({[NetEvents.ChannelSync] = 2}, countEvents())
     end)
 
     it("realm channel: a ding reaches a player out of yell range in one message", function()

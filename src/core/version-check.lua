@@ -28,9 +28,10 @@ build to the CHSYNC it sends to the realm channel (field 4, {buildTime, version}
 Config:BuildInfo and Sync:SendChannelSync), which the whole faction hears. A client that
 hears a newer build there remembers it and warns its player, once per session.
 
-Addon messages are not signed, so a build only counts once Config.VersionConfirmations
-different players announced it (or a newer one), and a client only ever announces its
-own build, never what it heard.
+One player on a newer build is enough: few players run the addon, and the first to update
+may be the only one online. Addon messages are not signed, so a forged build can make
+clients print a warning that is not true, nothing more: what is accepted is checked
+(IsNewer), and a client only ever announces its own build, never what it heard.
 ]]--
 ---@class WoWForeverRaceVersionCheck
 ---@field Config WoWForeverRaceConfig
@@ -54,8 +55,6 @@ function WoWForeverRaceVersionCheck.new(Config, Core, DB, EventBus)
     self.DB = DB
     self.EventBus = EventBus
 
-    -- the newest builds announced this session, one per sender, newest first
-    self.claims = {}
     self.warned = false
 
     EventBus:RegisterCallback(self.Config.Network.Events.ChannelSync, self, self.OnNetChannelSync)
@@ -104,34 +103,15 @@ end
 
 -- A player announced itself on the realm channel (CHSYNC, field 4 = its build).
 function WoWForeverRaceVersionCheck:OnNetChannelSync(payload, sender)
-    if type(payload) ~= "table" or type(sender) ~= "string" then return end
+    if type(payload) ~= "table" then return end
     local build = payload[4]
     if type(build) ~= "table" then return end
     local buildTime, version = build[1], build[2]
     if not self:IsNewer(buildTime, version) then return end
 
-    -- each sender counts once, with the newest build it announced
-    local claims = self.claims
-    for i, claim in ipairs(claims) do
-        if claim.sender == sender then
-            if claim.buildTime >= buildTime then return end
-            table.remove(claims, i)
-            break
-        end
-    end
-    claims[#claims + 1] = {sender = sender, buildTime = buildTime, version = version}
-    table.sort(claims, function(a, b) return a.buildTime > b.buildTime end)
-
-    -- Only the newest VersionConfirmations claims are kept. The oldest of them is the
-    -- build that many players run at least: that one is confirmed.
-    local needed = self.Config.VersionConfirmations
-    claims[needed + 1] = nil
-    local confirmed = claims[needed]
-    if confirmed == nil then return end
-
-    if self:NewerVersion() == nil or confirmed.buildTime > self.DB.global.newerVersion.buildTime then
-        WoWForeverRace:DebugPrint("Newer version heard: " .. confirmed.version)
-        self.DB.global.newerVersion = {buildTime = confirmed.buildTime, version = confirmed.version}
+    if self:NewerVersion() == nil or buildTime > self.DB.global.newerVersion.buildTime then
+        WoWForeverRace:DebugPrint("Newer version heard from " .. tostring(sender) .. ": " .. version)
+        self.DB.global.newerVersion = {buildTime = buildTime, version = version}
     end
     self:Warn()
 end
