@@ -42,10 +42,14 @@ end
 local stacks, queue, activeStack, log, undelivered, now
 -- false: the stacks are out of yell range of each other
 local yellReaches
+-- wireFault(msg, event): what happens to a message on its way, nil for a clean wire.
+-- "drop": it never arrives; "garble": it arrives with a packet missing
+local wireFault
 
 local function resetWorld()
     stacks, queue, log, undelivered = {}, {}, {}, {}
     yellReaches = true
+    wireFault = nil
     activeStack = nil
     now = START
     _G.SetTime(now)
@@ -71,9 +75,14 @@ end
 local function pump()
     while #queue > 0 do
         local msg = table.remove(queue, 1)
-        local delivered = false
+        local fate = wireFault and wireFault(msg, decodeEnvelope(msg.text)[1])
+        if fate == "garble" then
+            msg.text = string.sub(msg.text, 1, #msg.text - 10)
+        end
+        -- a dropped message was lost on the way, not sent to nobody
+        local delivered = fate == "drop"
         for _, stack in ipairs(stacks) do
-            if stack ~= msg.from then
+            if stack ~= msg.from and fate ~= "drop" then
                 local wanted = true
                 if msg.channel == "WHISPER" then
                     wanted = stack.name == msg.target
@@ -321,6 +330,50 @@ describe("Sync end to end with real data", function()
         assert.is_nil(after[NetEvents.GuildOffer], "nobody should offer when in sync")
         assert.is_nil(after[NetEvents.StartSync])
         assert.is_nil(after[NetEvents.SyncPayload])
+    end)
+
+    it("guild login sync: what got lost on the way is asked for again", function()
+        _G.SetIsInGuild(true)
+        local a = stack("Alpha Tester", realSavedVariables())
+        a.sync.isReady = true
+        local b = stack("Beta Tester", {})
+
+        -- two leaderboards never arrive, one history chunk arrives as garbage and one not at all
+        local boards, chunks = 0, 0
+        wireFault = function(msg, event)
+            if msg.from ~= a then return nil end
+            if event == NetEvents.SyncPayload then
+                boards = boards + 1
+                if boards == 2 or boards == 3 then return "drop" end
+            elseif event == NetEvents.PlayerHistorySync then
+                chunks = chunks + 1
+                if chunks == 2 then return "garble" end
+                if chunks == 3 then return "drop" end
+            end
+            return nil
+        end
+
+        b.sync:SendGuildSync(true)
+        pump()
+        advance(Config.GuildSyncWait + 1)
+        advance(historyPullTime(a))
+        assert.not_equals(hashes(a).full, hashes(b).full, "the lost leaderboards should be missing")
+        assert.not_equals(hashes(a).ph, hashes(b).ph, "the lost history should be missing")
+        assert.equals(1, countEvents()[NetEvents.StartSync])
+
+        -- the garbage is noticed right away, the repair waits until the source went quiet
+        advance(Config.PlayerHistoryQuiet + Config.RepairDelay)
+        assert.equals(2, countEvents()[NetEvents.StartSync], "one repair")
+        advance(historyPullTime(a))
+
+        assertAllBoardsEqual(a, b)
+        assertFTLEqual(a, b)
+        assert.equals(hashes(a).ph, hashes(b).ph, "history hash differs after the repair")
+        assertHistoryCovered(a, b)
+
+        -- and that was it: nothing more is asked for
+        advance(Config.PlayerHistoryQuiet + Config.RepairDelay + Config.RepairQuiet)
+        assert.equals(2, countEvents()[NetEvents.StartSync])
     end)
 
     it("buddy ping: both sides push what the other lacks, then go quiet", function()

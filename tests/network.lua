@@ -59,19 +59,19 @@ describe("Network", function()
         it("goes to PARTY in a party", function()
             SetGroupState(3, false, false)
             assert.spy(sendToGroup()).was_called_with(match.is_ref(AceComm),
-                    WoWForeverRace.Config.Network.Prefix, match.is_string(), "PARTY", nil, "BULK")
+                    WoWForeverRace.Config.Network.Prefix, match.is_string(), "PARTY", nil, "BULK", match.is_function())
         end)
 
         it("goes to RAID in a raid", function()
             SetGroupState(25, true, false)
             assert.spy(sendToGroup()).was_called_with(match.is_ref(AceComm),
-                    WoWForeverRace.Config.Network.Prefix, match.is_string(), "RAID", nil, "BULK")
+                    WoWForeverRace.Config.Network.Prefix, match.is_string(), "RAID", nil, "BULK", match.is_function())
         end)
 
         it("goes to INSTANCE_CHAT in an instance group", function()
             SetGroupState(5, false, true)
             assert.spy(sendToGroup()).was_called_with(match.is_ref(AceComm),
-                    WoWForeverRace.Config.Network.Prefix, match.is_string(), "INSTANCE_CHAT", nil, "BULK")
+                    WoWForeverRace.Config.Network.Prefix, match.is_string(), "INSTANCE_CHAT", nil, "BULK", match.is_function())
         end)
     end)
 
@@ -109,13 +109,13 @@ describe("Network", function()
             channel:TryJoin()
             network:SendObject(NetworkEvents.ChannelSync, {1}, "RACE")
             assert.spy(commSpy).was_called_with(match.is_ref(AceComm),
-                    WoWForeverRace.Config.Network.Prefix, match.is_string(), "CHANNEL", "3", "BULK")
+                    WoWForeverRace.Config.Network.Prefix, match.is_string(), "CHANNEL", "3", "BULK", match.is_function())
 
             -- the number moves when the player's channel list changes
             SetChatChannels({"General", RACE_CHANNEL})
             network:SendObject(NetworkEvents.ChannelSync, {1}, "RACE")
             assert.spy(commSpy).was_called_with(match.is_ref(AceComm),
-                    WoWForeverRace.Config.Network.Prefix, match.is_string(), "CHANNEL", "2", "BULK")
+                    WoWForeverRace.Config.Network.Prefix, match.is_string(), "CHANNEL", "2", "BULK", match.is_function())
         end)
 
         it("is dropped when we are not in the realm channel", function()
@@ -144,7 +144,7 @@ describe("Network", function()
             _G.C_Timer.Advance(6)
 
             assert.spy(commSpy).was_called_with(match.is_ref(AceComm),
-                    WoWForeverRace.Config.Network.Prefix, match.is_string(), "CHANNEL", "2", "BULK")
+                    WoWForeverRace.Config.Network.Prefix, match.is_string(), "CHANNEL", "2", "BULK", match.is_function())
         end)
 
         it("notes who was heard on a chat channel", function()
@@ -309,6 +309,221 @@ describe("Network", function()
         printStub:revert()
         debugStub:revert()
         WoWForeverRace.DB = nil
+    end)
+
+    it("tells the other components about a message that doesn't decode", function()
+        local core = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
+        local eventbus = WoWForeverRace.EventBus()
+        local network = WoWForeverRace.Network(core, eventbus)
+        local garbled = {}
+        eventbus:RegisterCallback(Events.MessageGarbled, garbled, function(_, sender, distribution)
+            garbled[#garbled + 1] = {sender, distribution}
+        end)
+
+        -- a long message with one of its packets lost on the way
+        local message = encodeEnvelope({NetworkEvents.SyncPayload, "1000000000$301.2Racer Nub0$", "Alliance"})
+        network:HandleAddonMessage(WoWForeverRace.Config.Network.Prefix,
+                string.sub(message, 1, #message - 10), "WHISPER", "Dude")
+        network:HandleAddonMessage(WoWForeverRace.Config.Network.Prefix, message, "WHISPER", "Dude")
+
+        assert.same({{"Dude", "WHISPER"}}, garbled)
+    end)
+
+    describe("a packet the client refused", function()
+        local network, commStub, refuse, sent
+
+        before_each(function()
+            _G.C_Timer.Reset()
+            local core = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
+            network = WoWForeverRace.Network(core, WoWForeverRace.EventBus())
+            sent = {}
+            -- refuse(call): the answers of the client for the packets of that send, true = taken
+            commStub = stub(AceComm, "SendCommMessage", function(_, _, message, distribution, target, _, callback)
+                sent[#sent + 1] = {envelope = decodeMessage(message), distribution = distribution, target = target}
+                local packets = refuse(#sent)
+                for i, taken in ipairs(packets) do
+                    callback(nil, math.floor(#message * i / #packets), #message, taken)
+                end
+            end)
+        end)
+
+        after_each(function()
+            commStub:revert()
+        end)
+
+        it("makes the whole message go out again", function()
+            refuse = function(call) return call == 1 and {true, false, true} or {true, true, true} end
+
+            network:SendObject(NetworkEvents.SyncPayload, "batch", "WHISPER", "Dude")
+            assert.equals(1, #sent)
+            _G.C_Timer.Advance(WoWForeverRace.Config.SendRetryDelay)
+
+            assert.equals(2, #sent)
+            assert.same(sent[1], sent[2])
+            _G.C_Timer.Advance(WoWForeverRace.Config.SendRetryDelay * 10)
+            assert.equals(2, #sent)
+        end)
+
+        it("is given up after a few tries", function()
+            refuse = function() return {false} end
+
+            network:SendObject(NetworkEvents.SyncPayload, "batch", "WHISPER", "Dude")
+            for _ = 1, WoWForeverRace.Config.SendRetryMax + 3 do
+                _G.C_Timer.Advance(WoWForeverRace.Config.SendRetryDelay)
+            end
+
+            assert.equals(1 + WoWForeverRace.Config.SendRetryMax, #sent)
+        end)
+
+        it("changes nothing when every packet was taken, or the client doesn't tell", function()
+            refuse = function(call) return call == 1 and {true, true} or {nil} end
+
+            network:SendObject(NetworkEvents.SyncPayload, "batch", "WHISPER", "Dude")
+            network:SendObject(NetworkEvents.SyncPayload, "batch", "WHISPER", "Dude")
+            _G.C_Timer.Advance(WoWForeverRace.Config.SendRetryDelay * 10)
+
+            assert.equals(2, #sent)
+        end)
+
+        it("waits out a chat messaging lockdown that began meanwhile", function()
+            refuse = function(call) return {call > 1} end
+
+            network:SendObject(NetworkEvents.SyncPayload, "batch", "WHISPER", "Dude")
+            SetChatLockdown(true)
+            _G.C_Timer.Advance(WoWForeverRace.Config.SendRetryDelay * 2)
+            assert.equals(1, #sent)
+
+            SetChatLockdown(false)
+            _G.C_Timer.Advance(6)
+            assert.equals(2, #sent)
+        end)
+    end)
+
+    it("hears from ChatThrottleLib which packets the client refused", function()
+        local CTL = _G.ChatThrottleLib
+        -- hands everything ChatThrottleLib holds to the client
+        local function flush()
+            CTL.HardThrottlingBeginTime = _G.GetTime() - 60
+            for _ = 1, 50 do
+                CTL.avail = CTL.BURST
+                CTL.OnUpdate(CTL.Frame, 1)
+            end
+        end
+        _G.C_Timer.Reset()
+        flush()
+        local core = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
+        local network = WoWForeverRace.Network(core, WoWForeverRace.EventBus())
+        -- the client refuses the second packet it is given, with a result that is not its
+        -- throttle (Lua 5.1's xpcall hands ChatThrottleLib's arguments to nobody: only counted)
+        local packets = 0
+        local sendStub = stub(_G.C_ChatInfo, "SendAddonMessage", function()
+            packets = packets + 1
+            return packets == 2 and 9 or 0
+        end)
+
+        -- three packets
+        network:SendObject(NetworkEvents.SyncPayload, string.rep("1000000000$301.2Racer Nub0$", 25), "WHISPER", "Dude")
+        flush()
+        assert.equals(3, packets)
+
+        -- the whole message again, and no third time
+        _G.C_Timer.Advance(WoWForeverRace.Config.SendRetryDelay)
+        flush()
+        assert.equals(6, packets)
+        _G.C_Timer.Advance(WoWForeverRace.Config.SendRetryDelay)
+        flush()
+        sendStub:revert()
+
+        assert.equals(6, packets)
+    end)
+
+    describe("paced sending", function()
+        local CTL = _G.ChatThrottleLib
+        local PREFIX = WoWForeverRace.Config.Network.Prefix
+        local INTERVAL = 0.25
+        -- three chat packets
+        local LONG = string.rep("1000000000$301.2Racer Nub0$", 25)
+        local network, ctlStub, packets, taken
+
+        local function advance(steps)
+            for _ = 1, steps do
+                _G.C_Timer.Advance(INTERVAL)
+            end
+        end
+
+        before_each(function()
+            _G.C_Timer.Reset()
+            WoWForeverRace.Config.PacketInterval = INTERVAL
+            local core = WoWForeverRace.Core(WoWForeverRace.Config, "Nub", "NubVille")
+            network = WoWForeverRace.Network(core, WoWForeverRace.EventBus())
+            packets = {}
+            -- taken(n): whether the client takes the n-th packet it is given
+            taken = function() return true end
+            ctlStub = stub(CTL, "SendAddonMessage", function(_, _, _, text, distribution, target, _, callback, arg)
+                packets[#packets + 1] = {text = text, distribution = distribution, target = target}
+                callback(arg, taken(#packets))
+            end)
+        end)
+
+        after_each(function()
+            ctlStub:revert()
+            WoWForeverRace.Config.PacketInterval = 0
+        end)
+
+        it("hands the client one packet at a time, in order", function()
+            network:SendObject(NetworkEvents.SyncPayload, LONG, "WHISPER", "Dude")
+            network:SendObject(NetworkEvents.BuddyPing, {1}, "GUILD")
+
+            for sent = 1, 4 do
+                assert.equals(sent, #packets)
+                advance(1)
+            end
+            advance(10)
+
+            assert.equals(4, #packets)
+            assert.same({"WHISPER", "WHISPER", "WHISPER", "GUILD"},
+                    {packets[1].distribution, packets[2].distribution, packets[3].distribution, packets[4].distribution})
+            assert.equals("Dude", packets[1].target)
+        end)
+
+        it("sends packets that AceComm puts together into the message again", function()
+            network:SendObject(NetworkEvents.SyncPayload, LONG, "WHISPER", "Dude")
+            network:SendObject(NetworkEvents.BuddyPing, {1}, "WHISPER", "Dude")
+            advance(10)
+
+            -- the receiving client: the Network created last hears the addon channel
+            local eventbus = WoWForeverRace.EventBus()
+            WoWForeverRace.Network(WoWForeverRace.Core(WoWForeverRace.Config, "Dude", "NubVille"), eventbus)
+            local received = {}
+            eventbus:RegisterCallback(NetworkEvents.SyncPayload, received, function(_, payload, sender)
+                received[#received + 1] = {NetworkEvents.SyncPayload, payload, sender}
+            end)
+            eventbus:RegisterCallback(NetworkEvents.BuddyPing, received, function(_, payload, sender)
+                received[#received + 1] = {NetworkEvents.BuddyPing, payload, sender}
+            end)
+            for _, packet in ipairs(packets) do
+                assert.is_true(#packet.text <= 255)
+                AceComm.frame.scripts.OnEvent(AceComm.frame, "CHAT_MSG_ADDON", PREFIX, packet.text,
+                        packet.distribution, "Nub")
+            end
+
+            assert.same({{NetworkEvents.SyncPayload, LONG, "Nub"}, {NetworkEvents.BuddyPing, {1}, "Nub"}}, received)
+        end)
+
+        it("drops the rest of a message with a refused packet and sends the message again", function()
+            taken = function(n) return n ~= 2 end
+
+            network:SendObject(NetworkEvents.SyncPayload, LONG, "WHISPER", "Dude")
+            network:SendObject(NetworkEvents.BuddyPing, {1}, "WHISPER", "Dude")
+            advance(3)
+            -- the first two packets of the long message, then the ping
+            assert.equals(3, #packets)
+            assert.is_true(#packets[3].text < 255)
+
+            advance(WoWForeverRace.Config.SendRetryDelay / INTERVAL + 10)
+            assert.equals(6, #packets)
+            assert.same({packets[1].text, packets[2].text}, {packets[4].text, packets[5].text})
+        end)
     end)
 
     describe("chat messaging lockdown", function()

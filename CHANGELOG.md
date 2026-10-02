@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Leaderboards and player history sent from one player to another could arrive
+  with pieces missing, or not at all, when the sender's addon sent several chat
+  packets at once. The addon now sends its packets one at a time, a moment
+  apart, so longer messages arrive whole.
+- When something a player sent you still arrives damaged, your addon notices
+  and asks that player again about a minute later, instead of staying without
+  that data until your next login. This also works with players on older
+  versions.
+- A history transfer now tells how many parts it has, so missing parts are
+  noticed and fetched again.
+- A message the game client refused to send is sent again a few seconds later
+  instead of being dropped silently.
+- The periodic guild sync no longer skips a round when the only answer arrives
+  a few seconds late.
+
+### Changed
+- The debug log shows how each received message arrived (whisper, guild,
+  shout, group or channel).
+
 ## v0.1.0-beta13 - 2026-10-01
 
 ### Fixed

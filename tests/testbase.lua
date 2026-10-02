@@ -39,6 +39,11 @@ if testDebug == nil or testDebug == "" or testDebug == "0" or testDebug == "fals
     WoWForeverRace.Config.Trace = false
 end
 
+-- The tests and scripts watch the wire at AceComm:SendCommMessage and expect a message
+-- there the moment it is sent. The paced sender (Network:Transmit), which hands the
+-- packets to ChatThrottleLib itself over time, has its own tests in tests/network.lua.
+WoWForeverRace.Config.PacketInterval = 0
+
 require("defaultdb")
 require("util.chat")
 require("util.util")
