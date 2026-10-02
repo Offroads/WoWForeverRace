@@ -69,303 +69,63 @@ describe("Sync", function()
     it("waits with the login sync until a chat messaging lockdown has ended", function()
         local lockedDown = true
         network.IsLockedDown = function() return lockedDown end
+        _G.SetIsInGuild(true)
         local networkSpy = spy.on(network, "SendObject")
 
         sync:InitSync()
         AdvanceClock(WoWForeverRace.Config.RetrySyncWait)
         assert.spy(networkSpy).was_not_called()
+        assert.is_false(sync.isReady)
 
         lockedDown = false
         AdvanceClock(WoWForeverRace.Config.RetrySyncWait)
 
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.RequestSync,
-                {11, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "YELL")
+        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.GuildSync,
+                {11, myFullHash, core:LoginTime(), myFTLHash, myPHHash}, "GUILD")
+        assert.is_true(sync.isReady)
     end)
 
-    it("can request sync, marks ready when no partner", function()
+    it("is ready the moment the login sync ran: nothing in the zone can answer", function()
         local networkSpy = spy.on(network, "SendObject")
+        db.factionrealm.buddies = {["Old Buddy"] = {lastSeen = time}}
 
         sync:InitSync()
 
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.RequestSync,
-                {11, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "YELL")
+        assert.is_true(sync.isReady)
+        -- the buddies are pinged right away; without a guild nothing else goes out
+        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.BuddyPing,
+                match.is_table(), "WHISPER", "Old Buddy")
         assert.spy(networkSpy).called_at_most(1)
-        networkSpy:clear()
-
-        -- advance our clock so the sync happens
-        AdvanceClock(WoWForeverRace.Config.RequestSyncWait)
-
-        assert.equals(true, sync.isReady)
     end)
 
-    it("can request sync, announces to guild too", function()
+    it("announces to the guild at login, with the history hash for the once-per-login pull", function()
         local networkSpy = spy.on(network, "SendObject")
-
         _G.SetIsInGuild(true)
 
         sync:InitSync()
 
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.RequestSync,
-                {11, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "YELL")
         assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.GuildSync,
                 {11, myFullHash, core:LoginTime(), myFTLHash, myPHHash}, "GUILD")
-        assert.spy(networkSpy).called_at_most(2)
-    end)
-
-    it("can init and start sync with partner that offers no hashes (old client)", function()
-        local networkSpy = spy.on(network, "SendObject")
-
-        sync:InitSync()
-        networkSpy:clear()
-
-        eventbus:PublishEvent(NetEvents.OfferSync, {11, nil}, "Dude")
-
-        -- advance our clock so the sync happens
-        AdvanceClock(WoWForeverRace.Config.RequestSyncWait)
-
-        -- no hashes known -> sends global + class leaderboards and FTL data
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.StartSync,
-                {11, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "WHISPER", "Dude")
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.SyncPayload, "", "WHISPER", "Dude")
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.FTLSync, {""}, "WHISPER", "Dude")
-        assert.spy(networkSpy).called_at_most(4)
-    end)
-
-    it("skips syncing entirely when partner hashes all match", function()
-        local networkSpy = spy.on(network, "SendObject")
-
-        sync:InitSync()
-        networkSpy:clear()
-
-        eventbus:PublishEvent(NetEvents.OfferSync,
-                {11, nil, myGlobalHash, myClassHash, myFTLHash}, "Dude")
-
-        AdvanceClock(WoWForeverRace.Config.RequestSyncWait)
-
-        -- no sync exchange needed; the only traffic is the buddy ping on becoming ready
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.BuddyPing,
-                match.is_table(), "WHISPER", "Dude")
         assert.spy(networkSpy).called_at_most(1)
-        assert.equals(true, sync.isReady)
+        assert.is_true(sync.isReady)
     end)
 
-    it("syncs only FTL when only the FTL hash differs", function()
+    it("ignores the zone sync of an older client: its request, its offer and its start", function()
         local networkSpy = spy.on(network, "SendObject")
-
-        sync:InitSync()
-        networkSpy:clear()
-
-        eventbus:PublishEvent(NetEvents.OfferSync,
-                {11, nil, myGlobalHash, myClassHash, myFTLHash + 1}, "Dude")
-
-        AdvanceClock(WoWForeverRace.Config.RequestSyncWait)
-
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.StartSync,
-                {11, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "WHISPER", "Dude")
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.FTLSync, {""}, "WHISPER", "Dude")
-        assert.spy(networkSpy).called_at_most(2)
-    end)
-
-    it("can init and chooses preferred partner", function()
-        local networkSpy = spy.on(network, "SendObject")
-
-        sync:InitSync()
-        networkSpy:clear()
-
-        -- Dude was synced recently (throttled), Chick was not
-        eventbus:PublishEvent(NetEvents.OfferSync, {11, time}, "Dude")
-        eventbus:PublishEvent(NetEvents.OfferSync, {11, nil}, "Chick")
-
-        -- overload SelectPartnerFromList to avoid randomness, hacky but works...
-        sync.SelectPartnerFromList = function(self, offers)
-            return table.remove(offers, 1)
-        end
-
-        -- advance our clock so the sync happens
-        AdvanceClock(WoWForeverRace.Config.RequestSyncWait)
-
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.StartSync,
-                match.is_table(), "WHISPER", "Chick")
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.SyncPayload, "", "WHISPER", "Chick")
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.FTLSync, {""}, "WHISPER", "Chick")
-        assert.spy(networkSpy).called_at_most(4)
-        networkSpy:clear()
-
-        -- advance our clock so the retry happens
-        AdvanceClock(WoWForeverRace.Config.RetrySyncWait)
-
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.StartSync,
-                match.is_table(), "WHISPER", "Dude")
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.SyncPayload, "", "WHISPER", "Dude")
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.FTLSync, {""}, "WHISPER", "Dude")
-        assert.spy(networkSpy).called_at_most(4)
-    end)
-
-    it("can init and sync with partner, won't (re)try other partners", function()
-        local networkSpy = spy.on(network, "SendObject")
-
-        sync:InitSync()
-        networkSpy:clear()
-
-        eventbus:PublishEvent(NetEvents.OfferSync, {11, nil}, "Dude")
-        eventbus:PublishEvent(NetEvents.OfferSync, {11, nil}, "Chick")
-
-        -- overload SelectPartnerFromList to avoid randomness, hacky but works...
-        sync.SelectPartnerFromList = function(self, offers)
-            return table.remove(offers, 1)
-        end
-
-        -- advance our clock so the sync happens
-        AdvanceClock(WoWForeverRace.Config.RequestSyncWait)
-
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.StartSync,
-                match.is_table(), "WHISPER", "Dude")
-
-        -- receive payload from Dude (also triggers buddy pings on becoming ready)
-        eventbus:PublishEvent(NetEvents.SyncPayload, "", "Dude")
-        assert.equals(true, sync.isReady)
-        networkSpy:clear()
-
-        -- advance our clock so the retry would happen
-        AdvanceClock(WoWForeverRace.Config.RetrySyncWait)
-
-        assert.spy(networkSpy).called_at_most(0)
-    end)
-
-    it("marks ready when receiving only an FTL payload", function()
-        sync:InitSync()
-
-        eventbus:PublishEvent(NetEvents.OfferSync, {11, nil}, "Dude")
-
-        AdvanceClock(WoWForeverRace.Config.RequestSyncWait)
-        assert.equals(false, sync.isReady)
-
-        -- partner only had FTL differences to offer
-        eventbus:PublishEvent(NetEvents.FTLSync, {""}, "Dude")
-
-        assert.equals(true, sync.isReady)
-    end)
-
-    it("can init and retry sync with unresponsive partner", function()
-        local networkSpy = spy.on(network, "SendObject")
-
-        sync:InitSync()
-        networkSpy:clear()
-
-        eventbus:PublishEvent(NetEvents.OfferSync, {11, nil}, "Dude")
-        eventbus:PublishEvent(NetEvents.OfferSync, {11, nil}, "Chick")
-
-        -- overload SelectPartnerFromList to avoid randomness, hacky but works...
-        sync.SelectPartnerFromList = function(self, offers)
-            return table.remove(offers, 1)
-        end
-
-        -- advance our clock so the sync happens
-        AdvanceClock(WoWForeverRace.Config.RequestSyncWait)
-
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.StartSync,
-                match.is_table(), "WHISPER", "Dude")
-        networkSpy:clear()
-
-        -- advance our clock so the retry happens
-        AdvanceClock(WoWForeverRace.Config.RetrySyncWait)
-
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.StartSync,
-                match.is_table(), "WHISPER", "Chick")
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.SyncPayload, "", "WHISPER", "Chick")
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.FTLSync, {""}, "WHISPER", "Chick")
-        assert.spy(networkSpy).called_at_most(4)
-    end)
-
-    it("can offer and sync with old client that sends no hashes", function()
-        local networkSpy = spy.on(network, "SendObject")
-
-        -- mark as ready
         sync.isReady = true
 
-        eventbus:PublishEvent(NetEvents.RequestSync, 11, "Dude")
-
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.OfferSync,
-                {11, nil, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "WHISPER", "Dude")
-        assert.spy(networkSpy).called_at_most(1)
-        networkSpy:clear()
-
+        -- a REQSYNC yell, an OFFERSYNC whisper, and the zone form of STARTSYNC with the
+        -- hashes of the overall and the own class board (a table of numbers, or a bare class index)
+        eventbus:PublishEvent(NetEvents.RequestSync, {11, myGlobalHash + 1, myClassHash + 1, myFTLHash + 1}, "Dude")
+        eventbus:PublishEvent(NetEvents.OfferSync, {11, nil, myGlobalHash + 1, myClassHash + 1, myFTLHash + 1}, "Dude")
+        eventbus:PublishEvent(NetEvents.StartSync, {11, myGlobalHash + 1, myClassHash + 1, myFTLHash + 1}, "Dude")
         eventbus:PublishEvent(NetEvents.StartSync, 11, "Dude")
 
-        -- old client provided no hashes -> send global + class leaderboards and FTL
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.SyncPayload, "", "WHISPER", "Dude")
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.FTLSync, {""}, "WHISPER", "Dude")
-        assert.spy(networkSpy).called_at_most(3)
+        assert.spy(networkSpy).was_not_called()
+        assert.is_nil(db.factionrealm.buddies["Dude"])
     end)
 
-    it("won't offer to a requester whose hashes match ours", function()
-        local networkSpy = spy.on(network, "SendObject")
-
-        -- mark as ready
-        sync.isReady = true
-
-        eventbus:PublishEvent(NetEvents.RequestSync,
-                {11, myGlobalHash, myClassHash, myFTLHash}, "Dude")
-
-        assert.spy(networkSpy).called_at_most(0)
-    end)
-
-    it("offers when the requester's class leaderboard differs", function()
-        local networkSpy = spy.on(network, "SendObject")
-
-        -- mark as ready
-        sync.isReady = true
-
-        eventbus:PublishEvent(NetEvents.RequestSync,
-                {11, myGlobalHash, myClassHash + 1, myFTLHash}, "Dude")
-
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.OfferSync,
-                {11, nil, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "WHISPER", "Dude")
-        assert.spy(networkSpy).called_at_most(1)
-    end)
-
-    it("sends nothing on StartSync when the requester's hashes match", function()
-        local networkSpy = spy.on(network, "SendObject")
-
-        eventbus:PublishEvent(NetEvents.StartSync,
-                {11, myGlobalHash, myClassHash, myFTLHash}, "Dude")
-
-        assert.spy(networkSpy).called_at_most(0)
-    end)
-
-    it("sends only the differing leaderboard on StartSync", function()
-        local networkSpy = spy.on(network, "SendObject")
-
-        eventbus:PublishEvent(NetEvents.StartSync,
-                {11, myGlobalHash + 1, myClassHash, myFTLHash}, "Dude")
-
-        assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.SyncPayload, "", "WHISPER", "Dude")
-        assert.spy(networkSpy).called_at_most(1)
-    end)
-
-    it("won't offer when not ready offer and sync", function()
-        local networkSpy = spy.on(network, "SendObject")
-
-        eventbus:PublishEvent(NetEvents.RequestSync, 11, "Dude")
-
-        assert.spy(networkSpy).called_at_most(0)
-    end)
-
-    it("won't offer when networking is disabled", function()
-        local networkSpy = spy.on(network, "SendObject")
-
-        -- disable networking in options
-        db.profile.options.networking = false
-
-        -- mark as ready
-        sync.isReady = true
-
-        eventbus:PublishEvent(NetEvents.RequestSync, 11, "Dude")
-
-        assert.spy(networkSpy).called_at_most(0)
-    end)
-
-    it("won't request sync when networking is disabled", function()
+    it("does nothing at login when networking is disabled", function()
         local networkSpy = spy.on(network, "SendObject")
 
         -- disable networking in options
@@ -374,9 +134,10 @@ describe("Sync", function()
         sync:InitSync()
 
         assert.spy(networkSpy).called_at_most(0)
+        assert.is_false(sync.isReady)
     end)
 
-    it("won't request sync when networking race is finished", function()
+    it("does nothing at login when the race is finished", function()
         local networkSpy = spy.on(network, "SendObject")
 
         -- mark race finished
@@ -385,6 +146,7 @@ describe("Sync", function()
         sync:InitSync()
 
         assert.spy(networkSpy).called_at_most(0)
+        assert.is_false(sync.isReady)
     end)
 
     describe("guild sync", function()
@@ -528,11 +290,11 @@ describe("Sync", function()
             local networkSpy = spy.on(network, "SendObject")
             seedHistory()
 
-            local globalHash = WoWForeverRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[0])
             local phHash = WoWForeverRace.Sync.ComputePHHash(db, WoWForeverRace.Config, core:MyFaction())
 
+            -- the requester agrees on every board and the pioneers, only its history differs
             eventbus:PublishEvent(NetEvents.StartSync,
-                    {11, globalHash, myClassHash, myFTLHash, phHash + 1}, "Dude")
+                    {11, sync:MyBoardHashes(), myFTLHash, phHash + 1}, "Dude")
 
             -- chunks are sent via timers
             AdvanceClock(WoWForeverRace.Config.PlayerHistoryChunkDelay)
@@ -548,11 +310,10 @@ describe("Sync", function()
             local networkSpy = spy.on(network, "SendObject")
             seedHistory()
 
-            local globalHash = WoWForeverRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[0])
             local phHash = WoWForeverRace.Sync.ComputePHHash(db, WoWForeverRace.Config, core:MyFaction())
 
             eventbus:PublishEvent(NetEvents.StartSync,
-                    {11, globalHash, myClassHash, myFTLHash, phHash}, "Dude")
+                    {11, sync:MyBoardHashes(), myFTLHash, phHash}, "Dude")
             AdvanceClock(WoWForeverRace.Config.PlayerHistoryChunkDelay)
 
             assert.spy(networkSpy).called_at_most(0)
@@ -562,22 +323,15 @@ describe("Sync", function()
             local networkSpy = spy.on(network, "SendObject")
             seedHistory()
 
-            -- old client StartSync: differing global hash but no history hash
-            eventbus:PublishEvent(NetEvents.StartSync,
-                    {11, myGlobalHash + 1, myClassHash, myFTLHash}, "Dude")
+            -- old client StartSync: a differing overall board but no history hash
+            local theirHashes = sync:MyBoardHashes()
+            theirHashes[1] = theirHashes[1] + 1
+            eventbus:PublishEvent(NetEvents.StartSync, {11, theirHashes, myFTLHash}, "Dude")
             AdvanceClock(WoWForeverRace.Config.PlayerHistoryChunkDelay)
 
             assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.SyncPayload,
                     match.is_string(), "WHISPER", "Dude")
             assert.spy(networkSpy).called_at_most(1)
-        end)
-
-        it("marks ready when receiving a player history payload", function()
-            assert.equals(false, sync.isReady)
-
-            eventbus:PublishEvent(NetEvents.PlayerHistorySync, "", "Dude")
-
-            assert.equals(true, sync.isReady)
         end)
 
         it("forwards received player history chunks to the tracker", function()
@@ -714,13 +468,12 @@ describe("Sync", function()
 
         it("drops buddies not seen for BuddyMaxAge a while after the login sync, not at login", function()
             local maxAge = WoWForeverRace.Config.BuddyMaxAge
-            local syncWait = WoWForeverRace.Config.RequestSyncWait
             local pruneDelay = WoWForeverRace.Config.BuddyPruneDelay
             db.factionrealm.buddies = {
                 ["Stale Buddy"] = {lastSeen = time - maxAge - 1},
                 ["Unseen Buddy"] = {},
                 ["Fresh Buddy"] = {lastSeen = time - 60},
-                ["Edge Buddy"] = {lastSeen = time - maxAge + syncWait + pruneDelay},
+                ["Edge Buddy"] = {lastSeen = time - maxAge + pruneDelay},
             }
             local updates = 0
             eventbus:RegisterCallback(Events.BuddyUpdate, {}, function() updates = updates + 1 end)
@@ -731,7 +484,6 @@ describe("Sync", function()
 
             -- nor when the login sync is done
             sync:InitSync()
-            AdvanceClock(syncWait)
             assert.is_true(sync.isReady)
             assert.is_table(db.factionrealm.buddies["Stale Buddy"])
             assert.is_table(db.factionrealm.buddies["Unseen Buddy"])
@@ -762,7 +514,6 @@ describe("Sync", function()
 
             -- the login sync ends with a ping to the buddies, stale or not
             sync:InitSync()
-            AdvanceClock(WoWForeverRace.Config.RequestSyncWait)
             assert.same({["Offline Buddy"] = true, ["Online Buddy"] = true, ["Channel Buddy"] = true}, pinged)
 
             -- one answers it, another is heard on the realm channel
@@ -785,7 +536,7 @@ describe("Sync", function()
             eventbus:RegisterCallback(Events.BuddyUpdate, {}, function() updates = updates + 1 end)
 
             sync:InitSync()
-            AdvanceClock(WoWForeverRace.Config.RequestSyncWait + WoWForeverRace.Config.BuddyPruneDelay)
+            AdvanceClock(WoWForeverRace.Config.BuddyPruneDelay)
 
             local count = 0
             for _ in pairs(db.factionrealm.buddies) do count = count + 1 end
@@ -1888,10 +1639,10 @@ describe("Sync", function()
             assert.equals(0, #repairs)
         end)
 
-        it("leaves a damaged message to the zone, guild, group or channel alone", function()
+        it("leaves a damaged message to the guild, group or channel alone", function()
             sync:NotePeer("Dude")
 
-            for _, distribution in ipairs({"YELL", "GUILD", "PARTY", "RAID", "CHANNEL"}) do
+            for _, distribution in ipairs({"GUILD", "PARTY", "RAID", "CHANNEL"}) do
                 garbled("Dude", distribution)
             end
             AdvanceClock(Config.RepairDelay)

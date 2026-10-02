@@ -13,8 +13,8 @@
       tests      run the busted test suite, extra args are passed to make
                  (e.g. INCLUDES=scanner TESTS='.*binary.*')
       check      lint + tests
-      sim        simulate the addon's traffic in a party, a raid, a guild or a
-                 crowded zone, extra args are passed to make
+      sim        simulate the addon's traffic in a party, a raid, a guild or on
+                 the realm channel, extra args are passed to make
                  (e.g. SCENARIO=drift SIZES=40)
       netsize    message sizes of a full update through the real compression,
                  extra args are passed to make (e.g. SV=<file>)

@@ -47,10 +47,8 @@ local WoWForeverRaceConfig = {
         ["Offroad Hunt"] = true,
     },
 
-    -- OfferSync throttle time window
-    RequestSyncWait = 5,
+    -- seconds before a sync that a chat messaging lockdown postponed is tried again
     RetrySyncWait = 30,
-    OfferSyncThrottle = 30,
 
     -- display name used by every window title, the minimap tooltip and the LDB text
     Name = "WoWForeverRace",
@@ -171,10 +169,7 @@ local WoWForeverRaceConfig = {
     -- the overall board (0) and the class boards (1-12) the race IDs would collide with
     RaceBoardOffset = 100,
 
-    BroadcastInterval = 60,
-    YellChunkSize = 10,
-    YellChunkDelay = 2,
-    DataRequestInterval = 10,  -- at most one DATAREQ per 10s: wait for that answer instead of asking every beacon
+    LaunchCheckInterval = 60,  -- how often an idle client checks whether the realm launch passed, see Tracker:InitLaunchTicker
 
     GuildSyncInterval = 300,   -- periodic guild sync every 5 minutes
     GuildSyncWait = 10,        -- seconds to collect guild offers before picking a partner
@@ -192,7 +187,7 @@ local WoWForeverRaceConfig = {
 
     -- Realm channel: a hidden player-made chat channel per faction (RaceChannelPrefix .. faction)
     -- that every addon user of the faction joins. While it carries traffic it is the main
-    -- path, and yell, guild, group and buddy sync only run as its backup, see Channel:IsLive.
+    -- path, and guild, group and buddy sync only run as its backup, see Channel:IsLive.
     RaceChannelPrefix = "WFRace",
     -- A channel that asks for a password is given up for the same name with the next number
     -- (WFRaceHorde2, ...), and the highest number any player is on wins, see Channel:MoveTo
@@ -243,12 +238,8 @@ local WoWForeverRaceConfig = {
         Prefix = "TCRace",
         Events = {
             PlayerInfoBatch = "PINFOB",
-            RequestSync = "REQSYNC",
-            OfferSync = "OFFERSYNC",
             StartSync = "STARTSYNC",
             SyncPayload = "SYNC",
-            DataAvailable = "DATAAVAIL",
-            DataRequest = "DATAREQ",
             GuildSync = "GUILDSYNC",
             GuildOffer = "GUILDOFFR",
             BuddyPing = "BPING",
@@ -259,6 +250,14 @@ local WoWForeverRaceConfig = {
             ChannelOffer = "CHOFFR",
             ChannelMove = "CHMOVE",
             Reset = "RESET",
+            -- Received only, never sent: the zone login sync (REQSYNC, answered by OFFERSYNC)
+            -- and the discovery beacon (DATAAVAIL, answered by DATAREQ) of older clients go
+            -- to YELL, which the client refuses. Nothing listens to them anymore, they are
+            -- listed so that one from an older client is dropped quietly, not as unknown
+            RequestSync = "REQSYNC",
+            OfferSync = "OFFERSYNC",
+            DataAvailable = "DATAAVAIL",
+            DataRequest = "DATAREQ",
         },
     },
     Events = {

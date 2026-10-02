@@ -163,10 +163,7 @@ function WoWForeverRace:BuildDevStatus()
             .. " lastClass=" .. tostring(scanner.lastScanClassIndex)
             .. " nextClassSlot=" .. tostring(scanner.nextScanClassIdx)
             .. " lastScan=" .. tostring(scanner.lastScanTime))
-    add("sync: ready=" .. tostring(sync.isReady)
-            .. " offers=" .. tostring(#sync.offers)
-            .. " partner=" .. tostring(sync.syncPartner and sync.syncPartner.name)
-            .. " lastSync=" .. tostring(sync.lastSync))
+    add("sync: ready=" .. tostring(sync.isReady) .. " lastSync=" .. tostring(sync.lastSync))
     add("buddies: " .. WoWForeverRace.table.cnt(db.buddies)
             .. ", players with history: " .. WoWForeverRace.table.cnt(db.playerHistory))
     local channel = self.Channel
@@ -399,7 +396,8 @@ function WoWForeverRace:BuildApiProbe()
 end
 
 -- Sends the probe prefix to ourselves in every form a name could take, the
--- CHAT_MSG_ADDON echoes show which forms deliver and what `sender` looks like.
+-- CHAT_MSG_ADDON echoes show which forms deliver and what `sender` looks like (the
+-- distributions themselves are /wfr chprobe's job).
 function WoWForeverRace:SendApiProbeEcho()
     local chatInfo = _G.C_ChatInfo
     local echo = { "== Addon message echo (event args: prefix, text, channel, sender, target, ...)" }
