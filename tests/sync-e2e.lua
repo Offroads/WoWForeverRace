@@ -108,7 +108,13 @@ local function advance(seconds)
     end
 end
 
-local function stack(name, savedVariables)
+-- build: optional {version, buildTime}, the packaged build this stack runs (the shared
+-- config is an unpackaged checkout, which announces no build)
+local function stack(name, savedVariables, build)
+    local config = Config
+    if build ~= nil then
+        config = setmetatable({Version = build[1], BuildTime = tostring(build[2])}, {__index = Config})
+    end
     local db = AceDB:New(savedVariables or {}, WoWForeverRace.DefaultDB, true)
     local core = WoWForeverRace.Core(Config, name, REALM)
     local eventbus = WoWForeverRace.EventBus()
@@ -116,9 +122,10 @@ local function stack(name, savedVariables)
     local channel = WoWForeverRace.Channel(Config, core, db, eventbus)
     local network = WoWForeverRace.Network(core, eventbus, channel)
     local tracker = WoWForeverRace.Tracker(Config, core, db, eventbus, network, channel)
-    local sync = WoWForeverRace.Sync(Config, core, db, eventbus, network, channel)
+    local sync = WoWForeverRace.Sync(config, core, db, eventbus, network, channel)
+    local versionCheck = WoWForeverRace.VersionCheck(config, core, db, eventbus)
     local s = {name = name, db = db, core = core, eventbus = eventbus, network = network,
-               tracker = tracker, sync = sync, channel = channel}
+               tracker = tracker, sync = sync, channel = channel, versionCheck = versionCheck}
     -- tag outgoing messages with their stack
     network.SendObject = function(self, ...)
         local previous = activeStack
@@ -554,6 +561,32 @@ describe("Sync end to end with real data", function()
         -- both know now that the channel carries traffic
         assert.is_true(a.channel:IsLive())
         assert.is_true(b.channel:IsLive())
+    end)
+
+    it("realm channel: a player on an older version hears about the newer one others run", function()
+        yellReaches = false
+        local printStub = stub(WoWForeverRace, "PPrint")
+        finally(function() printStub:revert() end)
+        local old = stack("Alpha Tester", realSavedVariables(), {"v0.1.0-beta13", START - 3000})
+        old.sync.isReady = true
+        joinChannel(old)
+        advance(Config.ChannelSyncWait + 1)
+
+        local b = stack("Beta Tester", realSavedVariables(), {"v0.1.0-beta14", START - 2000})
+        joinChannel(b)
+        pump()
+        assert.is_nil(old.versionCheck:NewerVersion(), "one player alone is not believed")
+
+        local c = stack("Gamma Tester", realSavedVariables(), {"v0.1.0-beta14", START - 2000})
+        joinChannel(c)
+        advance(Config.ChannelSyncWait + 1)
+
+        assert.equals("v0.1.0-beta14", old.versionCheck:NewerVersion())
+        assert.is_nil(b.versionCheck:NewerVersion())
+        assert.is_nil(c.versionCheck:NewerVersion())
+        assert.stub(printStub).was_called(1)
+        -- the build rides along with the join announce, nothing else was sent for it
+        assert.same({[NetEvents.ChannelSync] = 3}, countEvents())
     end)
 
     it("realm channel: a ding reaches a player out of yell range in one message", function()

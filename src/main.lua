@@ -24,6 +24,8 @@ local LibStub = _G.LibStub
 ---@field ChatNotifier  WoWForeverRaceChatNotifier
 ---       writes notifications in chat window based on events
 ---@field updater       WoWForeverRaceUpdater
+---@field VersionCheck  WoWForeverRaceVersionCheck
+---       tells the player when other players run a newer version of the addon
 ---@field Roster        WoWForeverRaceRoster
 ---       feeds guild roster and group member levels into the tracker
 ---@field Sync          WoWForeverRaceSync
@@ -52,6 +54,7 @@ function WoWForeverRace:OnInitialize()
     self.ChatNotifier = WoWForeverRace.ChatNotifier(self.Config, self.Core, self.DB, self.EventBus)
     self.Sync = WoWForeverRace.Sync(self.Config, self.Core, self.DB, self.EventBus, self.Network, self.Channel)
     self.updater = WoWForeverRace.Updater(self.Core, self.EventBus)
+    self.VersionCheck = WoWForeverRace.VersionCheck(self.Config, self.Core, self.DB, self.EventBus)
     self.Roster = WoWForeverRace.Roster(self.Core, self.DB, self.EventBus)
     self.StatusFrame = WoWForeverRace.StatusFrame(self.Config, self.Core, self.DB, self.EventBus)
     self.DebugFrame = WoWForeverRace.DebugFrame(self.Config, self.Core, self.DB, self.EventBus)
@@ -102,6 +105,7 @@ function WoWForeverRace:OnEnable()
     self.Sync:InitGroupTicker()
     self.Sync:InitChannelTicker()
     self.Roster:InitGuildRosterTicker()
+    self.VersionCheck:Init()
 
     local groupEventFrame = CreateFrame("Frame")
     groupEventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")

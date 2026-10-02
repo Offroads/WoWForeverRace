@@ -75,9 +75,11 @@ describe("Storage", function()
     -- A failure here means data was added outside the factionrealm scope. Race data
     -- (leaderboards, pioneers, history, buddies, race timestamps) belongs in factionrealm:
     -- every other scope is shared by the Horde and Alliance characters of an account.
-    -- Extend the expected lists only for settings.
+    -- Extend the expected lists only for settings and for what is about the addon itself
+    -- (global: the newer version other players announced).
     it("declares race data in the factionrealm scope only", function()
-        assert.same({"factionrealm", "profile"}, sortedKeys(WoWForeverRace.DefaultDB))
+        assert.same({"factionrealm", "global", "profile"}, sortedKeys(WoWForeverRace.DefaultDB))
+        assert.same({}, sortedKeys(WoWForeverRace.DefaultDB.global))
         assert.same({"gui", "options"}, sortedKeys(WoWForeverRace.DefaultDB.profile))
     end)
 

@@ -23,6 +23,12 @@ local WoWForeverRaceDefaultDB = {
             },
         },
     },
+    -- shared by every character of the account: nothing of the race belongs here
+    global = {
+        -- newerVersion = {buildTime, version}: the newest build other players announced,
+        -- dropped at login once we run it (VersionCheck)
+        newerVersion = nil,
+    },
     factionrealm = {
         dbversion = "0.0.0",
         finished = false,
