@@ -330,12 +330,15 @@ end
 -- ChatThrottleLib drops a packet the client refuses for any reason but its addon message
 -- throttle, and goes on with the next one: the receiver gets nothing, or a long message
 -- with a hole in it. So the whole message goes out again a little later, a few times.
-function WoWForeverRaceNetwork:RetrySend(event, object, channel, target, prio, attempt)
+-- result: the client's answer for the refused packet (Enum.SendAddonMessageResult), when known
+function WoWForeverRaceNetwork:RetrySend(event, object, channel, target, prio, attempt, result)
+    local what = "Send failed: " .. event .. " -> " .. tostring(channel)
+            .. (result ~= nil and " (client result " .. tostring(result) .. ")" or "")
     if attempt >= WoWForeverRace.Config.SendRetryMax then
-        WoWForeverRace:DebugPrint("Send failed: " .. event .. " -> " .. tostring(channel) .. ", giving up")
+        WoWForeverRace:DebugPrint(what .. ", giving up")
         return
     end
-    WoWForeverRace:DebugPrint("Send failed: " .. event .. " -> " .. tostring(channel) .. ", sending it again")
+    WoWForeverRace:DebugPrint(what .. ", sending it again")
     local _self = self
     C_Timer.After(WoWForeverRace.Config.SendRetryDelay, function()
         _self:SendObject(event, object, channel, target, prio, attempt + 1)
@@ -389,11 +392,37 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio, 
     self:TrackMessage("send", event)
 
     local _self = self
-    self:Transmit(encoded, channel, target, prio, function(refused)
-        if refused then
-            _self:RetrySend(event, object, toChannel, toTarget, prio, attempt or 0)
-        end
+    self:Transmit(encoded, channel, target, prio, function(refused, result)
+        _self:OnMessageSent(refused, result, event, object, toChannel, toTarget, prio, attempt or 0)
     end)
+end
+
+-- The client took a message, or refused a packet of it. A refused message is sent again,
+-- unless the client keeps refusing everything on that distribution (on the beta: every
+-- addon message to YELL): after Config.SendRefusalLimit refusals in a row there, nothing
+-- is sent a second time until a message gets through again.
+function WoWForeverRaceNetwork:OnMessageSent(refused, result, event, object, channel, target, prio, attempt)
+    self.refusals = self.refusals or {}
+    if not refused then
+        self.refusals[channel] = nil
+        return
+    end
+
+    -- a lockdown began while the message was waiting for its turn: it waits that out
+    if self:IsLockedDown() then
+        self:HoldMessage(event, object, channel, target, prio)
+        return
+    end
+
+    local refusals = (self.refusals[channel] or 0) + 1
+    self.refusals[channel] = refusals
+    if refusals > WoWForeverRace.Config.SendRefusalLimit then
+        WoWForeverRace:DebugPrint("Send failed: " .. event .. " -> " .. tostring(channel)
+                .. (result ~= nil and " (client result " .. tostring(result) .. ")" or "")
+                .. ", the client keeps refusing " .. tostring(channel))
+        return
+    end
+    self:RetrySend(event, object, channel, target, prio, attempt, result)
 end
 
 -- Hands an encoded message to the client, one chat packet per Config.PacketInterval.
@@ -401,7 +430,8 @@ end
 -- long message, or of several messages, used to reach the client in the same frame, and
 -- packets sent together don't reliably arrive: some are lost, some out of order, and
 -- AceComm then puts a message together wrong or not at all. One packet at a time arrives.
--- onDone(refused): called when the last packet was handed over, or one was refused.
+-- onDone(refused, result): called when the last packet was handed over, or one was refused
+-- (then with the client's answer for it).
 function WoWForeverRaceNetwork:Transmit(text, channel, target, prio, onDone)
     local interval = WoWForeverRace.Config.PacketInterval
     if interval == nil or interval <= 0 then
@@ -438,18 +468,18 @@ function WoWForeverRaceNetwork:PumpPackets()
     -- its own queue, with whether the client took it
     _G.ChatThrottleLib:SendAddonMessage(message.prio, WoWForeverRace.Config.Network.Prefix,
             message.packets[message.sent + 1], message.channel, message.target, nil,
-            function(_, didSend)
-                _self:OnPacketSent(message, didSend)
+            function(_, didSend, result)
+                _self:OnPacketSent(message, didSend, result)
             end)
 end
 
-function WoWForeverRaceNetwork:OnPacketSent(message, didSend)
+function WoWForeverRaceNetwork:OnPacketSent(message, didSend, result)
     message.sent = message.sent + 1
     local refused = didSend == false
     -- the rest of a message with a hole in it is of no use to anybody
     if refused or message.sent >= #message.packets then
         table.remove(self.sendQueue, 1)
-        message.onDone(refused)
+        message.onDone(refused, refused and result or nil)
     end
 
     local _self = self

@@ -461,7 +461,9 @@ describe("Network", function()
             taken = function() return true end
             ctlStub = stub(CTL, "SendAddonMessage", function(_, _, _, text, distribution, target, _, callback, arg)
                 packets[#packets + 1] = {text = text, distribution = distribution, target = target}
-                callback(arg, taken(#packets))
+                local ok = taken(#packets)
+                -- like ChatThrottleLib: whether the client took it, and the client's answer
+                callback(arg, ok, ok and 0 or 8)
             end)
         end)
 
@@ -523,6 +525,57 @@ describe("Network", function()
             advance(WoWForeverRace.Config.SendRetryDelay / INTERVAL + 10)
             assert.equals(6, #packets)
             assert.same({packets[1].text, packets[2].text}, {packets[4].text, packets[5].text})
+        end)
+
+        it("stops sending again to a distribution the client keeps refusing, until one gets through", function()
+            local refuseYell = true
+            taken = function(n) return not (refuseYell and packets[n].distribution == "YELL") end
+            local function yells()
+                local count = 0
+                for _, packet in ipairs(packets) do
+                    if packet.distribution == "YELL" then count = count + 1 end
+                end
+                return count
+            end
+            local retries = WoWForeverRace.Config.SendRetryDelay / INTERVAL * 4
+
+            -- the first message is tried three times
+            network:SendObject(NetworkEvents.DataAvailable, 1, "YELL")
+            advance(retries)
+            assert.equals(3, yells())
+
+            -- from then on once per message, and the guild is not affected
+            network:SendObject(NetworkEvents.DataAvailable, 2, "YELL")
+            network:SendObject(NetworkEvents.DataAvailable, 3, "YELL")
+            network:SendObject(NetworkEvents.GuildSync, {1}, "GUILD")
+            advance(retries)
+            assert.equals(5, yells())
+            assert.equals(6, #packets)
+
+            -- a yell that gets through: the next refused one is sent again
+            refuseYell = false
+            network:SendObject(NetworkEvents.DataAvailable, 4, "YELL")
+            advance(retries)
+            refuseYell = true
+            network:SendObject(NetworkEvents.DataAvailable, 5, "YELL")
+            advance(retries)
+            assert.equals(5 + 1 + 3, yells())
+        end)
+
+        it("logs the client's answer for a refused packet", function()
+            local db = LibStub("AceDB-3.0"):New("WoWForeverRace_DB", WoWForeverRace.DefaultDB, true)
+            db:ResetDB()
+            db.profile.options.debug = true
+            WoWForeverRace.DB = db
+            local debugStub = stub(WoWForeverRace, "DebugPrint")
+            taken = function() return false end
+
+            network:SendObject(NetworkEvents.DataAvailable, 1, "YELL")
+
+            assert.stub(debugStub).was_called_with(match.is_ref(WoWForeverRace),
+                    "Send failed: DATAAVAIL -> YELL (client result 8), sending it again")
+            debugStub:revert()
+            WoWForeverRace.DB = nil
         end)
     end)
 

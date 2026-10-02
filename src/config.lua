@@ -178,7 +178,7 @@ local WoWForeverRaceConfig = {
 
     GuildSyncInterval = 300,   -- periodic guild sync every 5 minutes
     GuildSyncWait = 10,        -- seconds to collect guild offers before picking a partner
-    GuildSyncLateOffer = 60,   -- a window that closed empty still takes the first offer arriving this much later
+    GuildSyncLateOffer = 120,   -- a window that closed empty still takes the first offer arriving this much later
 
     BuddySyncInterval = 600,   -- buddy ping every 10 minutes
     BuddyPingBatchSize = 50,   -- max buddies to ping per cycle (random sample if more)
@@ -231,6 +231,7 @@ local WoWForeverRaceConfig = {
     PacketInterval = 0.25,     -- seconds between two chat packets we hand to the client, see Network:Transmit
     SendRetryDelay = 5,        -- a message with a packet the client refused is sent again after this
     SendRetryMax = 2,          -- and at most this often
+    SendRefusalLimit = 3,      -- refusals in a row on one distribution before nothing is sent again there
     -- A whisper that can't be decoded, or a history pull with chunks missing, is repaired by
     -- asking its sender again for what still differs (Sync:ScheduleRepair)
     RepairDelay = 60,          -- seconds after the damage was noticed: what is still under way arrives first
