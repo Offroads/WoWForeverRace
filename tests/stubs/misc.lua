@@ -22,6 +22,12 @@ _G.geterrorhandler = function()       -- ChatThrottleLib, EventBus
     return error
 end
 _G.hooksecurefunc = function() end    -- ChatThrottleLib
+_G.securecallfunction = function(fn, ...)  -- ChatThrottleLib (its send callbacks)
+    return fn(...)
+end
+_G.Ambiguate = function(name)         -- AceComm (the sender of a received packet)
+    return name
+end
 _G.GetFramerate = function()          -- ChatThrottleLib
     return 60
 end

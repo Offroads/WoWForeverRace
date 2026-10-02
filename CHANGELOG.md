@@ -8,6 +8,31 @@
   line in chat per session, and the options window and the minimap tooltip
   name the new version until you update.
 
+### Fixed
+- Leaderboards and player history sent from one player to another could arrive
+  with pieces missing, or not at all, when the sender's addon sent several chat
+  packets at once. The addon now sends its packets one at a time, a moment
+  apart, so longer messages arrive whole.
+- Damaged data that still looked valid could end up in your player history,
+  as wrong level times or names that don't exist. Every message now carries a
+  checksum, and one that doesn't match its checksum is thrown away. Messages
+  from players on older versions carry none, so those can still arrive
+  damaged.
+- When something a player sent you arrives damaged, your addon notices and asks
+  that player again about a minute later, instead of staying without that data
+  until your next login. Both players need this version for that.
+- A history transfer now tells how many parts it has, so missing parts are
+  noticed and fetched again.
+- A message the game client refused to send is sent again a few seconds later
+  instead of being dropped silently, unless the client refuses everything sent
+  that way.
+- The periodic guild sync no longer skips a round when the only answer arrives
+  a few seconds late.
+
+### Changed
+- The debug log shows how each received message arrived (whisper, guild,
+  shout, group or channel).
+
 ## v0.1.0-beta13 - 2026-10-01
 
 ### Fixed

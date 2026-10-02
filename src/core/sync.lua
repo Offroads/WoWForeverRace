@@ -157,6 +157,10 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network, Channel)
     self.channelRound = nil  -- our latest channel trade: {partner, gained}, see DoChannelSync
     self.historyPulled = false  -- whether a login sync already brought player history
     self.channelSyncRetry = false  -- whether a channel sync is waiting for a chat messaging lockdown to end
+    self.peers = {}  -- [name] = when we last asked that player for data or got some, see ScheduleRepair
+    self.historyAsked = {}  -- [name] = true: we asked that player for the player history
+    self.historyPulls = {}  -- [name] = the numbered history transfer under way, see OnNetPHSync
+    self.repairs = {}  -- [name] = {count, pending, history}, see ScheduleRepair
 
     EventBus:RegisterCallback(self.Config.Network.Events.RequestSync, self, self.OnNetRequestSync)
     EventBus:RegisterCallback(self.Config.Network.Events.OfferSync, self, self.OnNetOfferSync)
@@ -172,8 +176,84 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network, Channel)
     EventBus:RegisterCallback(self.Config.Network.Events.ChannelOffer, self, self.OnNetChannelOffer)
     EventBus:RegisterCallback(self.Config.Events.ChannelJoined, self, self.OnChannelJoined)
     EventBus:RegisterCallback(self.Config.Events.ChannelHeard, self, self.OnChannelHeard)
+    EventBus:RegisterCallback(self.Config.Events.MessageGarbled, self, self.OnMessageGarbled)
 
     return self
+end
+
+-- We ask that player for data, or just got some: a damaged whisper from it is worth a repair.
+-- withHistory: we also asked for the player history.
+function WoWForeverRaceSync:NotePeer(name, withHistory)
+    self.peers[name] = self.Core:Now()
+    if withHistory then
+        self.historyAsked[name] = true
+    end
+end
+
+-- A whisper of that player arrived as garbage: packets of it were lost on the way, and
+-- whatever it carried is missing here. Only for players we trade data with, so a stranger
+-- whispering garbage makes us send nothing.
+function WoWForeverRaceSync:OnMessageGarbled(sender, distribution)
+    if distribution ~= "WHISPER" or type(sender) ~= "string" then return end
+    if self.peers[sender] == nil and self.DB.factionrealm.buddies[sender] == nil then return end
+    -- An older client sends in bursts, which lose packets every time: asking it again
+    -- brings the same damage and makes it send everything once more.
+    if self.Network.IsVerified == nil or not self.Network:IsVerified(sender) then return end
+
+    self.peers[sender] = self.Core:Now()
+    self:ScheduleRepair(sender, self.historyAsked[sender] == true)
+end
+
+-- What a player sent us was damaged on the way (a whisper that didn't decode, a history
+-- pull with chunks missing). Nothing tells what was in it, so we compare with that player
+-- again and let it send what still differs. Not right away: the rest of what it is
+-- sending arrives first, and a player who sent a lot is given time before it sends more.
+-- At most RepairMaxPerPartner times per player and login.
+-- withHistory: the player history is part of what we want from it.
+function WoWForeverRaceSync:ScheduleRepair(name, withHistory)
+    if not self.DB.profile.options.networking then return end
+    if self.DB.factionrealm.finished then return end
+
+    local repair = self.repairs[name]
+    if repair == nil then
+        repair = {count = 0, pending = false, history = false}
+        self.repairs[name] = repair
+    end
+    if withHistory then
+        repair.history = true
+    end
+    if repair.pending or repair.count >= self.Config.RepairMaxPerPartner then return end
+
+    WoWForeverRace:DebugPrint("Repair: asking " .. name .. " again in " .. self.Config.RepairDelay .. "s")
+    repair.pending = true
+    local _self = self
+    C_Timer.After(self.Config.RepairDelay, function() _self:Repair(name) end)
+end
+
+function WoWForeverRaceSync:Repair(name)
+    local repair = self.repairs[name]
+    if repair == nil or not repair.pending then return end
+
+    -- still sending: wait until it has been quiet for a while
+    local quietFor = self.Core:Now() - (self.peers[name] or 0)
+    if quietFor < self.Config.RepairQuiet then
+        local _self = self
+        C_Timer.After(self.Config.RepairQuiet - quietFor, function() _self:Repair(name) end)
+        return
+    end
+
+    repair.pending = false
+    if not self.DB.profile.options.networking or self.DB.factionrealm.finished then return end
+    repair.count = repair.count + 1
+
+    WoWForeverRace:DebugPrint("Repair: comparing with " .. name .. " again"
+            .. (repair.history and ", player history included" or ""))
+    -- the guild sync form of STARTSYNC: every board that differs, the pioneers and the
+    -- history when their hashes differ (OnNetStartSync)
+    local phHash = repair.history and computePHHash(self.DB, self.Config, self.Core:MyFaction()) or nil
+    self.Network:SendObject(self.Config.Network.Events.StartSync,
+            {self.classIndex, self:MyBoardHashes(), computeFTLHash(self.DB, self.Config), phHash},
+            "WHISPER", name)
 end
 
 -- Every sender of OFFERSYNC, BPING and BPONG and every player heard on the realm channel
@@ -403,6 +483,7 @@ function WoWForeverRaceSync:DoSync()
     -- include our hashes so the partner can also skip sending back data we already agree on
     self.Network:SendObject(self.Config.Network.Events.StartSync,
             {self.classIndex, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "WHISPER", self.syncPartner.name)
+    self:NotePeer(self.syncPartner.name, true)
 
     -- check if we need to retry syncing after a short timeout
     local _self = self
@@ -542,6 +623,7 @@ function WoWForeverRaceSync:OnNetSyncPayload(payload, sender)
     end
 
     self.EventBus:PublishEvent(self.Config.Events.SyncResult, batch)
+    self.peers[sender] = self.Core:Now()
 
     if hashBefore ~= nil and hashBefore ~= computeFullHash(self.DB, self.Config, nil, self.Core:MyFaction()) then
         round.gained = true
@@ -573,6 +655,7 @@ function WoWForeverRaceSync:SendGuildSync(withPlayerHistory)
     if self.DB.factionrealm.finished then return end
 
     self.guildOffers = {}
+    self.guildLateUntil = nil
     self.guildPHWanted = withPlayerHistory or false
 
     local fullHash = computeFullHash(self.DB, self.Config, nil, self.Core:MyFaction())
@@ -619,15 +702,32 @@ end
 
 -- Collect guild offers during the open window.
 function WoWForeverRaceSync:OnNetGuildOffer(offer, sender)
-    if self.guildOffers == nil then return end
+    -- An offer waits up to GuildSyncWait at its sender and then in its send queue, so it
+    -- can come in after the window closed. When the window closed empty, the first late
+    -- one is taken after all; else that round found nobody although a member answered.
+    local late = self.guildOffers == nil
+    if late and (self.guildLateUntil == nil or self.Core:Now() > self.guildLateUntil) then return end
+    -- that player is sending us data right now: the next round compares again
+    if late and self.peers[sender] ~= nil
+            and self.Core:Now() - self.peers[sender] < self.Config.RepairQuiet then
+        return
+    end
+
     local classIndex, lastSync, fullHash, globalHash, classHash, loginTime, ftlHash, phHash =
             offer[1], offer[2], offer[3], offer[4], offer[5], offer[6], offer[7], offer[8]
-    WoWForeverRace:DebugPrint("GuildOffer from " .. sender)
+    WoWForeverRace:DebugPrint("GuildOffer from " .. sender .. (late and " (late)" or ""))
+    if late then
+        self.guildLateUntil = nil
+        self.guildOffers = {}
+    end
     table.insert(self.guildOffers, {
         name = sender, classIndex = classIndex, lastSync = lastSync,
         fullHash = fullHash, globalHash = globalHash, classHash = classHash, loginTime = loginTime,
         ftlHash = ftlHash, phHash = phHash,
     })
+    if late then
+        self:DoGuildSync()
+    end
 end
 
 -- Every player heard on the realm channel becomes a buddy: should the channel be locked
@@ -835,6 +935,7 @@ function WoWForeverRaceSync:OnNetFTLSync(payload, sender)
     end
     local ftldb = WoWForeverRace.Serializer.DeserializeFTLBatch(ftlstr or "")
     self.EventBus:PublishEvent(self.Config.Events.FTLSyncResult, ftldb, remoteRealmOpenedAt)
+    self.peers[sender] = self.Core:Now()
 
     -- an FTL payload also completes our initial sync: when only FTL differed from
     -- our partner this is the only payload we'll receive, and without marking
@@ -868,13 +969,64 @@ function WoWForeverRaceSync:OnNetPHSync(payload, sender)
     if not self.DB.profile.options.networking then return end
     WoWForeverRace:DebugPrint("OnNetPHSync(" .. sender .. ")")
 
-    local batch = WoWForeverRace.Serializer.DeserializePlayerHistoryBatch(payload or "")
+    local batch, index, total = WoWForeverRace.Serializer.DeserializePlayerHistoryBatch(payload or "")
     self.EventBus:PublishEvent(self.Config.Events.PHSyncResult, batch)
     self.historyPulled = true
+    self.peers[sender] = self.Core:Now()
+    self:TrackHistoryPull(sender, index, total)
 
     -- a history payload also completes our initial sync: when only history differed
     -- from our partner this is the only payload we'll receive
     self:SetReady()
+end
+
+-- Chunks of a history transfer carry their number and the number of chunks (older clients
+-- don't number them). A transfer that went quiet with chunks missing lost them on the
+-- way: we ask its sender again (ScheduleRepair).
+function WoWForeverRaceSync:TrackHistoryPull(sender, index, total)
+    if type(index) ~= "number" or type(total) ~= "number" or index < 1 or index > total then return end
+
+    local pull = self.historyPulls[sender]
+    -- another transfer than the one we were counting: the sender's history changed
+    if pull ~= nil and pull.total ~= total then
+        pull = nil
+    end
+    if pull == nil then
+        pull = {total = total, got = {}, count = 0, checking = false}
+        self.historyPulls[sender] = pull
+    end
+    if not pull.got[index] then
+        pull.got[index] = true
+        pull.count = pull.count + 1
+    end
+    pull.lastAt = self.Core:Now()
+
+    if pull.count >= pull.total then
+        self.historyPulls[sender] = nil
+        return
+    end
+    if not pull.checking then
+        pull.checking = true
+        local _self = self
+        C_Timer.After(self.Config.PlayerHistoryQuiet, function() _self:CheckHistoryPull(sender, pull) end)
+    end
+end
+
+function WoWForeverRaceSync:CheckHistoryPull(sender, pull)
+    -- completed, or replaced by a newer transfer
+    if self.historyPulls[sender] ~= pull then return end
+
+    local quietFor = self.Core:Now() - pull.lastAt
+    if quietFor < self.Config.PlayerHistoryQuiet then
+        local _self = self
+        C_Timer.After(self.Config.PlayerHistoryQuiet - quietFor, function() _self:CheckHistoryPull(sender, pull) end)
+        return
+    end
+
+    self.historyPulls[sender] = nil
+    WoWForeverRace:DebugPrint("Player history from " .. sender .. ": " .. pull.count .. " of "
+            .. pull.total .. " chunks arrived")
+    self:ScheduleRepair(sender, true)
 end
 
 -- Called when the party roster changes.
@@ -1028,6 +1180,8 @@ function WoWForeverRaceSync:DoGuildSync()
 
     if not offers or #offers == 0 then
         WoWForeverRace:DebugPrint("Guild sync: no offers")
+        -- one that is still on its way is taken when it arrives, see OnNetGuildOffer
+        self.guildLateUntil = self.Core:Now() + self.Config.GuildSyncLateOffer
         return
     end
 
@@ -1056,6 +1210,7 @@ function WoWForeverRaceSync:DoGuildSync()
     -- the history hash is only included on the once-per-login pull
     self.Network:SendObject(self.Config.Network.Events.StartSync,
             {self.classIndex, myPerClassHashes, myFTLHash, myPHHash}, "WHISPER", best.name)
+    self:NotePeer(best.name, myPHHash ~= nil)
 end
 
 -- We are in the realm channel now (login, /reload, or sharing switched back on) and
@@ -1208,6 +1363,7 @@ function WoWForeverRaceSync:DoChannelSync()
     end
     self.Network:SendObject(self.Config.Network.Events.BuddyPing,
             {myFullHash, self:MyBoardHashes(), myFTLHash, myPHHash, self.Config:BuildInfo()}, "WHISPER", best.name)
+    self:NotePeer(best.name, myPHHash ~= nil)
 
     local round = {partner = best.name, gained = false}
     self.channelRound = round

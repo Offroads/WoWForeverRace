@@ -172,6 +172,45 @@ describe("Serializer", function()
             assert.same({}, DeserPHBatch(""))
         end)
 
+        it("numbers every chunk within its transfer", function()
+            local t = 1000000000
+            local playerHistory = {
+                Alice = {classIndex = 3, levels = {[15] = t + 100}},
+                Bob = {classIndex = 1, levels = {[10] = t}},
+                Carol = {classIndex = 5, levels = {[20] = t + 500}},
+            }
+
+            local chunks = SerPHChunks(playerHistory, {"Alice", "Bob", "Carol"}, 2)
+
+            assert.equals("1000000000$03Alice:15100$01Bob:100$#1/2$", chunks[1])
+            local batch, index, total = DeserPHBatch(chunks[2])
+            assert.same({Carol = playerHistory.Carol}, batch)
+            assert.equals(2, index)
+            assert.equals(2, total)
+        end)
+
+        it("drops a record with anything but level groups in it", function()
+            -- what arrived from an older client with a packet lost from the middle
+            local batch = DeserPHBatch("1790966019$07Vipin Noname:30111$07Wannacry Forever:281ate:30111$"
+                    .. "01Zero Fcsgiven:2969:301213为:3084$04Palamedes Naupliades:5a6xat21:62$02Yy Xp:29177$")
+
+            assert.same({
+                ["Vipin Noname"] = {classIndex = 7, levels = {[30] = 1790966130}},
+                ["Yy Xp"] = {classIndex = 2, levels = {[29] = 1790966196}},
+            }, batch)
+        end)
+
+        it("reads a chunk an older client sent without a number", function()
+            local batch, index, total = DeserPHBatch("1000000000$03Alice:15100$01Bob:100$")
+
+            assert.same({
+                Alice = {classIndex = 3, levels = {[15] = 1000000100}},
+                Bob = {classIndex = 1, levels = {[10] = 1000000000}},
+            }, batch)
+            assert.is_nil(index)
+            assert.is_nil(total)
+        end)
+
         it("round-trips player history", function()
             local t = 1000000000
             local playerHistory = {

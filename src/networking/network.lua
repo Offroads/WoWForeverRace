@@ -16,6 +16,40 @@ local AceComm = LibStub:GetLibrary("AceComm-3.0")
 local LibCompress = LibStub:GetLibrary("LibCompress")
 local EncodeTable = LibCompress:GetAddonEncodeTable()
 
+-- AceComm's packet framing: a message of up to 255 bytes is one chat packet (escaped when
+-- it starts with a control byte), a longer one travels in parts marked first, next, last
+local MSG_MULTI_FIRST, MSG_MULTI_NEXT, MSG_MULTI_LAST, MSG_ESCAPE = "\001", "\002", "\003", "\004"
+local PACKET_BYTES = 255
+
+-- The chat packets AceComm:SendCommMessage makes of a message, which every client's
+-- AceComm puts together again.
+local function splitPackets(text)
+    local length = #text
+    local control = string.find(text, "^[\001-\009]") ~= nil
+    if length <= PACKET_BYTES and not (control and length + 1 > PACKET_BYTES) then
+        return {control and MSG_ESCAPE .. text or text}
+    end
+
+    local size = PACKET_BYTES - 1
+    local packets = {MSG_MULTI_FIRST .. string.sub(text, 1, size)}
+    local pos = 1 + size
+    while pos + size <= length do
+        packets[#packets + 1] = MSG_MULTI_NEXT .. string.sub(text, pos, pos + size - 1)
+        pos = pos + size
+    end
+    packets[#packets + 1] = MSG_MULTI_LAST .. string.sub(text, pos)
+    return packets
+end
+
+-- djb2 over the serialized envelope: the sender puts it behind the envelope, see SendObject
+local function checksum(text)
+    local hash = 5381
+    for i = 1, #text do
+        hash = ((hash * 33) + string.byte(text, i)) % 2147483647
+    end
+    return hash
+end
+
 local NetworkEvents = {}
 for _, event in pairs(WoWForeverRace.Config.Network.Events) do
     NetworkEvents[event] = true
@@ -71,6 +105,7 @@ function WoWForeverRaceNetwork.new(Core, EventBus, Channel)
     self.Core = Core
     self.EventBus = EventBus
     self.Channel = Channel
+    self.verified = {}  -- [sender] = true: sent us a message with a checksum, see IsVerified
 
     AceComm:RegisterComm(WoWForeverRace.Config.Network.Prefix, function(...)
         self:HandleAddonMessage(...)
@@ -116,16 +151,36 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
             return
         end
 
+        -- A message that doesn't decode lost one of its packets on the way (AceComm puts
+        -- together whatever arrives). Its sender still holds what it tried to send us:
+        -- Sync asks for it again.
         local decoded = EncodeTable:Decode(message)
         local decompressed, decomprErr = LibCompress:Decompress(decoded)
         if not decompressed then
             WoWForeverRace:DebugPrint("Decompress error: " .. tostring(decomprErr))
+            self.EventBus:PublishEvent(WoWForeverRace.Config.Events.MessageGarbled, sender, distribution)
+            return
+        end
+
+        -- A message can lose a packet from its middle and still decode, with a hole in
+        -- its payload. A sender that knows about that puts a checksum behind the envelope
+        -- (SendObject); what doesn't match it is damaged. Not anchored at the end: the
+        -- Huffman decoder leaves junk behind the terminator of a damaged message. A sender
+        -- that checks does so on every message, so one without a checksum lost it on the way.
+        local envelope, check = string.match(decompressed, "^%^1(.+%^t)%^N(%d+)%^%^")
+        if envelope ~= nil and checksum(envelope) == tonumber(check) then
+            self.verified[sender] = true
+        elseif envelope ~= nil or self.verified[sender] then
+            WoWForeverRace:DebugPrint("Checksum error: a message of " .. tostring(sender)
+                    .. " was damaged on the way")
+            self.EventBus:PublishEvent(WoWForeverRace.Config.Events.MessageGarbled, sender, distribution)
             return
         end
 
         local ok2, object = Serializer:Deserialize(decompressed)
         if not ok2 then
             WoWForeverRace:DebugPrint("Deserialize error: " .. tostring(object))
+            self.EventBus:PublishEvent(WoWForeverRace.Config.Events.MessageGarbled, sender, distribution)
             return
         end
 
@@ -147,7 +202,8 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
         end
 
         WoWForeverRace:TracePrint("Received Network Event: " .. event .. " From: " .. sender)
-        WoWForeverRace:DebugPrint("Recv " .. event .. " <- " .. sender)
+        -- with the path it took: a log then shows whether a player is on the realm channel
+        WoWForeverRace:DebugPrint("Recv " .. event .. " <- " .. sender .. " (" .. tostring(distribution) .. ")")
         debugLogPayload(event, payload)
 
         self:TrackMessage("recv", event)
@@ -165,6 +221,14 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
     if not ok then
         WoWForeverRace:PPrint("Network receive error: " .. tostring(err))
     end
+end
+
+-- Whether that player's client puts a checksum on its messages. Such a client also sends
+-- its packets one at a time (Transmit), so what it sends arrives, and asking it again for
+-- something that got damaged is worth it. An older client sends in bursts that lose
+-- packets every time.
+function WoWForeverRaceNetwork:IsVerified(sender)
+    return self.verified[sender] == true
 end
 
 -- Resolves the virtual "GROUP" channel to the addon channel that actually
@@ -296,10 +360,31 @@ function WoWForeverRaceNetwork:FlushOutbox()
     end
 end
 
-function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
+-- ChatThrottleLib drops a packet the client refuses for any reason but its addon message
+-- throttle, and goes on with the next one: the receiver gets nothing, or a long message
+-- with a hole in it. So the whole message goes out again a little later, a few times.
+-- result: the client's answer for the refused packet (Enum.SendAddonMessageResult), when known
+function WoWForeverRaceNetwork:RetrySend(event, object, channel, target, prio, attempt, result)
+    local what = "Send failed: " .. event .. " -> " .. tostring(channel)
+            .. (result ~= nil and " (client result " .. tostring(result) .. ")" or "")
+    if attempt >= WoWForeverRace.Config.SendRetryMax then
+        WoWForeverRace:DebugPrint(what .. ", giving up")
+        return
+    end
+    WoWForeverRace:DebugPrint(what .. ", sending it again")
+    local _self = self
+    C_Timer.After(WoWForeverRace.Config.SendRetryDelay, function()
+        _self:SendObject(event, object, channel, target, prio, attempt + 1)
+    end)
+end
+
+-- attempt: set by RetrySend, the number of times this message was sent before
+function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio, attempt)
     if prio == nil then
         prio = "BULK"
     end
+    -- as the caller passed them: a retry resolves the group and the realm channel again
+    local toChannel, toTarget = channel, target
 
     -- Modern clients (WoW Forever) reject addon messages while the chat messaging
     -- lockdown is active (it covers whole dungeons and raids); hold them back
@@ -330,6 +415,9 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
     -- the third element locks the data to our faction, see HandleAddonMessage;
     -- older clients only read the first two. The fourth is our realm channel number
     local payload = Serializer:Serialize({event, object, self.Core:MyFaction(), self:ChannelIndexTag()})
+    -- "^1" envelope "^^": the checksum of the envelope goes in as a second serialized value,
+    -- which a client that doesn't know it never reads (see HandleAddonMessage)
+    payload = string.sub(payload, 1, -3) .. "^N" .. checksum(string.sub(payload, 3, -3)) .. "^^"
     local compressed = LibCompress:CompressHuffman(payload)
     local encoded = EncodeTable:Encode(compressed)
 
@@ -339,10 +427,120 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio)
     debugLogPayload(event, object)
     self:TrackMessage("send", event)
 
-    AceComm:SendCommMessage(
-            WoWForeverRace.Config.Network.Prefix,
-            encoded,
-            channel,
-            target,
-            prio)
+    local _self = self
+    self:Transmit(encoded, channel, target, prio, function(refused, result)
+        _self:OnMessageSent(refused, result, event, object, toChannel, toTarget, prio, attempt or 0)
+    end)
+end
+
+-- The client took a message, or refused a packet of it. A refused message is sent again,
+-- unless the client keeps refusing everything on that distribution (on the beta: every
+-- addon message to YELL): after Config.SendRefusalLimit refusals in a row there, nothing
+-- is sent a second time until a message gets through again.
+function WoWForeverRaceNetwork:OnMessageSent(refused, result, event, object, channel, target, prio, attempt)
+    self.refusals = self.refusals or {}
+    if not refused then
+        self.refusals[channel] = nil
+        return
+    end
+
+    -- a lockdown began while the message was waiting for its turn: it waits that out
+    if self:IsLockedDown() then
+        self:HoldMessage(event, object, channel, target, prio)
+        return
+    end
+
+    local refusals = (self.refusals[channel] or 0) + 1
+    self.refusals[channel] = refusals
+    if refusals > WoWForeverRace.Config.SendRefusalLimit then
+        WoWForeverRace:DebugPrint("Send failed: " .. event .. " -> " .. tostring(channel)
+                .. (result ~= nil and " (client result " .. tostring(result) .. ")" or "")
+                .. ", the client keeps refusing " .. tostring(channel))
+        return
+    end
+    self:RetrySend(event, object, channel, target, prio, attempt, result)
+end
+
+-- Hands an encoded message to the client, one chat packet per Config.PacketInterval.
+-- ChatThrottleLib sends whatever its allowance covers right away, so the packets of a
+-- long message, or of several messages, used to reach the client in the same frame, and
+-- packets sent together don't reliably arrive: some are lost, some out of order, and
+-- AceComm then puts a message together wrong or not at all. One packet at a time arrives.
+-- onDone(refused, result): called when the last packet was handed over, or one was refused
+-- (then with the client's answer for it).
+function WoWForeverRaceNetwork:Transmit(text, channel, target, prio, onDone)
+    local interval = WoWForeverRace.Config.PacketInterval
+    if interval == nil or interval <= 0 then
+        -- unpaced, AceComm splits and sends: once per packet it reports the bytes handed
+        -- over so far and whether the client took that packet (nil when it doesn't tell)
+        local refused = false
+        AceComm:SendCommMessage(WoWForeverRace.Config.Network.Prefix, text, channel, target, prio,
+                function(_, sent, total, didSend)
+                    if didSend == false then
+                        refused = true
+                    end
+                    if sent >= total then
+                        onDone(refused)
+                    end
+                end)
+        return
+    end
+
+    self.sendQueue = self.sendQueue or {}
+    table.insert(self.sendQueue, {packets = splitPackets(text), sent = 0, channel = channel,
+                                  target = target, prio = prio, onDone = onDone})
+    self:PumpPackets()
+end
+
+-- Sends the next packet of the message at the head of the queue, unless one is under way.
+function WoWForeverRaceNetwork:PumpPackets()
+    if self.pumpBusy then return end
+    local message = self.sendQueue[1]
+    if message == nil then return end
+
+    self.pumpBusy = true
+    local _self = self
+    -- the answer for this packet counts once, whichever comes first: the callback or the timeout
+    local pending = true
+    local function answered(didSend, result)
+        if not pending then return end
+        pending = false
+        _self:OnPacketSent(message, didSend, result)
+    end
+
+    -- Only the answer makes the queue move on. Should ChatThrottleLib never give one (it
+    -- raised an error, or another addon brought a version without the callback), the
+    -- packet counts as handed over after a while instead of holding up every message
+    -- behind it for the rest of the session.
+    C_Timer.After(WoWForeverRace.Config.PacketTimeout, function()
+        if pending then
+            WoWForeverRace:DebugPrint("Send: no answer for a packet, going on with the next")
+        end
+        answered(nil)
+    end)
+
+    -- ChatThrottleLib calls back when the packet went to the client, right away or after
+    -- its own queue, with whether the client took it
+    _G.ChatThrottleLib:SendAddonMessage(message.prio, WoWForeverRace.Config.Network.Prefix,
+            message.packets[message.sent + 1], message.channel, message.target, nil,
+            function(_, didSend, result)
+                answered(didSend, result)
+            end)
+end
+
+function WoWForeverRaceNetwork:OnPacketSent(message, didSend, result)
+    -- the next packet first: an error below must not leave the queue busy for good
+    local _self = self
+    C_Timer.After(WoWForeverRace.Config.PacketInterval, function()
+        _self.pumpBusy = false
+        _self:PumpPackets()
+    end)
+
+    message.sent = message.sent + 1
+    local refused = didSend == false
+    -- the rest of a message with a hole in it is of no use to anybody
+    if refused or message.sent >= #message.packets then
+        table.remove(self.sendQueue, 1)
+        message.onDone(refused, refused and result or nil)
+    end
 end

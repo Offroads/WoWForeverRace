@@ -147,8 +147,10 @@ end
 -- Serializes playerHistory for the given player names into chunk strings of at most
 -- chunkSize players each. Each chunk is independently parseable (own offset header)
 -- so partial delivery of a multi-chunk sync still merges cleanly.
--- Chunk format: offset(10) $ record $ record $ ...
+-- Chunk format: offset(10) $ record $ record $ ... #index/total $
 -- Record format: classIndex(2) name plus legacy :level(2)delta or extended :!level,delta groups.
+-- The last entry numbers the chunk within its transfer, so the receiver can tell when
+-- chunks went missing; it is no record, and a client that doesn't know it skips it.
 -- playerHistory[name] = {classIndex = ci, levels = {[level] = dingedAt}}
 function WoWForeverRaceSerializer.SerializePlayerHistoryChunks(playerHistory, names, chunkSize)
     local records = {}
@@ -196,11 +198,25 @@ function WoWForeverRaceSerializer.SerializePlayerHistoryChunks(playerHistory, na
         chunks[#chunks + 1] = res
     end
 
+    for i, chunk in ipairs(chunks) do
+        chunks[i] = chunk .. "#" .. i .. "/" .. #chunks .. "$"
+    end
+
     return chunks
 end
 
+-- Whether the levels of a history record are level groups and nothing else. A chunk that
+-- lost a packet from its middle on the way still parses, with the halves of two records
+-- joined: what is left over between the groups gives that away.
+local function validLevels(levelstr)
+    local rest = string.gsub(levelstr, ":!%d+,%d+", "")
+    rest = string.gsub(rest, ":%d%d%d+", "")
+    return rest == ""
+end
+
 -- Deserializes a single playerHistory chunk produced by SerializePlayerHistoryChunks.
--- Returns {[name] = {classIndex = ci, levels = {[level] = dingedAt}}}.
+-- Returns {[name] = {classIndex = ci, levels = {[level] = dingedAt}}}, and the chunk's
+-- number and the number of chunks of its transfer when the sender numbered it.
 function WoWForeverRaceSerializer.DeserializePlayerHistoryBatch(str)
     if type(str) ~= "string" or str == "" then return {} end
 
@@ -209,9 +225,16 @@ function WoWForeverRaceSerializer.DeserializePlayerHistoryBatch(str)
     str = string.sub(str, 12)
 
     local batch = {}
+    local chunkIndex, chunkTotal
     for substr in string.gmatch(str, "([^$]+)") do
         local ci, name, levelstr = string.match(substr, "^(%d%d)([^:]+)(:.+)$")
-        if ci and name and levelstr then
+        if not ci then
+            local index, total = string.match(substr, "^#(%d+)/(%d+)$")
+            if index then
+                chunkIndex, chunkTotal = tonumber(index), tonumber(total)
+            end
+        end
+        if ci and name and levelstr and validLevels(levelstr) then
             local levels = {}
             local count = 0
             local function addLevel(level, delta)
@@ -233,7 +256,7 @@ function WoWForeverRaceSerializer.DeserializePlayerHistoryBatch(str)
         end
     end
 
-    return batch
+    return batch, chunkIndex, chunkTotal
 end
 
 -- Deserializes a firstToLevel batch string produced by SerializeFTLBatch.

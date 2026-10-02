@@ -178,6 +178,7 @@ local WoWForeverRaceConfig = {
 
     GuildSyncInterval = 300,   -- periodic guild sync every 5 minutes
     GuildSyncWait = 10,        -- seconds to collect guild offers before picking a partner
+    GuildSyncLateOffer = 120,   -- a window that closed empty still takes the first offer arriving this much later
 
     BuddySyncInterval = 600,   -- buddy ping every 10 minutes
     BuddyPingBatchSize = 50,   -- max buddies to ping per cycle (random sample if more)
@@ -222,6 +223,21 @@ local WoWForeverRaceConfig = {
     -- logged in) and chunked to stay friendly to the addon channel throttle
     PlayerHistoryChunkSize = 20,   -- players per PHSYNC message
     PlayerHistoryChunkDelay = 2,   -- seconds between PHSYNC messages
+    PlayerHistoryQuiet = 15,       -- a numbered pull that went quiet this long with chunks missing is repaired
+
+    -- Addon messages get lost on the way: the client refuses a packet, or the server drops
+    -- one when a player sent a lot in a short time. A long message travels as several
+    -- packets, and with one of them missing it arrives as garbage or not at all.
+    PacketInterval = 0.25,     -- seconds between two chat packets we hand to the client, see Network:Transmit
+    PacketTimeout = 30,        -- a packet ChatThrottleLib gave no answer for counts as handed over after this
+    SendRetryDelay = 5,        -- a message with a packet the client refused is sent again after this
+    SendRetryMax = 2,          -- and at most this often
+    SendRefusalLimit = 3,      -- refusals in a row on one distribution before nothing is sent again there
+    -- A whisper that can't be decoded, or a history pull with chunks missing, is repaired by
+    -- asking its sender again for what still differs (Sync:ScheduleRepair)
+    RepairDelay = 60,          -- seconds after the damage was noticed: what is still under way arrives first
+    RepairQuiet = 15,          -- and not before that sender was quiet this long
+    RepairMaxPerPartner = 2,   -- repairs per player and login
 
     Network = {
         Prefix = "TCRace",
@@ -250,6 +266,8 @@ local WoWForeverRaceConfig = {
         ChannelJoined = "CHANNEL_JOINED",
         -- ChannelHeard(sender): a player of our faction sent something on the realm channel
         ChannelHeard = "CHANNEL_HEARD",
+        -- MessageGarbled(sender, distribution): a message of that player could not be decoded
+        MessageGarbled = "MESSAGE_GARBLED",
         SlashWhoResult = "WHO_RESULT",
         SyncResult = "SYNC_RESULT",
         FTLSyncResult = "FTL_SYNC_RESULT",

@@ -1769,4 +1769,209 @@ describe("Sync", function()
             assert.not_equals(withoutRaces, withRaces)
         end)
     end)
+
+    describe("a guild offer that arrives after the window closed", function()
+        local Config = WoWForeverRace.Config
+        local started
+
+        local function offer(sender)
+            eventbus:PublishEvent(NetEvents.GuildOffer,
+                    {1, nil, myFullHash + 1, myGlobalHash, myClassHash, time, myFTLHash, myPHHash}, sender)
+        end
+
+        before_each(function()
+            _G.SetIsInGuild(true)
+            started = {}
+            network.SendObject = function(_, event, _, _, target)
+                if event == NetEvents.StartSync then
+                    started[#started + 1] = target
+                end
+            end
+            sync:SendGuildSync()
+        end)
+
+        it("is taken when nobody offered in time", function()
+            AdvanceClock(Config.GuildSyncWait + 1)
+            AdvanceClock(Config.GuildSyncLateOffer)
+
+            offer("Late Dude")
+            offer("Later Dude")
+
+            assert.same({"Late Dude"}, started)
+        end)
+
+        it("is left alone while that player is sending us data", function()
+            AdvanceClock(Config.GuildSyncWait + 1)
+            sync:OnNetSyncPayload(WoWForeverRace.Serializer.SerializePlayerInfoBatch({
+                {name = "Racer", level = 5, classIndex = 11, dingedAt = time},
+            }), "Late Dude")
+
+            offer("Late Dude")
+
+            assert.same({}, started)
+        end)
+
+        it("is dropped when it comes much later, or when a partner was found in time", function()
+            AdvanceClock(Config.GuildSyncWait + 1)
+            AdvanceClock(Config.GuildSyncLateOffer + 1)
+            offer("Late Dude")
+            assert.same({}, started)
+
+            sync:SendGuildSync()
+            offer("Dude")
+            AdvanceClock(Config.GuildSyncWait + 1)
+            offer("Late Dude")
+            assert.same({"Dude"}, started)
+        end)
+    end)
+
+    describe("repairing a damaged transfer", function()
+        local Config = WoWForeverRace.Config
+        local repairs
+
+        -- the players whose client sends with a checksum, and so one packet at a time
+        local updated
+
+        before_each(function()
+            repairs = {}
+            updated = {Dude = true, Buddy = true, Stranger = true}
+            network.SendObject = function(_, event, payload, channel, target)
+                if event == NetEvents.StartSync then
+                    repairs[#repairs + 1] = {payload = payload, channel = channel, target = target}
+                end
+            end
+            network.IsVerified = function(_, name) return updated[name] == true end
+        end)
+
+        local function garbled(sender, distribution)
+            eventbus:PublishEvent(Events.MessageGarbled, sender, distribution or "WHISPER")
+        end
+
+        it("asks a player we trade with again after a whisper that didn't decode", function()
+            sync:NotePeer("Dude")
+
+            garbled("Dude")
+            AdvanceClock(Config.RepairDelay - 1)
+            assert.equals(0, #repairs)
+            AdvanceClock(1)
+
+            assert.same({{payload = {11, sync:MyBoardHashes(), myFTLHash}, channel = "WHISPER", target = "Dude"}},
+                    repairs)
+        end)
+
+        it("asks for the player history too when that player was to send it", function()
+            sync:NotePeer("Dude", true)
+
+            garbled("Dude")
+            AdvanceClock(Config.RepairDelay)
+
+            assert.same({11, sync:MyBoardHashes(), myFTLHash, myPHHash}, repairs[1].payload)
+        end)
+
+        it("asks a buddy, but not a stranger", function()
+            db.factionrealm.buddies = {Buddy = {lastSeen = time}}
+
+            garbled("Buddy")
+            garbled("Stranger")
+            AdvanceClock(Config.RepairDelay)
+
+            assert.equals(1, #repairs)
+            assert.equals("Buddy", repairs[1].target)
+        end)
+
+        it("leaves a player on an older version alone, whose answer would be damaged again", function()
+            sync:NotePeer("Old Client")
+
+            garbled("Old Client")
+            AdvanceClock(Config.RepairDelay)
+
+            assert.equals(0, #repairs)
+        end)
+
+        it("leaves a damaged message to the zone, guild, group or channel alone", function()
+            sync:NotePeer("Dude")
+
+            for _, distribution in ipairs({"YELL", "GUILD", "PARTY", "RAID", "CHANNEL"}) do
+                garbled("Dude", distribution)
+            end
+            AdvanceClock(Config.RepairDelay)
+
+            assert.equals(0, #repairs)
+        end)
+
+        it("waits until that player has stopped sending", function()
+            sync:NotePeer("Dude")
+            garbled("Dude")
+
+            AdvanceClock(Config.RepairDelay - 5)
+            sync:OnNetSyncPayload(WoWForeverRace.Serializer.SerializePlayerInfoBatch({
+                {name = "Racer", level = 5, classIndex = 11, dingedAt = time},
+            }), "Dude")
+            AdvanceClock(5)
+            assert.equals(0, #repairs)
+
+            AdvanceClock(Config.RepairQuiet - 6)
+            assert.equals(0, #repairs)
+            AdvanceClock(1)
+            assert.equals(1, #repairs)
+        end)
+
+        it("asks one player a few times per login at most", function()
+            sync:NotePeer("Dude")
+
+            for _ = 1, Config.RepairMaxPerPartner + 2 do
+                garbled("Dude")
+                garbled("Dude")
+                AdvanceClock(Config.RepairDelay)
+            end
+
+            assert.equals(Config.RepairMaxPerPartner, #repairs)
+        end)
+
+        it("asks nobody when sharing is turned off", function()
+            sync:NotePeer("Dude")
+            db.profile.options.networking = false
+
+            garbled("Dude")
+            AdvanceClock(Config.RepairDelay)
+
+            assert.equals(0, #repairs)
+        end)
+
+        it("asks again for a history pull that went quiet with chunks missing", function()
+            sync:OnNetPHSync("1000000000$03Alice:15100$#1/3$", "Dude")
+            sync:OnNetPHSync("1000000000$01Carol:20500$#3/3$", "Dude")
+
+            AdvanceClock(Config.PlayerHistoryQuiet)
+            AdvanceClock(Config.RepairDelay)
+
+            assert.equals(1, #repairs)
+            assert.equals("Dude", repairs[1].target)
+            assert.equals(myPHHash, repairs[1].payload[4])
+        end)
+
+        it("gives a history pull that is still coming in its time", function()
+            sync:OnNetPHSync("1000000000$03Alice:15100$#1/3$", "Dude")
+            AdvanceClock(Config.PlayerHistoryQuiet - 1)
+            sync:OnNetPHSync("1000000000$01Bob:100$#2/3$", "Dude")
+            AdvanceClock(Config.PlayerHistoryQuiet - 1)
+            sync:OnNetPHSync("1000000000$01Carol:20500$#3/3$", "Dude")
+
+            AdvanceClock(Config.PlayerHistoryQuiet)
+            AdvanceClock(Config.RepairDelay)
+
+            assert.equals(0, #repairs)
+        end)
+
+        it("leaves a complete or unnumbered history pull alone", function()
+            sync:OnNetPHSync("1000000000$03Alice:15100$#1/2$", "Dude")
+            sync:OnNetPHSync("1000000000$01Carol:20500$#2/2$", "Dude")
+            sync:OnNetPHSync("1000000000$01Bob:100$", "Old Client")
+
+            AdvanceClock(Config.PlayerHistoryQuiet)
+            AdvanceClock(Config.RepairDelay)
+
+            assert.equals(0, #repairs)
+        end)
+    end)
 end)
