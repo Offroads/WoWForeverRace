@@ -551,8 +551,11 @@ describe("Network", function()
             ctlStub = stub(CTL, "SendAddonMessage", function(_, _, _, text, distribution, target, _, callback, arg)
                 packets[#packets + 1] = {text = text, distribution = distribution, target = target}
                 local ok = taken(#packets)
-                -- like ChatThrottleLib: whether the client took it, and the client's answer
-                callback(arg, ok, ok and 0 or 8)
+                -- like ChatThrottleLib: whether the client took it, and the client's answer;
+                -- "silent" is a ChatThrottleLib that never calls back
+                if ok ~= "silent" then
+                    callback(arg, ok, ok and 0 or 8)
+                end
             end)
         end)
 
@@ -649,6 +652,31 @@ describe("Network", function()
             network:SendObject(NetworkEvents.DataAvailable, 5, "YELL")
             advance(retries)
             assert.equals(5 + 1 + 3, yells())
+        end)
+
+        it("goes on with the next packet when ChatThrottleLib never answers for one", function()
+            taken = function(n) return n == 1 and "silent" or true end
+
+            network:SendObject(NetworkEvents.SyncPayload, LONG, "WHISPER", "Dude")
+            network:SendObject(NetworkEvents.BuddyPing, {1}, "WHISPER", "Dude")
+            advance(20)
+            assert.equals(1, #packets)
+
+            _G.C_Timer.Advance(WoWForeverRace.Config.PacketTimeout)
+            advance(20)
+            assert.equals(4, #packets)
+        end)
+
+        it("goes on with the next message when handling an answer raised an error", function()
+            local onMessageSent = network.OnMessageSent
+            network.OnMessageSent = function() error("boom") end
+            assert.is_false(pcall(network.SendObject, network, NetworkEvents.BuddyPing, {1}, "WHISPER", "Dude"))
+            network.OnMessageSent = onMessageSent
+
+            network:SendObject(NetworkEvents.BuddyPing, {2}, "WHISPER", "Dude")
+            advance(2)
+
+            assert.equals(2, #packets)
         end)
 
         it("logs the client's answer for a refused packet", function()

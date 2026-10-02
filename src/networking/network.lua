@@ -500,16 +500,42 @@ function WoWForeverRaceNetwork:PumpPackets()
 
     self.pumpBusy = true
     local _self = self
+    -- the answer for this packet counts once, whichever comes first: the callback or the timeout
+    local pending = true
+    local function answered(didSend, result)
+        if not pending then return end
+        pending = false
+        _self:OnPacketSent(message, didSend, result)
+    end
+
+    -- Only the answer makes the queue move on. Should ChatThrottleLib never give one (it
+    -- raised an error, or another addon brought a version without the callback), the
+    -- packet counts as handed over after a while instead of holding up every message
+    -- behind it for the rest of the session.
+    C_Timer.After(WoWForeverRace.Config.PacketTimeout, function()
+        if pending then
+            WoWForeverRace:DebugPrint("Send: no answer for a packet, going on with the next")
+        end
+        answered(nil)
+    end)
+
     -- ChatThrottleLib calls back when the packet went to the client, right away or after
     -- its own queue, with whether the client took it
     _G.ChatThrottleLib:SendAddonMessage(message.prio, WoWForeverRace.Config.Network.Prefix,
             message.packets[message.sent + 1], message.channel, message.target, nil,
             function(_, didSend, result)
-                _self:OnPacketSent(message, didSend, result)
+                answered(didSend, result)
             end)
 end
 
 function WoWForeverRaceNetwork:OnPacketSent(message, didSend, result)
+    -- the next packet first: an error below must not leave the queue busy for good
+    local _self = self
+    C_Timer.After(WoWForeverRace.Config.PacketInterval, function()
+        _self.pumpBusy = false
+        _self:PumpPackets()
+    end)
+
     message.sent = message.sent + 1
     local refused = didSend == false
     -- the rest of a message with a hole in it is of no use to anybody
@@ -517,10 +543,4 @@ function WoWForeverRaceNetwork:OnPacketSent(message, didSend, result)
         table.remove(self.sendQueue, 1)
         message.onDone(refused, refused and result or nil)
     end
-
-    local _self = self
-    C_Timer.After(WoWForeverRace.Config.PacketInterval, function()
-        _self.pumpBusy = false
-        _self:PumpPackets()
-    end)
 end

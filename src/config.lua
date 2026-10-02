@@ -229,6 +229,7 @@ local WoWForeverRaceConfig = {
     -- one when a player sent a lot in a short time. A long message travels as several
     -- packets, and with one of them missing it arrives as garbage or not at all.
     PacketInterval = 0.25,     -- seconds between two chat packets we hand to the client, see Network:Transmit
+    PacketTimeout = 30,        -- a packet ChatThrottleLib gave no answer for counts as handed over after this
     SendRetryDelay = 5,        -- a message with a packet the client refused is sent again after this
     SendRetryMax = 2,          -- and at most this often
     SendRefusalLimit = 3,      -- refusals in a row on one distribution before nothing is sent again there
