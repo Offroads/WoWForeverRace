@@ -289,7 +289,7 @@ function WoWForeverRaceDebugFrame:Render()
 end
 
 -- The realm channel: whether we are in it, and whether it carries traffic (while it
--- does, the yell, guild, group and buddy sync stay quiet).
+-- does, the guild, group and buddy sync stay quiet).
 function WoWForeverRaceDebugFrame:RenderChannel()
     local channel = WoWForeverRace.Channel
     if type(channel) ~= "table" or channel.Status == nil or channel.status == nil then return end
