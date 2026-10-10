@@ -149,6 +149,36 @@ describe("Sync", function()
         assert.is_false(sync.isReady)
     end)
 
+    it("runs the login sync when sharing is turned on after login", function()
+        db.profile.options.networking = false
+        sync:InitSync()
+        assert.is_false(sync.isReady)
+
+        -- turned off again: still nothing
+        sync:OnNetworkingChanged()
+        assert.is_false(sync.isReady)
+
+        db.profile.options.networking = true
+        sync:OnNetworkingChanged()
+        assert.is_true(sync.isReady)
+    end)
+
+    it("runs the login sync when a reset or the launch purge cleared a finished race", function()
+        db.factionrealm.finished = true
+        sync:InitSync()
+        assert.is_false(sync.isReady)
+
+        db.factionrealm.finished = false
+        eventbus:PublishEvent(Events.DataReset)
+        assert.is_true(sync.isReady)
+    end)
+
+    it("does not run the login sync from a reset before the network asked for the first one", function()
+        eventbus:PublishEvent(Events.DataReset)
+        sync:OnNetworkingChanged()
+        assert.is_false(sync.isReady)
+    end)
+
     describe("guild sync", function()
         it("won't offer when the announcer's hashes match ours", function()
             local networkSpy = spy.on(network, "SendObject")

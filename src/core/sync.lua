@@ -146,6 +146,7 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network, Channel)
     self.classIndex = self.Core:MyClass()
 
     self.isReady = false  -- the login sync ran (InitSync): only then do we answer and start sync rounds
+    self.loginSyncRequested = false  -- InitSync was called at least once (NETWORK_READY), see RerunLoginSync
     self.lastSync = nil
     self.guildOffers = nil  -- non-nil only during active guild sync window
     self.guildPHWanted = false  -- whether the open guild window should also pull player history
@@ -173,6 +174,7 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network, Channel)
     EventBus:RegisterCallback(self.Config.Events.ChannelJoined, self, self.OnChannelJoined)
     EventBus:RegisterCallback(self.Config.Events.ChannelHeard, self, self.OnChannelHeard)
     EventBus:RegisterCallback(self.Config.Events.MessageGarbled, self, self.OnMessageGarbled)
+    EventBus:RegisterCallback(self.Config.Events.DataReset, self, self.OnDataReset)
 
     return self
 end
@@ -285,6 +287,7 @@ function WoWForeverRaceSync:ChannelLive()
 end
 
 function WoWForeverRaceSync:InitSync()
+    self.loginSyncRequested = true
     -- don't request updates when we know the race has finished
     if self.DB.factionrealm.finished then
         WoWForeverRace:DebugPrint("Login sync: skipped, the race is finished")
@@ -319,6 +322,23 @@ function WoWForeverRaceSync:SelectPartnerFromList(offers)
     -- select random offer
     local index = math.random(1, #offers)
     return table.remove(offers, index)
+end
+
+-- Sharing was turned on or off in the options.
+function WoWForeverRaceSync:OnNetworkingChanged()
+    self:RerunLoginSync()
+end
+
+-- The race data was reset or purged, which also clears `finished`.
+function WoWForeverRaceSync:OnDataReset()
+    self:RerunLoginSync()
+end
+
+-- A login sync that was skipped (sharing off, race finished) runs once the client is
+-- eligible after all; never before NETWORK_READY asked for the first one.
+function WoWForeverRaceSync:RerunLoginSync()
+    if self.isReady or not self.loginSyncRequested then return end
+    self:InitSync()
 end
 
 -- The login sync ran: from now on we answer the sync rounds of others and start our own.

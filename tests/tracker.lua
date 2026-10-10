@@ -1103,8 +1103,11 @@ describe("Tracker", function()
 
             it("drops only the race data from before the launch", function()
                 db.factionrealm.finished = true
+                local resets = 0
+                eventbus:RegisterCallback(Events.DataReset, {}, function() resets = resets + 1 end)
                 core.Config = launched
                 tracker:PurgePreLaunchData()
+                assert.equals(1, resets)
 
                 local players = db.factionrealm.leaderboard[0].players
                 assert.equals(2, #players)

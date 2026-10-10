@@ -152,6 +152,7 @@ function WoWForeverRaceTracker:PurgePreLaunchData()
         WoWForeverRace:DebugPrint("Dropped race data from before the realm launch")
         -- a race finished on the beta says nothing about the released one
         db.finished = false
+        self.EventBus:PublishEvent(self.Config.Events.DataReset)
         self.EventBus:PublishEvent(self.Config.Events.RefreshGUI)
     end
 end
