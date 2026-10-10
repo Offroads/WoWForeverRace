@@ -434,8 +434,7 @@ end
 -- The client took a message, or refused a packet of it. A refused message is sent again,
 -- unless the client keeps refusing everything on that distribution: after
 -- Config.SendRefusalLimit refusals in a row there, nothing is sent a second time until a
--- message gets through again. (That is how the beta client turned out to refuse every
--- addon message to YELL, result 4 InvalidChatType; the addon sends none there anymore.)
+-- message gets through again.
 function WoWForeverRaceNetwork:OnMessageSent(refused, result, event, object, channel, target, prio, attempt)
     self.refusals = self.refusals or {}
     if not refused then

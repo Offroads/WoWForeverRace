@@ -306,10 +306,7 @@ function WoWForeverRaceSync:InitSync()
     -- withPlayerHistory: we just logged in, so this is the once-per-login history pull
     self:SendGuildSync(true)
 
-    -- That is the whole login sync. There used to be a zone sync first (REQSYNC to YELL,
-    -- then a trade with one of the players who offered), but the client refuses every
-    -- addon message to YELL, so it reached nobody; the realm channel does that job for
-    -- the whole realm once it is joined (OnChannelJoined). Nothing is waited for here
+    -- ready right away: nothing above needs an answer first
     self:SetReady()
 end
 
@@ -371,9 +368,8 @@ function WoWForeverRaceSync:DifferingBoards(peerHashes)
 end
 
 -- STARTSYNC {classIndex, perBoardHashes, ftlHash, phHash, toGroup}: a guild sync partner,
--- a repair, or a group pinger picking us to answer its ping. Older clients also had a zone
--- form of it (the hashes of the overall and the own class board, no table), sent to a
--- player who offered after their REQSYNC yell; nobody offers anymore, so it is ignored.
+-- a repair, or a group pinger picking us to answer its ping. A payload without the
+-- per-board hash table (older clients) is ignored.
 function WoWForeverRaceSync:OnNetStartSync(payload, sender)
     if not self.DB.profile.options.networking then return end
     if type(payload) ~= "table" or type(payload[2]) ~= "table" then return end

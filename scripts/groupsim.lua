@@ -20,8 +20,7 @@
 -- grouped and in no guild, so only the realm channel connects them. On a checkout with
 -- the realm channel every client is in it (joined a while ago) in every scenario, unless
 -- nochannel is given. Nothing sent to YELL reaches anybody, like on the real client,
--- which refuses addon messages there (older checkouts still send a zone sync and a
--- discovery beacon that way). Message sizes are the serialized envelope times the
+-- which refuses addon messages there. Message sizes are the serialized envelope times the
 -- compression ratio measured on real beta leaderboards (not a real Huffman run per
 -- message, see scripts/netsize.lua for that), each client sends its queue in order, and
 -- the server's own addon message limit is not modelled. Older checkouts without the
@@ -54,7 +53,7 @@ local CTL_CPS, CTL_BURST, CTL_OVERHEAD = 800, 4000, #Config.Network.Prefix + 40
 
 local aceDBKey = AceDB:New({}, WoWForeverRace.DefaultDB, true).keys.factionrealm
 local HAS_GROUP_TICKER = WoWForeverRace.Sync.InitGroupTicker ~= nil
--- older checkouts yell a discovery beacon into the zone, which the client refuses
+-- only some checkouts have a discovery ticker
 local HAS_DISCOVERY_TICKER = WoWForeverRace.Tracker.InitDiscoveryTicker ~= nil
 -- older checkouts have no realm channel
 local USE_CHANNEL = WoWForeverRace.Channel ~= nil and arg[4] ~= "nochannel"
@@ -153,8 +152,7 @@ local function deliver(msg)
             elseif msg.channel == "GUILD" then
                 wanted = world.guild
             elseif msg.channel == "YELL" then
-                -- the client refuses addon messages to YELL: an older checkout's zone
-                -- sync and discovery beacon reach nobody
+                -- the client refuses addon messages to YELL, nobody hears them
                 wanted = false
             elseif msg.channel == "CHANNEL" then
                 -- the realm channel reaches every client that is in it, wherever it is

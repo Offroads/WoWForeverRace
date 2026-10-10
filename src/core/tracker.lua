@@ -421,10 +421,9 @@ function WoWForeverRaceTracker:RaceFinished()
     end
 end
 
--- payload = {batchstr, false, 0}: a ding push. The second and third element are from the
--- discovery answers older clients yelled ({batchstr, true, boardIndex, batchHash}), kept so
--- that they read a push as before. Merging only needs the batch, the board of each player
--- is implied by its own classIndex and raceIndex.
+-- payload = {batchstr, false, 0}: the second and third element (a discovery flag and a
+-- board index) are read by older clients and stay for them. Merging only needs the batch,
+-- the board of each player is implied by its own classIndex and raceIndex.
 function WoWForeverRaceTracker:OnNetPlayerInfoBatch(payload, _, distribution)
     if not self.DB.profile.options.networking then return end
     if type(payload) ~= "table" then return end
@@ -485,8 +484,7 @@ function WoWForeverRaceTracker:ScheduleDingPush(changedPlayers, toGroup)
         if live then return end
     end
 
-    -- to the group right away: a member would otherwise only hear of it on the next
-    -- group sync (there is no zone push: the client refuses addon messages to YELL)
+    -- to the group right away: a member would otherwise only hear of it on the next group sync
     if toGroup and GetNumGroupMembers() > 0 then
         local batchstr = WoWForeverRace.Serializer.SerializePlayerInfoBatch(changedPlayers)
         self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, {batchstr, false, 0}, "GROUP")

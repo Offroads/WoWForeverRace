@@ -268,7 +268,6 @@ describe("Sync end to end with real data", function()
         b.db.factionrealm.buddies[a.name] = {lastSeen = now}
 
         b.sync:InitSync()
-        -- nothing in the zone can answer (the client refuses addon messages to YELL), so
         -- nothing is waited for: the buddy ping goes out right away
         assert.is_true(b.sync.isReady)
         pump()
@@ -511,7 +510,7 @@ describe("Sync end to end with real data", function()
             {name = "Guild Tester", level = 21, classIndex = 4, raceIndex = 8},
         })
         pump()
-        -- nothing right away: there is no zone push, the client refuses addon messages to YELL
+        -- nothing right away: the push is batched (DingPushDelay)
         assert.is_nil(countEvents()[NetEvents.PlayerInfoBatch])
 
         advance(Config.DingPushDelay)

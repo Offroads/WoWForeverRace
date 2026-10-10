@@ -249,7 +249,7 @@ describe("Tracker", function()
             local networkSpy = spy.on(network, "SendObject")
 
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
-            -- nothing right away: there is no zone push, the client refuses addon messages to YELL
+            -- nothing right away: the push is batched (DingPushDelay)
             assert.spy(networkSpy).was_not_called()
 
             -- guild push is batched behind DingPushDelay

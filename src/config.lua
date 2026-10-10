@@ -250,10 +250,8 @@ local WoWForeverRaceConfig = {
             ChannelOffer = "CHOFFR",
             ChannelMove = "CHMOVE",
             Reset = "RESET",
-            -- Received only, never sent: the zone login sync (REQSYNC, answered by OFFERSYNC)
-            -- and the discovery beacon (DATAAVAIL, answered by DATAREQ) of older clients go
-            -- to YELL, which the client refuses. Nothing listens to them anymore, they are
-            -- listed so that one from an older client is dropped quietly, not as unknown
+            -- Sent by older clients only, nothing listens to them: listed so that such a
+            -- message is dropped quietly, not as an unknown event
             RequestSync = "REQSYNC",
             OfferSync = "OFFERSYNC",
             DataAvailable = "DATAAVAIL",
