@@ -21,6 +21,8 @@ local HELP = {
     "/wfr resetall       reset the leaderboards, pioneers and history of EVERY player of your faction (beta only,"
             .. " other clients only accept it from the characters in Config.ResetAuthors)",
     "/wfr probe          dump what the client API returns into a copyable window (do a /who first)",
+    "/wfr chprobe        send an addon message on every distribution (say, yell, party, guild, our channel, ...)"
+            .. " and report which ones the client takes and which echo back",
 }
 
 --[[
@@ -85,6 +87,10 @@ function WoWForeverRace:slashwfr(input)
     --[[API PROBE]]--
     elseif action == "probe" then
         self:ShowApiProbe()
+
+    --[[DISTRIBUTION PROBE]]--
+    elseif action == "chprobe" then
+        self:ShowChannelProbe()
 
     --[[WHOAMI]]--
     elseif action == "whoami" then
@@ -476,4 +482,230 @@ function WoWForeverRace:RunApiProbe()
     self.probeLines = self:BuildApiProbe()
     self:SendApiProbeEcho()
     self:RenderApiProbe()
+end
+
+--[[
+Distribution probe: sends one addon message on every chat distribution the client knows
+(SAY, YELL, PARTY, RAID, GUILD, OFFICER, WHISPER to self in both name forms, CHANNEL
+for our realm channel and for every other channel we are in) and reports, per
+distribution, what SendAddonMessage answered, whether the message came back through
+CHAT_MSG_ADDON (the sender hears its own message on a distribution that carries it), and
+any channel notice or system message the server sent meanwhile (a channel that refuses
+addon messages answers "success" and sends a NOT_ALLOWED_IN_CHANNEL notice instead).
+--]]
+local CHPROBE_PREFIX = "WFRChProbe"
+local CHPROBE_SPACING = 0.5   -- seconds between sends: packets handed over in one frame get lost
+local CHPROBE_WAIT = 20       -- seconds to wait for echoes after the last send (channel echoes come late)
+
+-- Enum.SendAddonMessageResult value -> "value (Name)", for a readable client answer
+local function resultName(result)
+    local enum = _G.Enum and _G.Enum.SendAddonMessageResult
+    if type(enum) == "table" then
+        for name, value in pairs(enum) do
+            if value == result then
+                return tostring(result) .. " (" .. name .. ")"
+            end
+        end
+    end
+    return tostring(result)
+end
+
+-- The distributions to try, in the order they are sent: {distribution, target, label}.
+-- The channel numbers are read now, the probe starts right after.
+function WoWForeverRace:ChannelProbeSends()
+    -- UnitName("player") returns only the first name on this client, the addon's own
+    -- forms ("First Surname", "First Surname-Realm") are what it whispers buddies with
+    local sends = {
+        { "SAY" }, { "YELL" }, { "PARTY" }, { "RAID" }, { "GUILD" }, { "OFFICER" },
+        { "WHISPER", self.Core:RealMe(), "self" },
+        { "WHISPER", self.Core:FullRealMe(), "self with realm" },
+    }
+
+    local race = self.Channel:Number()
+    if race then
+        sends[#sends + 1] = { "CHANNEL", race, self.Channel:Name() }
+    else
+        sends[#sends + 1] = { "CHANNEL", nil, self.Channel:Name() .. " (not joined)" }
+    end
+
+    -- every other channel we are in: GetChannelList() returns id, name, disabled per channel
+    local list = { _G.GetChannelList() }
+    for i = 1, #list, 3 do
+        local id, channelName = list[i], list[i + 1]
+        if type(id) == "number" and id ~= race then
+            sends[#sends + 1] = { "CHANNEL", id, tostring(channelName) }
+        end
+    end
+    return sends
+end
+
+function WoWForeverRace:RunChannelProbe()
+    local chatInfo = _G.C_ChatInfo
+    local probe = { sends = {}, notices = {}, done = false }
+    self.chprobe = probe
+
+    if chatInfo.InChatMessagingLockdown and chatInfo.InChatMessagingLockdown() then
+        probe.error = "skipped, chat messaging lockdown"
+        probe.done = true
+        self:RenderChannelProbe()
+        return
+    end
+
+    if not self.chprobeEventFrame then
+        local _self = self
+        chatInfo.RegisterAddonMessagePrefix(CHPROBE_PREFIX)
+        local frame = CreateFrame("Frame")
+        frame:RegisterEvent("CHAT_MSG_ADDON")
+        frame:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
+        frame:RegisterEvent("CHAT_MSG_SYSTEM")
+        frame:RegisterEvent("UI_ERROR_MESSAGE")
+        frame:SetScript("OnEvent", function(_, event, ...)
+            local current = _self.chprobe
+            -- echoes keep being recorded after the wait, marked as late
+            if not current or current.error then return end
+            if event == "CHAT_MSG_ADDON" then
+                local prefix, text, distribution, sender = ...
+                if prefix ~= CHPROBE_PREFIX then return end
+                local index = tonumber(string.match(tostring(text), "^(%d+):"))
+                local send = index and current.sends[index]
+                if send and send.sentAt then
+                    send.echoes[#send.echoes + 1] = "heard on " .. tostring(distribution)
+                            .. " from " .. tostring(sender)
+                            .. string.format(" at +%.1fs", _G.GetTime() - send.sentAt)
+                            .. (current.done and " (LATE, after the wait)" or "")
+                else
+                    current.notices[#current.notices + 1] = "stray echo: " .. serializeResults(true, prefix, ...)
+                end
+            else
+                current.notices[#current.notices + 1] = event .. ": " .. serializeResults(true, ...)
+            end
+            _self:RenderChannelProbe()
+        end)
+        self.chprobeEventFrame = frame
+    end
+
+    local sends = self:ChannelProbeSends()
+    local _self = self
+    for i, send in ipairs(sends) do
+        local entry = { distribution = send[1], target = send[2], label = send[3], echoes = {} }
+        probe.sends[i] = entry
+        _G.C_Timer.After((i - 1) * CHPROBE_SPACING, function()
+            if _self.chprobe ~= probe then return end
+            local text = i .. ":" .. send[1] .. ":" .. tostring(send[3] or send[2] or "")
+            entry.sentAt = _G.GetTime()
+            if send[1] == "CHANNEL" and send[2] == nil then
+                entry.result = "not sent, no channel number"
+            else
+                entry.result = serializeResults(pcall(chatInfo.SendAddonMessage, CHPROBE_PREFIX, text,
+                        send[1], send[2]))
+                local result = tonumber(entry.result)
+                if result then
+                    entry.result = resultName(result)
+                end
+            end
+            _self:RenderChannelProbe()
+        end)
+    end
+
+    _G.C_Timer.After(#sends * CHPROBE_SPACING + CHPROBE_WAIT, function()
+        if _self.chprobe ~= probe then return end
+        probe.done = true
+        _self:RenderChannelProbe()
+    end)
+end
+
+function WoWForeverRace:BuildChannelProbe()
+    local probe = self.chprobe
+    local lines = {}
+    local function add(line) lines[#lines + 1] = line end
+
+    add("== Addon message distributions (" .. (probe.done and "finished, still listening for late echoes"
+            or "running...") .. ")")
+    add("prefix " .. CHPROBE_PREFIX .. ", me " .. tostring(self.Core:FullRealMe())
+            .. ", in group " .. tostring(_G.IsInGroup()) .. ", in raid " .. tostring(_G.IsInRaid())
+            .. ", in guild " .. tostring(_G.IsInGuild())
+            .. ", realm channel " .. self.Channel:Name() .. " number " .. tostring(self.Channel:Number()))
+    if probe.error then
+        add(probe.error)
+    end
+    add("")
+    add(string.format("%-28s %-30s %s", "distribution", "client answer", "echo"))
+    for _, send in ipairs(probe.sends) do
+        local what = send.distribution
+        if send.target ~= nil then
+            what = what .. " " .. tostring(send.target)
+        end
+        if send.label then
+            what = what .. " [" .. send.label .. "]"
+        end
+        local echo
+        if #send.echoes > 0 then
+            echo = table.concat(send.echoes, "; ")
+        elseif send.sentAt == nil then
+            echo = "-"
+        elseif probe.done then
+            echo = "NO ECHO within " .. CHPROBE_WAIT .. "s"
+        else
+            echo = "waiting"
+        end
+        add(string.format("%-28s %-30s %s", what, tostring(send.result or "not sent yet"), echo))
+    end
+    add("")
+    add("== Notices and system messages while the probe ran")
+    if #probe.notices == 0 then
+        add("(none)")
+    end
+    for _, notice in ipairs(probe.notices) do
+        add(notice)
+    end
+    add("")
+    add("A distribution carries addon messages when the client answered 0 (Success) AND the message echoed back.")
+    add("Success without an echo (often with a NOT_ALLOWED_IN_CHANNEL notice) means the server dropped it.")
+    add("PARTY / RAID / GUILD / OFFICER only mean something while you are in one.")
+    return lines
+end
+
+function WoWForeverRace:RenderChannelProbe()
+    if not self.chprobeBox or not self.chprobe then return end
+    self.chprobeBox:SetText(table.concat(self:BuildChannelProbe(), "\n"))
+end
+
+-- click into the box, Ctrl+A / Ctrl+C to copy
+function WoWForeverRace:ShowChannelProbe()
+    local AceGUI = LibStub("AceGUI-3.0")
+
+    if self.chprobeFrame then
+        self.chprobeFrame:Hide()
+        self.chprobeFrame:Release()
+    end
+
+    local _self = self
+
+    local frame = AceGUI:Create("Window")
+    frame:SetTitle(self.Config.Name .. " Distribution Probe")
+    frame:SetWidth(900)
+    frame:SetHeight(520)
+    frame:SetLayout("Flow")
+    frame:SetCallback("OnClose", function(widget)
+        widget:Release()
+        _self.chprobeFrame = nil
+        _self.chprobeBox = nil
+    end)
+    self.chprobeFrame = frame
+
+    local rerunBtn = AceGUI:Create("Button")
+    rerunBtn:SetText("Run again")
+    rerunBtn:SetWidth(150)
+    rerunBtn:SetCallback("OnClick", function() _self:RunChannelProbe() end)
+    frame:AddChild(rerunBtn)
+
+    local box = AceGUI:Create("MultiLineEditBox")
+    box:SetLabel("")
+    box:DisableButton(true)
+    box:SetFullWidth(true)
+    box:SetFullHeight(true)
+    frame:AddChild(box)
+    self.chprobeBox = box
+
+    self:RunChannelProbe()
 end
