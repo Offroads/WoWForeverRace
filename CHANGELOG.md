@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- The zone sync at login, the beacon that announced your leaderboards to the
+  zone every minute and the shout of every new level to the zone are gone: the
+  game client refuses addon messages to the zone (a yell), so none of them ever
+  reached anybody. Logging in no longer waits 5 seconds for zone answers that
+  could never come; the guild sync, the realm channel and the players your addon
+  traded with before carry the data as before.
+
+### Fixed
+- Turning sharing on after logging in with it off now starts the sync right
+  away. Before, the addon stayed quiet until the next login.
+
 ## v0.1.0-beta14 - 2026-10-02
 
 ### Added

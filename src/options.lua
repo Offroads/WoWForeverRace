@@ -121,6 +121,7 @@ function WoWForeverRace:RegisterOptions()
                         set = function(_, val)
                             _self.DB.profile.options.networking = val
                             _self.Channel:OnNetworkingChanged()
+                            _self.Sync:OnNetworkingChanged()
                         end,
                         get = function() return _self.DB.profile.options.networking end,
                     },

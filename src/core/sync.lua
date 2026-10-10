@@ -145,9 +145,8 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network, Channel)
 
     self.classIndex = self.Core:MyClass()
 
-    self.isReady = false
-    self.offers = {}
-    self.syncPartner = nil
+    self.isReady = false  -- the login sync ran (InitSync): only then do we answer and start sync rounds
+    self.loginSyncRequested = false  -- InitSync was called at least once (NETWORK_READY), see RerunLoginSync
     self.lastSync = nil
     self.guildOffers = nil  -- non-nil only during active guild sync window
     self.guildPHWanted = false  -- whether the open guild window should also pull player history
@@ -162,8 +161,6 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network, Channel)
     self.historyPulls = {}  -- [name] = the numbered history transfer under way, see OnNetPHSync
     self.repairs = {}  -- [name] = {count, pending, history}, see ScheduleRepair
 
-    EventBus:RegisterCallback(self.Config.Network.Events.RequestSync, self, self.OnNetRequestSync)
-    EventBus:RegisterCallback(self.Config.Network.Events.OfferSync, self, self.OnNetOfferSync)
     EventBus:RegisterCallback(self.Config.Network.Events.StartSync, self, self.OnNetStartSync)
     EventBus:RegisterCallback(self.Config.Network.Events.SyncPayload, self, self.OnNetSyncPayload)
     EventBus:RegisterCallback(self.Config.Network.Events.GuildSync, self, self.OnNetGuildSync)
@@ -177,6 +174,7 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network, Channel)
     EventBus:RegisterCallback(self.Config.Events.ChannelJoined, self, self.OnChannelJoined)
     EventBus:RegisterCallback(self.Config.Events.ChannelHeard, self, self.OnChannelHeard)
     EventBus:RegisterCallback(self.Config.Events.MessageGarbled, self, self.OnMessageGarbled)
+    EventBus:RegisterCallback(self.Config.Events.DataReset, self, self.OnDataReset)
 
     return self
 end
@@ -256,7 +254,7 @@ function WoWForeverRaceSync:Repair(name)
             "WHISPER", name)
 end
 
--- Every sender of OFFERSYNC, BPING and BPONG and every player heard on the realm channel
+-- Every sender of BPING, BPONG and CHOFFR and every player heard on the realm channel
 -- becomes a buddy, so on a busy realm the list grows into thousands of entries and most
 -- random pings would go to players who stopped playing. Runs once per login / reload,
 -- BuddyPruneDelay after the login sync is done (SetReady); there is no cap on the count.
@@ -289,131 +287,35 @@ function WoWForeverRaceSync:ChannelLive()
 end
 
 function WoWForeverRaceSync:InitSync()
+    self.loginSyncRequested = true
     -- don't request updates when we know the race has finished
     if self.DB.factionrealm.finished then
+        WoWForeverRace:DebugPrint("Login sync: skipped, the race is finished")
         return
     end
     -- don't request updates when we've disabled networking
     if not self.DB.profile.options.networking then
+        WoWForeverRace:DebugPrint("Login sync: skipped, sharing is off")
         return
     end
 
     -- Logged in (or reloaded) inside a chat messaging lockdown: nobody can answer
     -- yet, so run the once-per-login sync when the lockdown has ended.
     if self.Network.IsLockedDown and self.Network:IsLockedDown() then
+        WoWForeverRace:DebugPrint("Login sync: chat lockdown, trying again in " .. self.Config.RetrySyncWait .. "s")
         local _self = self
         C_Timer.After(self.Config.RetrySyncWait, function() _self:InitSync() end)
         return
     end
 
-    -- include our leaderboard, FTL and history hashes so partners can skip offering when already in sync
-    local globalHash = WoWForeverRace.Leaderboard.ComputeHash(self.DB.factionrealm.leaderboard[0])
-    local classHash = WoWForeverRace.Leaderboard.ComputeHash(
-            self.DB.factionrealm.leaderboard[self.classIndex] or {players = {}})
-    local ftlHash = computeFTLHash(self.DB, self.Config)
-    local phHash = computePHHash(self.DB, self.Config, self.Core:MyFaction())
-    local payload = {self.classIndex, globalHash, classHash, ftlHash, phHash}
-
-    self.Network:SendObject(self.Config.Network.Events.RequestSync, payload, "YELL")
-
-    -- after 5s we attempt to sync with somebody who offered via YELL
-    local _self = self
-    C_Timer.After(self.Config.RequestSyncWait, function() _self:DoSync() end)
-
-    -- guild sync: announce to GUILD and pick the longest-uptime partner after GuildSyncWait+1s
+    WoWForeverRace:DebugPrint("Login sync: " .. (IsInGuild() and "guild sync" or "not in a guild, no guild sync")
+            .. ", ready at once")
+    -- guild sync: announce to GUILD and pick a random partner among the offers after GuildSyncWait+1s
     -- withPlayerHistory: we just logged in, so this is the once-per-login history pull
     self:SendGuildSync(true)
-end
 
-function WoWForeverRaceSync:OnNetRequestSync(payload, sender)
-    -- don't respond to requests when we've disabled networking
-    if not self.DB.profile.options.networking then
-        return
-    end
-
-    WoWForeverRace:DebugPrint("OnNetRequestSync(" .. sender .. ") isReady=" .. tostring(self.isReady))
-    -- if we're still in the process of syncing up ourselves then we shouldn't offer ourselves to sync with
-    if not self.isReady then
-        return
-    end
-
-    -- extract requester's classIndex and hashes (payload is a table in new clients, plain number in old)
-    local requesterClassIndex, requesterGlobalHash, requesterClassHash, requesterFTLHash, requesterPHHash
-    if type(payload) == "table" then
-        requesterClassIndex, requesterGlobalHash, requesterClassHash, requesterFTLHash, requesterPHHash =
-                payload[1], payload[2], payload[3], payload[4], payload[5]
-    else
-        requesterClassIndex = payload
-    end
-
-    -- compute our hashes to include in offer and to decide whether to offer at all
-    local myGlobalHash = WoWForeverRace.Leaderboard.ComputeHash(self.DB.factionrealm.leaderboard[0])
-    local myClassHash = WoWForeverRace.Leaderboard.ComputeHash(
-            self.DB.factionrealm.leaderboard[self.classIndex] or {players = {}})
-    local myFTLHash = computeFTLHash(self.DB, self.Config)
-    local myPHHash = computePHHash(self.DB, self.Config, self.Core:MyFaction())
-
-    -- skip offering if the requester already has identical data to us
-    if requesterGlobalHash ~= nil and requesterGlobalHash == myGlobalHash
-            and (requesterFTLHash == nil or requesterFTLHash == myFTLHash)
-            and (requesterPHHash == nil or requesterPHHash == myPHHash) then
-        local classSyncNeeded = requesterClassIndex == self.classIndex
-                and requesterClassHash ~= nil
-                and requesterClassHash ~= myClassHash
-        if not classSyncNeeded then
-            WoWForeverRace:DebugPrint("Skipping offer to " .. sender .. " (already in sync)")
-            return
-        end
-    end
-
-    self.Network:SendObject(self.Config.Network.Events.OfferSync,
-            { self.classIndex, self.lastSync, myGlobalHash, myClassHash, myFTLHash, myPHHash }, "WHISPER", sender)
-end
-
-function WoWForeverRaceSync:OnNetOfferSync(offer, sender)
-    local classIndex, lastSync, globalHash, classHash, ftlHash, phHash =
-            offer[1], offer[2], offer[3], offer[4], offer[5], offer[6]
-    WoWForeverRace:DebugPrint("OnNetOfferSync(" .. sender .. ")")
-    -- add anyone who offers to sync with us
-    table.insert(self.offers, {name = sender, classIndex = classIndex, lastSync = lastSync,
-                               globalHash = globalHash, classHash = classHash, ftlHash = ftlHash,
-                               phHash = phHash})
-    self:AddBuddy(sender)
-end
-
-function WoWForeverRaceSync:SelectPartner()
-    -- we prefer to sync with same class without violating their throttle
-    -- otherwise same class, but violate their throttle
-    -- otherwise any class without violating their throttle
-    -- otherwise any class, but voilate their throttle
-    local now = self.Core:Now()
-    local classIndex = self.classIndex
-    local OfferSyncThrottle = self.Config.OfferSyncThrottle
-
-    local offerModes = {"SAME_CLASS_THROTTLED", "SAME_CLASS", "THROTTLED", "ALL"}
-    for _, offerMode in ipairs(offerModes) do
-        local offers
-        if offerMode == "SAME_CLASS_THROTTLED" then
-            offers = WoWForeverRace.list.filter(self.offers, function(offer)
-                return offer.classIndex == classIndex and
-                        (offer.lastSync == nil or offer.lastSync < now - OfferSyncThrottle)
-            end)
-        elseif offerMode == "SAME_CLASS" then
-            offers = WoWForeverRace.list.filter(self.offers, function(offer)
-                return offer.classIndex == classIndex
-            end)
-        elseif offerMode == "THROTTLED" then
-            offers = WoWForeverRace.list.filter(self.offers, function(offer)
-                return offer.lastSync == nil or offer.lastSync < now - OfferSyncThrottle
-            end)
-        else
-            offers = self.offers
-        end
-
-        if #offers > 0 then
-            return self:SelectPartnerFromList(offers)
-        end
-    end
+    -- ready right away: nothing above needs an answer first
+    self:SetReady()
 end
 
 function WoWForeverRaceSync:SelectPartnerFromList(offers)
@@ -422,10 +324,30 @@ function WoWForeverRaceSync:SelectPartnerFromList(offers)
     return table.remove(offers, index)
 end
 
+-- Sharing was turned on or off in the options.
+function WoWForeverRaceSync:OnNetworkingChanged()
+    self:RerunLoginSync()
+end
+
+-- The race data was reset or purged, which also clears `finished`.
+function WoWForeverRaceSync:OnDataReset()
+    self:RerunLoginSync()
+end
+
+-- A login sync that was skipped (sharing off, race finished) runs once the client is
+-- eligible after all; never before NETWORK_READY asked for the first one.
+function WoWForeverRaceSync:RerunLoginSync()
+    if self.isReady or not self.loginSyncRequested then return end
+    self:InitSync()
+end
+
+-- The login sync ran: from now on we answer the sync rounds of others and start our own.
 function WoWForeverRaceSync:SetReady()
     if not self.isReady then
         self.isReady = true
         WoWForeverRace:DebugPrint("Sync done", true)
+        WoWForeverRace:DebugPrint("Ready: buddy pings now, stale buddies pruned in " .. self.Config.BuddyPruneDelay
+                .. "s, group sync scheduled")
         self:SendBuddyPings()
         -- After BuddyMaxAge offline every buddy looks stale. The ones who are online
         -- answer that ping or are heard on the realm channel in the next moments, so
@@ -435,73 +357,6 @@ function WoWForeverRaceSync:SetReady()
         -- already grouped at login or /reload: GROUP_ROSTER_UPDATE came before we
         -- were ready, so compare with the group now instead of on its next change
         self:ScheduleGroupSync()
-    end
-end
-
-function WoWForeverRaceSync:DoSync()
-    -- no offers
-    if #self.offers == 0 then
-        WoWForeverRace:DebugPrint("no sync partners")
-
-        -- mark ourselves as synced up, otherwise nobody can ever sync
-        self:SetReady()
-        return
-    end
-
-    -- select a partner to sync with
-    self.syncPartner = self:SelectPartner()
-
-    -- remove the partner from the list of offers (in case we want to retry with another partner)
-    self.offers = WoWForeverRace.list.filter(self.offers, function(offer)
-        return offer.name ~= self.syncPartner.name
-    end)
-
-    WoWForeverRace:DebugPrint("DoSync(" .. self.syncPartner.name .. ")")
-
-    -- compute our hashes to send and to decide what actually needs syncing
-    local myGlobalHash = WoWForeverRace.Leaderboard.ComputeHash(self.DB.factionrealm.leaderboard[0])
-    local sameClass = self.syncPartner.classIndex == self.classIndex
-    local myClassHash = sameClass and WoWForeverRace.Leaderboard.ComputeHash(
-            self.DB.factionrealm.leaderboard[self.classIndex] or {players = {}})
-    local myFTLHash = computeFTLHash(self.DB, self.Config)
-    local myPHHash = computePHHash(self.DB, self.Config, self.Core:MyFaction())
-
-    local globalMatch = self.syncPartner.globalHash ~= nil and self.syncPartner.globalHash == myGlobalHash
-    local classMatch = not sameClass
-            or (self.syncPartner.classHash ~= nil and self.syncPartner.classHash == myClassHash)
-    local ftlMatch = self.syncPartner.ftlHash ~= nil and self.syncPartner.ftlHash == myFTLHash
-    -- player history is pull-only: a nil offer hash means an old client that can't
-    -- provide it, so treat that as matching rather than waiting on it
-    local phMatch = self.syncPartner.phHash == nil or self.syncPartner.phHash == myPHHash
-
-    if globalMatch and classMatch and ftlMatch and phMatch then
-        WoWForeverRace:DebugPrint("Already in sync with " .. self.syncPartner.name)
-        self:SetReady()
-        return
-    end
-
-    -- include our hashes so the partner can also skip sending back data we already agree on
-    self.Network:SendObject(self.Config.Network.Events.StartSync,
-            {self.classIndex, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "WHISPER", self.syncPartner.name)
-    self:NotePeer(self.syncPartner.name, true)
-
-    -- check if we need to retry syncing after a short timeout
-    local _self = self
-    C_Timer.After(self.Config.RetrySyncWait, function()
-        if not self.isReady then
-            _self:DoSync()
-        end
-    end)
-
-    -- only send leaderboards / FTL data the partner doesn't already have
-    if not globalMatch then
-        self:Sync(self.syncPartner.name, 0)
-    end
-    if sameClass and not classMatch then
-        self:Sync(self.syncPartner.name, self.classIndex)
-    end
-    if not ftlMatch then
-        self:SyncFTL(self.syncPartner.name)
     end
 end
 
@@ -539,72 +394,37 @@ function WoWForeverRaceSync:DifferingBoards(peerHashes)
     return boards
 end
 
+-- STARTSYNC {classIndex, perBoardHashes, ftlHash, phHash, toGroup}: a guild sync partner,
+-- a repair, or a group pinger picking us to answer its ping. A payload without the
+-- per-board hash table (older clients) is ignored.
 function WoWForeverRaceSync:OnNetStartSync(payload, sender)
     if not self.DB.profile.options.networking then return end
+    if type(payload) ~= "table" or type(payload[2]) ~= "table" then
+        WoWForeverRace:DebugPrint("Ignored STARTSYNC from " .. tostring(sender) .. ": no per-board hashes (older client)")
+        return
+    end
     WoWForeverRace:DebugPrint("OnNetStartSync(" .. sender .. ")")
     self.lastSync = self.Core:Now()
 
-    local requesterClassIndex, requesterGlobalHash, requesterClassHash, requesterFTLHash, requesterPHHash
-    if type(payload) == "table" then
-        requesterClassIndex = payload[1]
-
-        if type(payload[2]) == "table" then
-            -- guild sync, or a group pinger picking us to answer its ping:
-            -- {classIndex, perBoardHashes, ftlHash, phHash, toGroup}.
-            -- payload[2] is per-board hashes (classes and races) - send every leaderboard that differs
-            local perClassHashes = payload[2]
-            -- toGroup: send to our whole group, which hears it in one message each
-            local toGroup = payload[5] == true
-            if toGroup and GetNumGroupMembers() == 0 then return end
-            local channel = toGroup and "GROUP" or "WHISPER"
-            for _, boardIndex in ipairs(self:DifferingBoards(perClassHashes)) do
-                self:Sync(sender, boardIndex, channel)
-            end
-            -- payload[3] is the requester's FTL hash; only send FTL when it differs
-            -- (older clients don't include it - send unconditionally for those)
-            local guildFTLHash = payload[3]
-            if guildFTLHash == nil or guildFTLHash ~= computeFTLHash(self.DB, self.Config, perClassHashes) then
-                self:SyncFTL(sender, channel)
-            end
-            -- payload[4] is the requester's history hash, only present on their
-            -- once-per-login pull; never send history to clients that didn't ask
-            local guildPHHash = payload[4]
-            if guildPHHash ~= nil and guildPHHash ~= computePHHash(self.DB, self.Config, self.Core:MyFaction()) then
-                self:SyncPlayerHistory(sender)
-            end
-            return
-        end
-
-        -- zone sync: payload[2] is globalHash, payload[3] is classHash, payload[4] is ftlHash,
-        -- payload[5] is the history hash
-        requesterGlobalHash, requesterClassHash, requesterFTLHash, requesterPHHash =
-                payload[2], payload[3], payload[4], payload[5]
-    else
-        requesterClassIndex = payload
+    -- payload[2] is per-board hashes (classes and races) - send every leaderboard that differs
+    local perClassHashes = payload[2]
+    -- toGroup: send to our whole group, which hears it in one message each
+    local toGroup = payload[5] == true
+    if toGroup and GetNumGroupMembers() == 0 then return end
+    local channel = toGroup and "GROUP" or "WHISPER"
+    for _, boardIndex in ipairs(self:DifferingBoards(perClassHashes)) do
+        self:Sync(sender, boardIndex, channel)
     end
-
-    -- only send global + own class (zone sync path)
-    local myGlobalHash = WoWForeverRace.Leaderboard.ComputeHash(self.DB.factionrealm.leaderboard[0])
-    if requesterGlobalHash == nil or requesterGlobalHash ~= myGlobalHash then
-        self:Sync(sender, 0)
+    -- payload[3] is the requester's FTL hash; only send FTL when it differs
+    -- (older clients don't include it - send unconditionally for those)
+    local guildFTLHash = payload[3]
+    if guildFTLHash == nil or guildFTLHash ~= computeFTLHash(self.DB, self.Config, perClassHashes) then
+        self:SyncFTL(sender, channel)
     end
-
-    if requesterClassIndex == self.classIndex then
-        local myClassHash = WoWForeverRace.Leaderboard.ComputeHash(
-                self.DB.factionrealm.leaderboard[self.classIndex] or {players = {}})
-        if requesterClassHash == nil or requesterClassHash ~= myClassHash then
-            self:Sync(sender, self.classIndex)
-        end
-    end
-
-    local myFTLHash = computeFTLHash(self.DB, self.Config)
-    if requesterFTLHash == nil or requesterFTLHash ~= myFTLHash then
-        self:SyncFTL(sender)
-    end
-
-    -- player history is pull-only and potentially large: only send it when the
-    -- requester explicitly announced a differing hash (old clients never do)
-    if requesterPHHash ~= nil and requesterPHHash ~= computePHHash(self.DB, self.Config, self.Core:MyFaction()) then
+    -- payload[4] is the requester's history hash, only present on their
+    -- once-per-login pull; never send history to clients that didn't ask
+    local guildPHHash = payload[4]
+    if guildPHHash ~= nil and guildPHHash ~= computePHHash(self.DB, self.Config, self.Core:MyFaction()) then
         self:SyncPlayerHistory(sender)
     end
 end
@@ -628,14 +448,11 @@ function WoWForeverRaceSync:OnNetSyncPayload(payload, sender)
     if hashBefore ~= nil and hashBefore ~= computeFullHash(self.DB, self.Config, nil, self.Core:MyFaction()) then
         round.gained = true
     end
-
-    -- mark ourselves as synced up
-    self:SetReady()
 end
 
 -- Periodic guild sync ticker: re-runs the guild sync flow every GuildSyncInterval seconds.
--- Only fires once we're ready (initial zone sync complete), and not while the realm
--- channel carries traffic.
+-- Only fires once we're ready (the login sync ran), and not while the realm channel
+-- carries traffic.
 function WoWForeverRaceSync:InitGuildTicker()
     local _self = self
     C_Timer.NewTicker(self.Config.GuildSyncInterval, function()
@@ -664,6 +481,8 @@ function WoWForeverRaceSync:SendGuildSync(withPlayerHistory)
     -- the sixth field is the build we run, see VersionCheck
     self.Network:SendObject(self.Config.Network.Events.GuildSync,
             {self.classIndex, fullHash, self.Core:LoginTime(), ftlHash, phHash, self.Config:BuildInfo()}, "GUILD")
+    WoWForeverRace:DebugPrint("Guild sync: GUILDSYNC sent" .. (withPlayerHistory and " with the history pull" or "")
+            .. ", collecting offers for " .. (self.Config.GuildSyncWait + 1) .. "s")
 
     local _self = self
     C_Timer.After(self.Config.GuildSyncWait + 1, function()
@@ -936,11 +755,6 @@ function WoWForeverRaceSync:OnNetFTLSync(payload, sender)
     local ftldb = WoWForeverRace.Serializer.DeserializeFTLBatch(ftlstr or "")
     self.EventBus:PublishEvent(self.Config.Events.FTLSyncResult, ftldb, remoteRealmOpenedAt)
     self.peers[sender] = self.Core:Now()
-
-    -- an FTL payload also completes our initial sync: when only FTL differed from
-    -- our partner this is the only payload we'll receive, and without marking
-    -- ready we'd keep retrying other partners until the offer list runs dry
-    self:SetReady()
 end
 
 -- Whispers the leaderboard-scoped playerHistory subset to the target player, in
@@ -974,10 +788,6 @@ function WoWForeverRaceSync:OnNetPHSync(payload, sender)
     self.historyPulled = true
     self.peers[sender] = self.Core:Now()
     self:TrackHistoryPull(sender, index, total)
-
-    -- a history payload also completes our initial sync: when only history differed
-    -- from our partner this is the only payload we'll receive
-    self:SetReady()
 end
 
 -- Chunks of a history transfer carry their number and the number of chunks (older clients

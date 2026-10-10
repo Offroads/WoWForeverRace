@@ -41,7 +41,7 @@ help:
 	@echo "  lint            run luacheck on src/, tests/ and scripts/"
 	@echo "  tests           run the busted test suite (INCLUDES=<file pattern> TESTS=<name pattern>)"
 	@echo "  check           lint + tests"
-	@echo "  sim             simulate addon traffic in a party, raid, guild, zone or realm (SCENARIO=<name> SIZES=5,40 SV=<file> CHANNEL=nochannel)"
+	@echo "  sim             simulate addon traffic in a party, raid, guild or realm (SCENARIO=<name> SIZES=5,40 SV=<file> CHANNEL=nochannel)"
 	@echo "  netsize         message sizes of a full update through the real compression (SV=<file>)"
 	@echo "  libs            download external libraries into ./libs (only if missing)"
 	@echo "  fetch-libs      force a fresh download of ./libs"
@@ -91,10 +91,11 @@ check: lint tests
 
 #
 # -- sim --
-# simulate the addon's traffic in a group, a guild or a crowded zone: complete addon
+# simulate the addon's traffic in a group, a guild or on the realm channel: complete addon
 # stacks talking through the real network envelope, paced like ChatThrottleLib (see
 # the header of scripts/groupsim.lua)
-# SCENARIO: all, steady, reload, levelup, scan, diverge, drift, guild or zone
+# SCENARIO: all, steady, reload, levelup, scan, diverge, drift, guild, realm, realmlogin,
+# realmnews or realmdiverge
 # SIZES: comma separated numbers of clients
 # SV: optional SavedVariables file inside the checkout to seed every client with
 #
