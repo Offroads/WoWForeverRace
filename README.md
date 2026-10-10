@@ -143,6 +143,7 @@ by Ruben de Vries, and still speaks its addon-channel protocol. Both are release
 under the [MIT License](LICENSE.md).
 
 The release zip bundles the third-party libraries listed in `.pkgmeta` (Ace3,
-CallbackHandler, LibStub, LibDataBroker, LibDBIcon, LibCompress). They are not
-covered by this license and keep their own, e.g. Ace3 is BSD-style, LibStub is
-public domain and LibCompress is GPL v2.
+CallbackHandler, LibStub, LibDataBroker, LibDBIcon) and LibCompress, which is
+kept in this repository under `libs/LibCompress` because its wowace repository
+is no longer public. They are not covered by this license and keep their own,
+e.g. Ace3 is BSD-style, LibStub is public domain and LibCompress is GPL v2.
