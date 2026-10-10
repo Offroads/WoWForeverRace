@@ -23,6 +23,8 @@ local HELP = {
     "/wfr probe          dump what the client API returns into a copyable window (do a /who first)",
     "/wfr chprobe        send an addon message on every distribution (say, yell, party, guild, our channel, ...)"
             .. " and report which ones the client takes and which echo back",
+    "/wfr yellprobe      send SAY and YELL addon messages right from the command (a hardware event, like"
+            .. " the /who scans) to see whether that gets them past the client",
 }
 
 --[[
@@ -90,7 +92,11 @@ function WoWForeverRace:slashwfr(input)
 
     --[[DISTRIBUTION PROBE]]--
     elseif action == "chprobe" then
-        self:ShowChannelProbe()
+        self:ShowChannelProbe("all")
+
+    --[[YELL PROBE (hardware event)]]--
+    elseif action == "yellprobe" then
+        self:ShowChannelProbe("yell")
 
     --[[WHOAMI]]--
     elseif action == "whoami" then
@@ -492,6 +498,10 @@ distribution, what SendAddonMessage answered, whether the message came back thro
 CHAT_MSG_ADDON (the sender hears its own message on a distribution that carries it), and
 any channel notice or system message the server sent meanwhile (a channel that refuses
 addon messages answers "success" and sends a NOT_ALLOWED_IN_CHANNEL notice instead).
+
+The "yell" mode sends only SAY and YELL, through SendAddonMessage and SendAddonMessageLogged,
+and sends them right away instead of from timers: the slash command (or the button click)
+is a hardware event, and plain SAY / YELL chat from addons needs one on modern clients.
 --]]
 local CHPROBE_PREFIX = "WFRChProbe"
 local CHPROBE_SPACING = 0.5   -- seconds between sends: packets handed over in one frame get lost
@@ -539,9 +549,21 @@ function WoWForeverRace:ChannelProbeSends()
     return sends
 end
 
-function WoWForeverRace:RunChannelProbe()
+-- SAY and YELL through both send calls: {distribution, target, label, logged}
+function WoWForeverRace:YellProbeSends()
+    local sends = {}
+    for _, distribution in ipairs({ "SAY", "YELL" }) do
+        sends[#sends + 1] = { distribution, nil, "SendAddonMessage", false }
+        sends[#sends + 1] = { distribution, nil, "SendAddonMessageLogged", true }
+    end
+    return sends
+end
+
+-- mode: "all" sends every distribution from timers, "yell" sends SAY and YELL right now
+-- (keep the call inside the hardware event: no timer between the command and the send)
+function WoWForeverRace:RunChannelProbe(mode)
     local chatInfo = _G.C_ChatInfo
-    local probe = { sends = {}, notices = {}, done = false }
+    local probe = { sends = {}, notices = {}, done = false, mode = mode or "all" }
     self.chprobe = probe
 
     if chatInfo.InChatMessagingLockdown and chatInfo.InChatMessagingLockdown() then
@@ -584,30 +606,42 @@ function WoWForeverRace:RunChannelProbe()
         self.chprobeEventFrame = frame
     end
 
-    local sends = self:ChannelProbeSends()
+    local immediate = probe.mode == "yell"
+    local sends = immediate and self:YellProbeSends() or self:ChannelProbeSends()
     local _self = self
+    local function sendOne(i, send, entry)
+        local text = i .. ":" .. send[1] .. ":" .. tostring(send[3] or send[2] or "")
+        entry.sentAt = _G.GetTime()
+        local call = send[4] and chatInfo.SendAddonMessageLogged or chatInfo.SendAddonMessage
+        if send[1] == "CHANNEL" and send[2] == nil then
+            entry.result = "not sent, no channel number"
+        elseif call == nil then
+            entry.result = "not sent, the client has no " .. tostring(send[3])
+        else
+            entry.result = serializeResults(pcall(call, CHPROBE_PREFIX, text, send[1], send[2]))
+            local result = tonumber(entry.result)
+            if result then
+                entry.result = resultName(result)
+            end
+        end
+        _self:RenderChannelProbe()
+    end
+
     for i, send in ipairs(sends) do
         local entry = { distribution = send[1], target = send[2], label = send[3], echoes = {} }
         probe.sends[i] = entry
-        _G.C_Timer.After((i - 1) * CHPROBE_SPACING, function()
-            if _self.chprobe ~= probe then return end
-            local text = i .. ":" .. send[1] .. ":" .. tostring(send[3] or send[2] or "")
-            entry.sentAt = _G.GetTime()
-            if send[1] == "CHANNEL" and send[2] == nil then
-                entry.result = "not sent, no channel number"
-            else
-                entry.result = serializeResults(pcall(chatInfo.SendAddonMessage, CHPROBE_PREFIX, text,
-                        send[1], send[2]))
-                local result = tonumber(entry.result)
-                if result then
-                    entry.result = resultName(result)
-                end
-            end
-            _self:RenderChannelProbe()
-        end)
+        if immediate then
+            sendOne(i, send, entry)
+        else
+            _G.C_Timer.After((i - 1) * CHPROBE_SPACING, function()
+                if _self.chprobe ~= probe then return end
+                sendOne(i, send, entry)
+            end)
+        end
     end
 
-    _G.C_Timer.After(#sends * CHPROBE_SPACING + CHPROBE_WAIT, function()
+    local spacing = immediate and 0 or CHPROBE_SPACING
+    _G.C_Timer.After(#sends * spacing + CHPROBE_WAIT, function()
         if _self.chprobe ~= probe then return end
         probe.done = true
         _self:RenderChannelProbe()
@@ -619,7 +653,8 @@ function WoWForeverRace:BuildChannelProbe()
     local lines = {}
     local function add(line) lines[#lines + 1] = line end
 
-    add("== Addon message distributions (" .. (probe.done and "finished, still listening for late echoes"
+    add("== Addon message distributions, " .. (probe.mode == "yell" and "SAY / YELL from a hardware event"
+            or "every distribution from timers") .. " (" .. (probe.done and "finished, still listening for late echoes"
             or "running...") .. ")")
     add("prefix " .. CHPROBE_PREFIX .. ", me " .. tostring(self.Core:FullRealMe())
             .. ", in group " .. tostring(_G.IsInGroup()) .. ", in raid " .. tostring(_G.IsInRaid())
@@ -671,7 +706,7 @@ function WoWForeverRace:RenderChannelProbe()
 end
 
 -- click into the box, Ctrl+A / Ctrl+C to copy
-function WoWForeverRace:ShowChannelProbe()
+function WoWForeverRace:ShowChannelProbe(mode)
     local AceGUI = LibStub("AceGUI-3.0")
 
     if self.chprobeFrame then
@@ -696,7 +731,8 @@ function WoWForeverRace:ShowChannelProbe()
     local rerunBtn = AceGUI:Create("Button")
     rerunBtn:SetText("Run again")
     rerunBtn:SetWidth(150)
-    rerunBtn:SetCallback("OnClick", function() _self:RunChannelProbe() end)
+    -- a click is a hardware event too, so "Run again" works for the yell mode
+    rerunBtn:SetCallback("OnClick", function() _self:RunChannelProbe(mode) end)
     frame:AddChild(rerunBtn)
 
     local box = AceGUI:Create("MultiLineEditBox")
@@ -707,5 +743,5 @@ function WoWForeverRace:ShowChannelProbe()
     frame:AddChild(box)
     self.chprobeBox = box
 
-    self:RunChannelProbe()
+    self:RunChannelProbe(mode)
 end
