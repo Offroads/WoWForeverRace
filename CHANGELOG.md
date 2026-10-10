@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.0-beta16 - 2026-10-10
+
+### Changed
+- The bundled compression library (LibCompress) is updated to r87 from its
+  new home on GitHub. Nothing changes in what the addon sends; a damaged
+  compressed message is now dropped instead of raising an error.
+
 ## v0.1.0-beta15 - 2026-10-10
 
 ### Changed
