@@ -10,6 +10,10 @@
   could never come; the guild sync, the realm channel and the players your addon
   traded with before carry the data as before.
 
+### Fixed
+- Turning sharing on after logging in with it off now starts the sync right
+  away. Before, the addon stayed quiet until the next login.
+
 ## v0.1.0-beta14 - 2026-10-02
 
 ### Added
