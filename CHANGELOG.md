@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.0-beta15 - 2026-10-10
 
 ### Changed
 - The zone sync at login, the beacon that announced your leaderboards to the
