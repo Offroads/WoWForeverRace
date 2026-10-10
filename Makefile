@@ -146,8 +146,6 @@ fetch-libs: download-bw-release
 	rm -rf ./libs
 	./bw-release.sh -d -u -l -z
 	cp -rf ./.release/WoWForeverRace/libs ./libs
-	# LibCompress is tracked in git, not an external (its wowace repository is no longer public)
-	git checkout -- libs/LibCompress
 
 #
 # -- release --

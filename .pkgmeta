@@ -10,7 +10,10 @@ externals:
     libs/AceGUI: svn://svn.wowace.com/wow/ace3/mainline/trunk/AceGUI-3.0
     libs/AceSerializer: svn://svn.wowace.com/wow/ace3/mainline/trunk/AceSerializer-3.0
     libs/LibDBIcon: https://repos.wowace.com/wow/libdbicon-1-0/trunk/LibDBIcon-1.0
-# libs/LibCompress is tracked in git: its wowace repository is no longer public
+    # LibCompress moved from wowace (its svn repository answers 401 now) to GitHub
+    libs/LibCompress:
+        url: https://github.com/galmok/LibCompress
+        tag: r87-release
 
 # release notes: without this the packager posts the raw git log
 manual-changelog:

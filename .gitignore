@@ -1,7 +1,5 @@
-# Downloaded addon libraries (fetched via .pkgmeta / make libs); LibCompress is
-# tracked, its wowace repository is no longer public
-libs/*
-!libs/LibCompress/
+# Downloaded addon libraries (fetched via .pkgmeta / make libs)
+libs/
 
 # BigWigs packager output
 .release/

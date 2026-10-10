@@ -20,7 +20,7 @@ docker compose run --rm dev make tests TESTS='.*binary.*'     # only test names 
 docker compose run --rm dev make tests BUSTED_RUN=quick       # skip coverage
 docker compose run --rm dev make sim              # simulate addon traffic in a party, raid, guild or on the realm channel (SCENARIO=, SIZES=, SV=, CHANNEL=nochannel)
 docker compose run --rm dev make netsize          # message sizes of a full update through the real compression (SV=)
-docker compose run --rm dev make fetch-libs       # re-download external libraries into ./libs (LibCompress is tracked in git, not fetched: its wowace repository is no longer public)
+docker compose run --rm dev make fetch-libs       # re-download external libraries into ./libs (LibCompress comes from GitHub, pinned to a release tag in .pkgmeta; the rest from the wowace svn)
 docker compose run --rm dev make release          # build a release zip into ./.release
 ```
 
