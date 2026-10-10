@@ -287,21 +287,26 @@ end
 function WoWForeverRaceSync:InitSync()
     -- don't request updates when we know the race has finished
     if self.DB.factionrealm.finished then
+        WoWForeverRace:DebugPrint("Login sync: skipped, the race is finished")
         return
     end
     -- don't request updates when we've disabled networking
     if not self.DB.profile.options.networking then
+        WoWForeverRace:DebugPrint("Login sync: skipped, sharing is off")
         return
     end
 
     -- Logged in (or reloaded) inside a chat messaging lockdown: nobody can answer
     -- yet, so run the once-per-login sync when the lockdown has ended.
     if self.Network.IsLockedDown and self.Network:IsLockedDown() then
+        WoWForeverRace:DebugPrint("Login sync: chat lockdown, trying again in " .. self.Config.RetrySyncWait .. "s")
         local _self = self
         C_Timer.After(self.Config.RetrySyncWait, function() _self:InitSync() end)
         return
     end
 
+    WoWForeverRace:DebugPrint("Login sync: " .. (IsInGuild() and "guild sync" or "not in a guild, no guild sync")
+            .. ", ready at once")
     -- guild sync: announce to GUILD and pick a random partner among the offers after GuildSyncWait+1s
     -- withPlayerHistory: we just logged in, so this is the once-per-login history pull
     self:SendGuildSync(true)
@@ -321,6 +326,8 @@ function WoWForeverRaceSync:SetReady()
     if not self.isReady then
         self.isReady = true
         WoWForeverRace:DebugPrint("Sync done", true)
+        WoWForeverRace:DebugPrint("Ready: buddy pings now, stale buddies pruned in " .. self.Config.BuddyPruneDelay
+                .. "s, group sync scheduled")
         self:SendBuddyPings()
         -- After BuddyMaxAge offline every buddy looks stale. The ones who are online
         -- answer that ping or are heard on the realm channel in the next moments, so
@@ -372,7 +379,10 @@ end
 -- per-board hash table (older clients) is ignored.
 function WoWForeverRaceSync:OnNetStartSync(payload, sender)
     if not self.DB.profile.options.networking then return end
-    if type(payload) ~= "table" or type(payload[2]) ~= "table" then return end
+    if type(payload) ~= "table" or type(payload[2]) ~= "table" then
+        WoWForeverRace:DebugPrint("Ignored STARTSYNC from " .. tostring(sender) .. ": no per-board hashes (older client)")
+        return
+    end
     WoWForeverRace:DebugPrint("OnNetStartSync(" .. sender .. ")")
     self.lastSync = self.Core:Now()
 
@@ -451,6 +461,8 @@ function WoWForeverRaceSync:SendGuildSync(withPlayerHistory)
     -- the sixth field is the build we run, see VersionCheck
     self.Network:SendObject(self.Config.Network.Events.GuildSync,
             {self.classIndex, fullHash, self.Core:LoginTime(), ftlHash, phHash, self.Config:BuildInfo()}, "GUILD")
+    WoWForeverRace:DebugPrint("Guild sync: GUILDSYNC sent" .. (withPlayerHistory and " with the history pull" or "")
+            .. ", collecting offers for " .. (self.Config.GuildSyncWait + 1) .. "s")
 
     local _self = self
     C_Timer.After(self.Config.GuildSyncWait + 1, function()

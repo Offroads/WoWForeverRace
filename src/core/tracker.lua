@@ -476,19 +476,29 @@ function WoWForeverRaceTracker:ScheduleDingPush(changedPlayers, toGroup)
     if not self.DB.profile.options.networking then return end
     if self.DB.factionrealm.finished then return end
 
+    local route = {}
     -- the realm channel reaches every addon user of our faction with one message;
     -- everything below is the backup for when nobody is heard there
     if self:ChannelJoined() then
         local live = self:ChannelLive()
         self:ScheduleChannelDingPush(changedPlayers, live)
-        if live then return end
+        if live then
+            WoWForeverRace:DebugPrint("Ding push: " .. #changedPlayers .. " player(s) -> realm channel only (live)")
+            return
+        end
+        route[#route + 1] = "realm channel (not live)"
+    else
+        route[#route + 1] = "no realm channel"
     end
 
     -- to the group right away: a member would otherwise only hear of it on the next group sync
     if toGroup and GetNumGroupMembers() > 0 then
         local batchstr = WoWForeverRace.Serializer.SerializePlayerInfoBatch(changedPlayers)
         self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, {batchstr, false, 0}, "GROUP")
+        route[#route + 1] = "group now"
     end
+    route[#route + 1] = "guild and buddies in " .. self.Config.DingPushDelay .. "s"
+    WoWForeverRace:DebugPrint("Ding push: " .. #changedPlayers .. " player(s) -> " .. table.concat(route, ", "))
 
     -- accumulate into pending set (keyed by name to deduplicate across rapid scans)
     for _, p in ipairs(changedPlayers) do
@@ -540,6 +550,8 @@ function WoWForeverRaceTracker:FlushDingPush()
         end
         for i = batchSize + 1, #names do names[i] = nil end
     end
+    WoWForeverRace:DebugPrint("Ding push: " .. #players .. " player(s) -> " .. (IsInGuild() and "GUILD" or "no guild")
+            .. ", " .. #names .. " buddies whispered")
     for _, name in ipairs(names) do
         self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, payload, "WHISPER", name)
     end
@@ -700,12 +712,18 @@ end
 -- PurgePreLaunchData first; an idle client checks on this ticker, which stops once the
 -- purge ran.
 function WoWForeverRaceTracker:InitLaunchTicker()
-    if self.launchPurged then return end
+    if self.launchPurged then
+        WoWForeverRace:DebugPrint("Launch check: the launch purge already ran, no ticker")
+        return
+    end
+    WoWForeverRace:DebugPrint("Launch check: every " .. self.Config.LaunchCheckInterval
+            .. "s until the realm launch has passed")
     local _self = self
     local ticker
     ticker = C_Timer.NewTicker(self.Config.LaunchCheckInterval, function()
         _self:PurgePreLaunchData()
         if _self.launchPurged and ticker ~= nil then
+            WoWForeverRace:DebugPrint("Launch check: the launch passed and the purge ran, ticker stopped")
             ticker:Cancel()
         end
     end)
