@@ -9,10 +9,11 @@ local WoWForeverRaceDefaultDB = {
             },
             networking = true,
             keypressScanning = true,
+            scanCooldown = 10,
             maxLevelNotify = true,
-            classTopN = 3,
+            classTopN = 1,
             raceTopN = 1,
-            globalTopN = 5,
+            globalTopN = 1,
             debug = false,
         },
         gui = {
