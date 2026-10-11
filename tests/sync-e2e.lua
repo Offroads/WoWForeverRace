@@ -536,6 +536,37 @@ describe("Sync end to end with real data", function()
         assertAllBoardsEqual(a, b)
     end)
 
+    it("ding push: a guild member the announcer never heard of catches up on its own buddy ping", function()
+        _G.SetIsInGuild(true)
+        local a = stack("Alpha Tester", realSavedVariables())
+        local b = stack("Beta Tester", realSavedVariables())
+        a.sync.isReady, b.sync.isReady = true, true
+
+        -- only a announces; b is in sync, so it offers nothing and a never hears of it
+        a.sync:SendGuildSync()
+        pump()
+        advance(Config.GuildSyncWait + 1)
+        assert.is_not_nil(b.db.factionrealm.buddies[a.name])
+        assert.is_nil(a.db.factionrealm.buddies[b.name], "an in-sync member stays unknown to the announcer")
+
+        -- a's next sighting reaches nobody: it has no buddies yet
+        local mark = #log + 1
+        a.eventbus:PublishEvent(Events.SlashWhoResult, {
+            {name = "Guild Tester", level = 21, classIndex = 4, raceIndex = 8},
+        })
+        pump()
+        advance(Config.DingPushDelay)
+        assert.is_nil(countEvents(mark)[NetEvents.PlayerInfoBatch])
+        assert.not_equals(hashes(a).full, hashes(b).full)
+
+        -- b's periodic buddy ping (every BuddySyncInterval) brings it over, and a knows b from now on
+        b.sync:SendBuddyPings()
+        pump()
+        advance(2)
+        assertAllBoardsEqual(a, b)
+        assert.is_not_nil(a.db.factionrealm.buddies[b.name])
+    end)
+
     -- ---------------------------------------------------------------------------
     -- the realm channel: the stacks are in no guild and not grouped
     -- ---------------------------------------------------------------------------
