@@ -245,24 +245,24 @@ describe("Tracker", function()
             assert.equals(0, #db.factionrealm.leaderboard[0].players)
         end)
 
-        it("should broadcast to network OnSlashWhoResult", function()
+        it("whispers a scan result to the buddies after the delay, never to the guild", function()
             local networkSpy = spy.on(network, "SendObject")
+            _G.SetIsInGuild(true)
+            db.factionrealm.buddies = {["Dude"] = {lastSeen = 0}}
 
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
             -- nothing right away: the push is batched (DingPushDelay)
             assert.spy(networkSpy).was_not_called()
 
-            -- guild push is batched behind DingPushDelay
             _G.C_Timer.Advance(config.DingPushDelay)
             assert.spy(networkSpy).was_called_with(match.is_ref(network), config.Network.Events.PlayerInfoBatch,
-                    match.is_table(), "GUILD")
+                    match.is_table(), "WHISPER", "Dude")
             assert.spy(networkSpy).called_at_most(1)
         end)
 
-        it("should not broadcast to the guild when not in guild", function()
+        it("sends a scan result nowhere without buddies, in a guild or not", function()
             local networkSpy = spy.on(network, "SendObject")
-
-            _G.SetIsInGuild(false)
+            _G.SetIsInGuild(true)
 
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
             _G.C_Timer.Advance(config.DingPushDelay)
@@ -463,6 +463,54 @@ describe("Tracker", function()
             local players = channelBatch()
             assert.equals(1, #players)
             assert.equals("Nubtwo", players[1].name)
+        end)
+
+        it("sends a big batch to the channel in chunks, dropping what the channel brought meanwhile", function()
+            channel:NoteSender("Dude")
+            local chunkSize = 6
+            config.ChannelDingChunkSize = chunkSize
+            -- three classes, so every player lands on a class board (5 per board in these
+            -- tests) and counts as a change: 15 players, chunks of 6, 6 and 3
+            local classes = {DRUIDIDX, WARRIORIDX, PRIESTIDX}
+            local players = {}
+            for i = 1, 3 * config.MaxLeaderboardSize do
+                players[i] = playerInfo("Nub" .. string.char(96 + i) .. " Chunk", 5, classes[(i % 3) + 1])
+            end
+            tracker:OnSlashWhoResult(players)
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            local toChannel = sentTo("RACE")
+            assert.equals(1, #toChannel)
+            local first = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(toChannel[1].payload[1])
+            assert.equals(chunkSize, #first)
+            assert.equals("Nuba Chunk", first[1].name)
+
+            -- another player sent one of the waiting dings meanwhile, and a new one came in
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubj Chunk", 5, classes[(10 % 3) + 1]), }),
+                    "Dude", "CHANNEL")
+            tracker:OnSlashWhoResult({ playerInfo("Zed Late", 7, WARRIORIDX), })
+
+            _G.C_Timer.Advance(config.ChannelDingChunkDelay)
+            toChannel = sentTo("RACE")
+            assert.equals(2, #toChannel)
+            local second = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(toChannel[2].payload[1])
+            assert.equals(chunkSize, #second)
+            for _, p in ipairs(second) do
+                assert.not_equals("Nubj Chunk", p.name)
+            end
+
+            -- the rest: 9 were waiting, the channel brought one, and the late warrior pushed
+            -- the lowest of the five warriors off its full board, so that ding no longer
+            -- stands; 6 went in the second chunk, the last one and the late one go now
+            _G.C_Timer.Advance(config.ChannelDingChunkDelay)
+            toChannel = sentTo("RACE")
+            assert.equals(3, #toChannel)
+            local third = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(toChannel[3].payload[1])
+            assert.equals(2, #third)
+            assert.equals("Zed Late", third[2].name)
+
+            _G.C_Timer.Advance(config.ChannelDingChunkDelay)
+            assert.equals(3, #sentTo("RACE"))
         end)
 
         it("sends nothing when the channel heard everything that was waiting", function()

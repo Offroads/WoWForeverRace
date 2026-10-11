@@ -498,7 +498,9 @@ function WoWForeverRaceTracker:ScheduleDingPush(changedPlayers, toGroup)
         self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, {batchstr, false, 0}, "GROUP")
         route[#route + 1] = "group now"
     end
-    route[#route + 1] = "guild and buddies in " .. self.Config.DingPushDelay .. "s"
+    -- never to the guild: an addon message to GUILD scrolls every member's chat frame on
+    -- this client, so guild members are reached as buddies (Sync:OnNetGuildSync)
+    route[#route + 1] = "buddies in " .. self.Config.DingPushDelay .. "s"
     WoWForeverRace:DebugPrint("Ding push: " .. #changedPlayers .. " player(s) -> " .. table.concat(route, ", "))
 
     -- accumulate into pending set (keyed by name to deduplicate across rapid scans)
@@ -529,13 +531,10 @@ function WoWForeverRaceTracker:FlushDingPush()
     local batchstr = WoWForeverRace.Serializer.SerializePlayerInfoBatch(players)
     local payload = {batchstr, false, 0}
 
-    if IsInGuild() then
-        self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, payload, "GUILD")
-    end
-
     -- whisper a random sample of buddies (capped at BuddyPingBatchSize); group members
     -- got the group push or read the level themselves, and after one group sync every
-    -- member is a buddy: a raid level-up would otherwise cost 40 x 39 whispers
+    -- member is a buddy: a raid level-up would otherwise cost 40 x 39 whispers. Guild
+    -- members who run the addon are buddies too (Sync:OnNetGuildSync)
     local inGroup = self.Core:GroupMemberNames()
     local names = {}
     for name, _ in pairs(self.DB.factionrealm.buddies) do
@@ -551,8 +550,7 @@ function WoWForeverRaceTracker:FlushDingPush()
         end
         for i = batchSize + 1, #names do names[i] = nil end
     end
-    WoWForeverRace:DebugPrint("Ding push: " .. #players .. " player(s) -> " .. (IsInGuild() and "GUILD" or "no guild")
-            .. ", " .. #names .. " buddies whispered")
+    WoWForeverRace:DebugPrint("Ding push: " .. #players .. " player(s) -> " .. #names .. " buddies whispered")
     for _, name in ipairs(names) do
         self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, payload, "WHISPER", name)
     end
@@ -636,6 +634,32 @@ function WoWForeverRaceTracker:FlushChannelDingPush()
             self:ScheduleDingPush(own)
         end
         return
+    end
+
+    -- A long message is many chat packets, and the client's channel throttle cuts it off
+    -- (a minute of scans after a join once piled up into 490 players, refused twice and
+    -- lost). So at most ChannelDingChunkSize players go per message; the rest waits its
+    -- turn ChannelDingChunkDelay later and passes every check above again, so what the
+    -- channel brings meanwhile is dropped from it (DropHeardDings)
+    local chunkSize = self.Config.ChannelDingChunkSize
+    if #players > chunkSize then
+        for i = chunkSize + 1, #players do
+            local p = players[i]
+            self.pendingChannelDings[p.name] = p
+            if backupSkipped[p.name] then
+                self.backupSkipped[p.name] = true
+            end
+        end
+        local chunk = {}
+        for i = 1, chunkSize do
+            chunk[i] = players[i]
+        end
+        players = chunk
+        self.channelDingPending = true
+        local _self = self
+        C_Timer.After(self.Config.ChannelDingChunkDelay, function()
+            _self:FlushChannelDingPush()
+        end)
     end
 
     local batchstr = WoWForeverRace.Serializer.SerializePlayerInfoBatch(players)

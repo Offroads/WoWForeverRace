@@ -1427,7 +1427,7 @@ describe("Sync", function()
 
                 sync:SendBuddyPings()
                 sync:ScheduleGroupSync()
-                AdvanceClock(Config.GuildSyncInterval)
+                AdvanceClock(Config.GuildSyncInterval * 1.25)
 
                 assert.equals(1, #sentOf(NetEvents.GuildSync))
                 local pings = sentOf(NetEvents.BuddyPing)
@@ -1443,7 +1443,7 @@ describe("Sync", function()
 
                 sync:SendBuddyPings()
                 sync:ScheduleGroupSync()
-                AdvanceClock(Config.GuildSyncInterval)
+                AdvanceClock(Config.GuildSyncInterval * 1.25)
 
                 assert.equals(0, #sent)
             end)
@@ -1478,6 +1478,20 @@ describe("Sync", function()
                 AdvanceClock(Config.GuildSyncWait)
                 assert.equals(1, #sentOf(NetEvents.GuildOffer))
                 assert.not_equals(myFullHash, fullHash())
+            end)
+
+            it("makes a buddy of every guild member heard announcing or offering", function()
+                db.factionrealm.buddies = {}
+
+                eventbus:PublishEvent(NetEvents.GuildSync, {11, fullHash(), time, myFTLHash}, "Bea Guildie", "GUILD")
+                eventbus:PublishEvent(NetEvents.GuildOffer, {11, nil, 12345, 1, 1, time, myFTLHash, 1},
+                        "Cid Offerer", "WHISPER")
+
+                assert.equals(time, db.factionrealm.buddies["Bea Guildie"].lastSeen)
+                assert.equals(time, db.factionrealm.buddies["Cid Offerer"].lastSeen)
+                -- in sync with Bea: nothing to offer, the buddy entry is all that round left
+                AdvanceClock(Config.GuildSyncWait)
+                assert.equals(0, #sentOf(NetEvents.GuildOffer))
             end)
         end)
     end)

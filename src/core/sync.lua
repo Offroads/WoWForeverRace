@@ -450,15 +450,20 @@ function WoWForeverRaceSync:OnNetSyncPayload(payload, sender)
     end
 end
 
--- Periodic guild sync ticker: re-runs the guild sync flow every GuildSyncInterval seconds.
--- Only fires once we're ready (the login sync ran), and not while the realm channel
--- carries traffic.
+-- Periodic guild sync: re-runs the guild sync flow about every GuildSyncInterval seconds.
+-- Only once we're ready (the login sync ran), and not while the realm channel carries
+-- traffic. An addon message to GUILD scrolls every member's chat frame on this client, so
+-- the guild hears from us rarely: the round is there to meet the guild members who run
+-- the addon (they become buddies, see OnNetGuildSync), the data travels by whisper.
+-- Jittered, so members who logged in together don't all announce in the same minute.
 function WoWForeverRaceSync:InitGuildTicker()
+    local interval = self.Config.GuildSyncInterval
     local _self = self
-    C_Timer.NewTicker(self.Config.GuildSyncInterval, function()
+    C_Timer.After(interval * (0.75 + 0.5 * math.random()), function()
         if _self.isReady and not _self:ChannelLive() then
             _self:SendGuildSync()
         end
+        _self:InitGuildTicker()
     end)
 end
 
@@ -490,10 +495,13 @@ function WoWForeverRaceSync:SendGuildSync(withPlayerHistory)
     end)
 end
 
--- Received when another guild member announces via GuildSync.
+-- Received when another guild member announces via GuildSync. That member runs the
+-- addon, so it becomes a buddy: dings and pings reach it by whisper from now on, the
+-- guild itself never carries them.
 -- If our data differs, whisper back an offer after a random delay to spread load.
 function WoWForeverRaceSync:OnNetGuildSync(payload, sender)
     if not self.DB.profile.options.networking then return end
+    self:AddBuddy(sender, true)
     if not self.isReady then return end
 
     local requesterFullHash, requesterFTLHash, requesterPHHash = payload[2], payload[4], payload[5]
@@ -519,8 +527,11 @@ function WoWForeverRaceSync:OnNetGuildSync(payload, sender)
     end)
 end
 
--- Collect guild offers during the open window.
+-- Collect guild offers during the open window. Every offerer is a guild member running
+-- the addon and so a buddy, whatever becomes of its offer.
 function WoWForeverRaceSync:OnNetGuildOffer(offer, sender)
+    if not self.DB.profile.options.networking then return end
+    self:AddBuddy(sender, true)
     -- An offer waits up to GuildSyncWait at its sender and then in its send queue, so it
     -- can come in after the window closed. When the window closed empty, the first late
     -- one is taken after all; else that round found nobody although a member answered.

@@ -55,6 +55,16 @@ for _, event in pairs(WoWForeverRace.Config.Network.Events) do
     NetworkEvents[event] = true
 end
 
+-- Enum.SendAddonMessageResult.ChannelThrottle: the client's answer when too much went to
+-- a chat channel in a short time. Nothing is wrong with the message or the distribution,
+-- it only has to wait (OnMessageSent)
+local CHANNEL_THROTTLE = _G.Enum and _G.Enum.SendAddonMessageResult
+        and _G.Enum.SendAddonMessageResult.ChannelThrottle or 8
+
+-- players of a batch listed in the debug log; a launch day batch has hundreds, and the
+-- debug window holds 2000 lines in all
+local DEBUG_BATCH_NAMES = 20
+
 local function debugLogPayload(event, payload)
     -- runs on every message before the consumers do, so it must neither cost
     -- anything when debug is off nor throw on a malformed payload
@@ -66,8 +76,12 @@ local function debugLogPayload(event, payload)
         end
         local players = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(payload[1])
         WoWForeverRace:DebugPrint("  count=" .. #players)
-        for _, p in ipairs(players) do
+        for i = 1, math.min(#players, DEBUG_BATCH_NAMES) do
+            local p = players[i]
             WoWForeverRace:DebugPrint("  " .. p.name .. " lvl" .. p.level .. " [" .. tostring(p.classIndex) .. "]")
+        end
+        if #players > DEBUG_BATCH_NAMES then
+            WoWForeverRace:DebugPrint("  ... and " .. (#players - DEBUG_BATCH_NAMES) .. " more")
         end
     elseif type(payload) == "table" then
         WoWForeverRace:DebugPrintTable(payload)
@@ -362,16 +376,18 @@ end
 -- throttle, and goes on with the next one: the receiver gets nothing, or a long message
 -- with a hole in it. So the whole message goes out again a little later, a few times.
 -- result: the client's answer for the refused packet (Enum.SendAddonMessageResult), when known
-function WoWForeverRaceNetwork:RetrySend(event, object, channel, target, prio, attempt, result)
+-- delay: seconds until the message goes out again, Config.SendRetryDelay unless given
+function WoWForeverRaceNetwork:RetrySend(event, object, channel, target, prio, attempt, result, delay)
     local what = "Send failed: " .. event .. " -> " .. tostring(channel)
             .. (result ~= nil and " (client result " .. tostring(result) .. ")" or "")
     if attempt >= WoWForeverRace.Config.SendRetryMax then
         WoWForeverRace:DebugPrint(what .. ", giving up")
         return
     end
-    WoWForeverRace:DebugPrint(what .. ", sending it again")
+    delay = delay or WoWForeverRace.Config.SendRetryDelay
+    WoWForeverRace:DebugPrint(what .. ", sending it again in " .. delay .. "s")
     local _self = self
-    C_Timer.After(WoWForeverRace.Config.SendRetryDelay, function()
+    C_Timer.After(delay, function()
         _self:SendObject(event, object, channel, target, prio, attempt + 1)
     end)
 end
@@ -445,6 +461,14 @@ function WoWForeverRaceNetwork:OnMessageSent(refused, result, event, object, cha
     -- a lockdown began while the message was waiting for its turn: it waits that out
     if self:IsLockedDown() then
         self:HoldMessage(event, object, channel, target, prio)
+        return
+    end
+
+    -- the channel throttle: we sent too much there in a short time, so this message waits
+    -- longer and is not held against the distribution
+    if result == CHANNEL_THROTTLE then
+        self:RetrySend(event, object, channel, target, prio, attempt, result,
+                WoWForeverRace.Config.ChannelThrottleRetryDelay)
         return
     end
 

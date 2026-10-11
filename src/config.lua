@@ -171,7 +171,12 @@ local WoWForeverRaceConfig = {
 
     LaunchCheckInterval = 60,  -- how often an idle client checks whether the realm launch passed, see Tracker:InitLaunchTicker
 
-    GuildSyncInterval = 300,   -- periodic guild sync every 5 minutes
+    -- The guild is a discovery path, not a carrier: an addon message to GUILD scrolls the
+    -- chat frame of every guild member on this client although it is never shown, so
+    -- the guild only hears our hashes at login and about once per hour (+-25%, see
+    -- Sync:InitGuildTicker); the members who answer become buddies and get everything
+    -- else by whisper
+    GuildSyncInterval = 3600,  -- periodic guild sync about once per hour
     GuildSyncWait = 10,        -- seconds to collect guild offers before picking a partner
     GuildSyncLateOffer = 120,   -- a window that closed empty still takes the first offer arriving this much later
 
@@ -183,7 +188,7 @@ local WoWForeverRaceConfig = {
     GroupSyncInterval = 300,   -- group sync every 5 minutes while grouped (members already in sync don't answer)
     GroupSyncWait = 5,         -- seconds a group pinger collects pongs before sending to the group
 
-    DingPushDelay = 10,        -- seconds to batch dings before pushing to guild + buddies
+    DingPushDelay = 10,        -- seconds to batch dings before whispering them to the buddies
 
     -- Realm channel: a hidden player-made chat channel per faction (RaceChannelPrefix .. faction)
     -- that every addon user of the faction joins. While it carries traffic it is the main
@@ -207,6 +212,10 @@ local WoWForeverRaceConfig = {
     ChannelSyncWait = 10,      -- seconds to collect channel offers before picking a partner
     ChannelFollowUp = 300,     -- a full sync that brought us new players is followed by another one this soon
     ChannelOfferTarget = 5,    -- offers a channel sync should draw, however many players are on the channel
+    -- A ding batch longer than this goes to the channel in several messages: a long
+    -- message is many chat packets, and the client's channel throttle cuts it off
+    ChannelDingChunkSize = 50,  -- players per PINFOB to the channel
+    ChannelDingChunkDelay = 5,  -- seconds between two chunks
 
     -- Version check: every client tells its build in its channel sync, its guild sync and
     -- its buddy pings and pongs, see VersionCheck
@@ -227,6 +236,7 @@ local WoWForeverRaceConfig = {
     PacketTimeout = 30,        -- a packet ChatThrottleLib gave no answer for counts as handed over after this
     SendRetryDelay = 5,        -- a message with a packet the client refused is sent again after this
     SendRetryMax = 2,          -- and at most this often
+    ChannelThrottleRetryDelay = 15, -- after the client's channel throttle it waits this long instead
     SendRefusalLimit = 3,      -- refusals in a row on one distribution before nothing is sent again there
     -- A whisper that can't be decoded, or a history pull with chunks missing, is repaired by
     -- asking its sender again for what still differs (Sync:ScheduleRepair)
