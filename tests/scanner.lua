@@ -36,11 +36,26 @@ describe("Scanner", function()
         scanner:OnWhoListUpdate()
         ResetWhoQuery()
 
-        SetTime(time + 4)
+        SetTime(time + 9)
         scanner:TriggerScan()
         assert.is_nil(GetWhoQuery())
 
-        SetTime(time + 5)
+        SetTime(time + 10)
+        scanner:TriggerScan()
+        assert.equals("2-60", GetWhoQuery())
+    end)
+
+    it("waits as long as the scan cooldown option says", function()
+        db.profile.options.scanCooldown = 30
+        scanner:TriggerScan()
+        scanner:OnWhoListUpdate()
+        ResetWhoQuery()
+
+        SetTime(time + 29)
+        scanner:TriggerScan()
+        assert.is_nil(GetWhoQuery())
+
+        SetTime(time + 30)
         scanner:TriggerScan()
         assert.equals("2-60", GetWhoQuery())
     end)
@@ -100,13 +115,23 @@ describe("Scanner", function()
         scanner:OnWhoListUpdate()
         ResetWhoQuery()
 
-        SetTime(time + 60 + 9)
+        SetTime(time + 60 + 19)
         scanner:TriggerScan()
         assert.is_nil(GetWhoQuery())
 
-        SetTime(time + 60 + 10)
+        SetTime(time + 60 + 20)
         scanner:TriggerScan()
         assert.equals("2-60", GetWhoQuery())
+    end)
+
+    it("never slows the scans down past the slider's maximum", function()
+        db.profile.options.scanCooldown = 60
+        scanner:TriggerScan()
+        SetTime(time + 60)
+        _G.C_Timer.Advance(60)
+        assert.is_false(scanner.scanPending)
+
+        assert.equals(60, scanner:ScanCooldown())
     end)
 
     it("keeps the scan rate when the reply was lost to somebody else's /who", function()
@@ -116,7 +141,7 @@ describe("Scanner", function()
         _G.C_Timer.Advance(60)
 
         assert.is_false(scanner.scanPending)
-        assert.equals(5, scanner.scanCooldown)
+        assert.equals(10, scanner:ScanCooldown())
     end)
 
     it("ignores WHO_LIST_UPDATE events that do not belong to a scan", function()

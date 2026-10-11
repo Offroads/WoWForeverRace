@@ -138,8 +138,22 @@ function WoWForeverRace:RegisterOptions()
                         end,
                         get = function() return _self.DB.profile.options.keypressScanning end,
                     },
-                    debugMode = {
+                    scanCooldown = {
                         order = 33,
+                        name = "Seconds between /who scans",
+                        desc = "How long the addon waits between two automatic /who scans; a slower rate is kinder to the server",
+                        descStyle = "inline",
+                        width = "full",
+                        type = "range",
+                        step = 1,
+                        bigStep = 5,
+                        min = WoWForeverRace.Scanner.SCAN_COOLDOWN_MIN,
+                        max = WoWForeverRace.Scanner.SCAN_COOLDOWN_MAX,
+                        set = function(_, val) _self.DB.profile.options.scanCooldown = val end,
+                        get = function() return _self.DB.profile.options.scanCooldown end,
+                    },
+                    debugMode = {
+                        order = 34,
                         name = "Debug Mode",
                         desc = "Print debug output to chat and show the debug window (message stats, buddies)",
                         descStyle = "inline",

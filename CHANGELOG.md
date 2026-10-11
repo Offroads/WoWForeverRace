@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Automatic `/who` scans now run at most every 10 seconds instead of every 5,
+  and the new option "Seconds between /who scans" lets you pick anything from
+  5 to 60 seconds.
+- Chat announcements now default to the first player of each leaderboard only:
+  the global and class top N sliders start at 1, like the race one. Existing
+  installs keep the top N values they already have.
+
 ## v0.1.0-beta16 - 2026-10-10
 
 ### Changed
