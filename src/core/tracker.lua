@@ -493,7 +493,12 @@ function WoWForeverRaceTracker:ScheduleDingPush(changedPlayers, toGroup)
     else
         route[#route + 1] = "no realm channel"
     end
+    self:ScheduleBackupDingPush(changedPlayers, toGroup, route)
+end
 
+-- The backup paths for a ding: the group right away, a sample of the buddies by whisper
+-- DingPushDelay later (FlushDingPush). route: the debug line's parts so far.
+function WoWForeverRaceTracker:ScheduleBackupDingPush(changedPlayers, toGroup, route)
     -- to the group right away: a member would otherwise only hear of it on the next group sync
     if toGroup and GetNumGroupMembers() > 0 then
         local batchstr = WoWForeverRace.Serializer.SerializePlayerInfoBatch(changedPlayers)
@@ -636,6 +641,22 @@ function WoWForeverRaceTracker:FlushChannelDingPush()
             self:ScheduleDingPush(own)
         end
         return
+    end
+
+    -- In the channel, but it stopped working since these were queued (the echo timeout
+    -- passed): they go out there anyway, and what we spotted ourselves takes the backup
+    -- paths it skipped. Once: the flag does not follow a player into a later chunk.
+    if not self:ChannelWorking() then
+        local own = {}
+        for _, p in ipairs(players) do
+            if backupSkipped[p.name] then
+                own[#own + 1] = p
+            end
+        end
+        backupSkipped = {}
+        if #own > 0 then
+            self:ScheduleBackupDingPush(own, nil, {"realm channel (stopped working while they waited)"})
+        end
     end
 
     -- A long message is many chat packets, and the client's channel throttle cuts it off

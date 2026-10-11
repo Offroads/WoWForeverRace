@@ -444,6 +444,21 @@ describe("Tracker", function()
             assert.equals(1, #sentTo("RACE"))
         end)
 
+        it("takes the backup for our own waiting dings when the channel stopped working meanwhile", function()
+            db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            -- queued for the channel only; then our messages stop coming back before it goes out
+            channel:NoteSent()
+            time = time + config.ChannelEchoTimeout + 1
+
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+            assert.equals(1, #sentTo("RACE"))
+            _G.C_Timer.Advance(config.DingPushDelay)
+            local whispers = sentTo("WHISPER")
+            assert.equals(1, #whispers)
+            assert.equals("Bob Faraway", whispers[1].target)
+        end)
+
         it("stops the other pushes again once a message of ours came back", function()
             db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
             channel:NoteSent()
