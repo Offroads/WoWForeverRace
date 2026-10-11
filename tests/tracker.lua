@@ -459,6 +459,35 @@ describe("Tracker", function()
             assert.equals("Bob Faraway", whispers[1].target)
         end)
 
+        it("keeps the group among the backup paths of a waiting ding, unless it came from the group roster", function()
+            _G.SetGroupState(2, false, false)
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            tracker:OnSlashWhoResult({ playerInfo("Nubtwo", 6, WARRIORIDX), }, config.WhoResultSources.Group)
+            channel:NoteSent()
+            time = time + config.ChannelEchoTimeout + 1
+
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+            assert.equals(1, #sentTo("RACE"))
+            local group = sentTo("GROUP")
+            assert.equals(1, #group)
+            local players = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(group[1].payload[1])
+            assert.equals(1, #players)
+            assert.equals("Nubone", players[1].name)
+            -- no buddies: nothing else goes out
+            _G.C_Timer.Advance(config.DingPushDelay)
+            assert.equals(0, #sentTo("WHISPER"))
+        end)
+
+        it("keeps the group among the backup paths of a waiting ding when we left the channel", function()
+            _G.SetGroupState(2, false, false)
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            _G.SetChatChannels({"General"})
+
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+            assert.equals(1, #sentTo("GROUP"))
+            assert.equals(0, #sentTo("RACE"))
+        end)
+
         it("stops the other pushes again once a message of ours came back", function()
             db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
             channel:NoteSent()

@@ -47,7 +47,7 @@ function WoWForeverRaceTracker.new(Config, Core, DB, EventBus, Network, Channel)
     self.pendingDings = {}
     self.dingPushPending = false
     self.pendingChannelDings = {}  -- [name] = playerInfo: dings waiting to go to the realm channel
-    self.backupSkipped = {}        -- [name] = true: those of them we spotted ourselves and kept off the backup paths
+    self.backupSkipped = {}        -- [name] = {toGroup}: those of them we spotted ourselves and kept off the backup paths, and whether the group was among those
     self.channelDingPending = false
 
     self.launchPurged = false      -- true once PurgePreLaunchData ran after the realm launch
@@ -482,7 +482,7 @@ function WoWForeverRaceTracker:ScheduleDingPush(changedPlayers, toGroup)
     -- The realm channel is the path: in it, or about to be (the dings wait for the join,
     -- FlushChannelDingPush). Everything below is the backup for when it does not work.
     if self:ChannelWorking() then
-        self:ScheduleChannelDingPush(changedPlayers, true)
+        self:ScheduleChannelDingPush(changedPlayers, true, toGroup)
         WoWForeverRace:DebugPrint("Ding push: " .. #changedPlayers .. " player(s) -> realm channel only")
         return
     end
@@ -569,12 +569,14 @@ end
 -- sends first makes the others drop theirs (DropHeardDings). Right after joining the
 -- channel they also wait for the join sync (Channel:SettleDelay).
 -- backupSkipped: our own sightings that only go to the channel (ScheduleDingPush on a
--- working channel); should the channel be gone when they are due, they take the backup paths.
-function WoWForeverRaceTracker:ScheduleChannelDingPush(changedPlayers, backupSkipped)
+-- working channel); should the channel be gone when they are due, they take the backup
+-- paths, with the group among them when toGroup says so (not for a sighting from the
+-- group roster, which every member reads itself).
+function WoWForeverRaceTracker:ScheduleChannelDingPush(changedPlayers, backupSkipped, toGroup)
     for _, p in ipairs(changedPlayers) do
         self.pendingChannelDings[p.name] = p
         if backupSkipped then
-            self.backupSkipped[p.name] = true
+            self.backupSkipped[p.name] = {toGroup = toGroup == true}
         end
     end
 
@@ -627,18 +629,32 @@ function WoWForeverRaceTracker:FlushChannelDingPush()
     if #players == 0 then return end
     table.sort(players, function(a, b) return a.name < b.name end)
 
+    -- the players we spotted ourselves, split by whether their backup includes the group
+    local function ownSightings()
+        local withGroup, withoutGroup = {}, {}
+        for _, p in ipairs(players) do
+            local skipped = backupSkipped[p.name]
+            if skipped ~= nil then
+                if skipped.toGroup then
+                    withGroup[#withGroup + 1] = p
+                else
+                    withoutGroup[#withoutGroup + 1] = p
+                end
+            end
+        end
+        return withGroup, withoutGroup
+    end
+
     if not self:ChannelJoined() then
         -- We are not in the channel anymore (a /leave, a kick). What we spotted ourselves
         -- takes the backup paths after all, they were skipped for it; what we only
         -- passed on is dropped, like a client without the channel never passes on.
-        local own = {}
-        for _, p in ipairs(players) do
-            if backupSkipped[p.name] then
-                own[#own + 1] = p
-            end
+        local withGroup, withoutGroup = ownSightings()
+        if #withGroup > 0 then
+            self:ScheduleDingPush(withGroup, true)
         end
-        if #own > 0 then
-            self:ScheduleDingPush(own)
+        if #withoutGroup > 0 then
+            self:ScheduleDingPush(withoutGroup)
         end
         return
     end
@@ -647,15 +663,14 @@ function WoWForeverRaceTracker:FlushChannelDingPush()
     -- passed): they go out there anyway, and what we spotted ourselves takes the backup
     -- paths it skipped. Once: the flag does not follow a player into a later chunk.
     if not self:ChannelWorking() then
-        local own = {}
-        for _, p in ipairs(players) do
-            if backupSkipped[p.name] then
-                own[#own + 1] = p
-            end
-        end
+        local withGroup, withoutGroup = ownSightings()
         backupSkipped = {}
-        if #own > 0 then
-            self:ScheduleBackupDingPush(own, nil, {"realm channel (stopped working while they waited)"})
+        local route = {"realm channel (stopped working while they waited)"}
+        if #withGroup > 0 then
+            self:ScheduleBackupDingPush(withGroup, true, route)
+        end
+        if #withoutGroup > 0 then
+            self:ScheduleBackupDingPush(withoutGroup, nil, route)
         end
     end
 
@@ -669,8 +684,8 @@ function WoWForeverRaceTracker:FlushChannelDingPush()
         for i = chunkSize + 1, #players do
             local p = players[i]
             self.pendingChannelDings[p.name] = p
-            if backupSkipped[p.name] then
-                self.backupSkipped[p.name] = true
+            if backupSkipped[p.name] ~= nil then
+                self.backupSkipped[p.name] = backupSkipped[p.name]
             end
         end
         local chunk = {}
