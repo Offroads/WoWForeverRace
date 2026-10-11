@@ -158,8 +158,12 @@ function WoWForeverRaceNetwork:HandleAddonMessage(...)
             return
         end
 
-        -- ignore our own messages regardless of whether realm is included in sender
+        -- ignore our own messages regardless of whether realm is included in sender; one
+        -- that comes back to us on a chat channel shows that the channel carries what we send
         if senderName == self.Core:RealMe() then
+            if distribution == "CHANNEL" and self.Channel ~= nil then
+                self.Channel:NoteEcho()
+            end
             return
         end
 
@@ -455,6 +459,10 @@ function WoWForeverRaceNetwork:OnMessageSent(refused, result, event, object, cha
     self.refusals = self.refusals or {}
     if not refused then
         self.refusals[channel] = nil
+        -- the realm channel owes us an echo for it, see Channel:IsWorking
+        if channel == "RACE" and self.Channel ~= nil then
+            self.Channel:NoteSent()
+        end
         return
     end
 

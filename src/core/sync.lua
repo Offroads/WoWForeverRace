@@ -147,6 +147,7 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network, Channel)
 
     self.isReady = false  -- the login sync ran (InitSync): only then do we answer and start sync rounds
     self.loginSyncRequested = false  -- InitSync was called at least once (NETWORK_READY), see RerunLoginSync
+    self.backupLoginPending = false  -- the login guild sync waits for the realm channel to fail, see OnChannelState
     self.lastSync = nil
     self.guildOffers = nil  -- non-nil only during active guild sync window
     self.guildPHWanted = false  -- whether the open guild window should also pull player history
@@ -172,6 +173,7 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network, Channel)
     EventBus:RegisterCallback(self.Config.Network.Events.ChannelSync, self, self.OnNetChannelSync)
     EventBus:RegisterCallback(self.Config.Network.Events.ChannelOffer, self, self.OnNetChannelOffer)
     EventBus:RegisterCallback(self.Config.Events.ChannelJoined, self, self.OnChannelJoined)
+    EventBus:RegisterCallback(self.Config.Events.ChannelState, self, self.OnChannelState)
     EventBus:RegisterCallback(self.Config.Events.ChannelHeard, self, self.OnChannelHeard)
     EventBus:RegisterCallback(self.Config.Events.MessageGarbled, self, self.OnMessageGarbled)
     EventBus:RegisterCallback(self.Config.Events.DataReset, self, self.OnDataReset)
@@ -279,11 +281,12 @@ function WoWForeverRaceSync:ChannelJoined()
     return self.Channel ~= nil and self.Channel:IsJoined()
 end
 
--- While the realm channel carries traffic, the periodic guild, buddy and group sync
--- are only its backup: we stop starting them, but keep answering the players who do
--- (they are not in the channel, or hear nobody there).
-function WoWForeverRaceSync:ChannelLive()
-    return self.Channel ~= nil and self.Channel:IsLive()
+-- The realm channel is the sync path; the guild, buddy and group sync are its backup
+-- and only run while it is not working (Channel:IsWorking: we are not in it and no join
+-- is under way, or what we send there stops coming back). We keep answering the players
+-- who start them (they are not in the channel, or theirs does not work).
+function WoWForeverRaceSync:ChannelWorking()
+    return self.Channel ~= nil and self.Channel:IsWorking()
 end
 
 function WoWForeverRaceSync:InitSync()
@@ -308,14 +311,41 @@ function WoWForeverRaceSync:InitSync()
         return
     end
 
-    WoWForeverRace:DebugPrint("Login sync: " .. (IsInGuild() and "guild sync" or "not in a guild, no guild sync")
-            .. ", ready at once")
-    -- guild sync: announce to GUILD and pick a random partner among the offers after GuildSyncWait+1s
-    -- withPlayerHistory: we just logged in, so this is the once-per-login history pull
-    self:SendGuildSync(true)
+    if self:ChannelWorking() then
+        -- The realm channel is the sync path: its join sync brings the boards and the
+        -- history (DoChannelSync). The guild hears from us only when the channel fails.
+        WoWForeverRace:DebugPrint("Login sync: the realm channel is the sync path, "
+                .. "the guild sync waits for it to fail; ready at once")
+        self.backupLoginPending = true
+    else
+        WoWForeverRace:DebugPrint("Login sync: no realm channel, "
+                .. (IsInGuild() and "guild sync" or "not in a guild, no guild sync") .. ", ready at once")
+        -- guild sync: announce to GUILD and pick a random partner among the offers after GuildSyncWait+1s
+        -- withPlayerHistory: we just logged in, so this is the once-per-login history pull
+        self:SendGuildSync(true)
+    end
 
     -- ready right away: nothing above needs an answer first
     self:SetReady()
+end
+
+-- The realm channel started or stopped working (Channel:PublishState). When it stops,
+-- the backup flows start right away: the login guild sync that waited for this (with the
+-- history pull, unless the channel brought it already), the buddy pings and the group
+-- sync. When it works again, the flows simply stop starting (they check each time).
+function WoWForeverRaceSync:OnChannelState(working)
+    if working then return end
+    if not self.DB.profile.options.networking then return end
+    if self.DB.factionrealm.finished then return end
+    -- not ready yet: InitSync sees the channel down and runs the backup login sync itself
+    if not self.isReady then return end
+
+    if self.backupLoginPending then
+        self.backupLoginPending = false
+        self:SendGuildSync(not self.historyPulled)
+    end
+    self:SendBuddyPings()
+    self:ScheduleGroupSync()
 end
 
 function WoWForeverRaceSync:SelectPartnerFromList(offers)
@@ -451,8 +481,8 @@ function WoWForeverRaceSync:OnNetSyncPayload(payload, sender)
 end
 
 -- Periodic guild sync: re-runs the guild sync flow about every GuildSyncInterval seconds.
--- Only once we're ready (the login sync ran), and not while the realm channel carries
--- traffic. An addon message to GUILD scrolls every member's chat frame on this client, so
+-- Only once we're ready (the login sync ran), and not while the realm channel works.
+-- An addon message to GUILD scrolls every member's chat frame on this client, so
 -- the guild hears from us rarely: the round is there to meet the guild members who run
 -- the addon (they become buddies, see OnNetGuildSync), the data travels by whisper.
 -- Jittered, so members who logged in together don't all announce in the same minute.
@@ -460,7 +490,7 @@ function WoWForeverRaceSync:InitGuildTicker()
     local interval = self.Config.GuildSyncInterval
     local _self = self
     C_Timer.After(interval * (0.75 + 0.5 * math.random()), function()
-        if _self.isReady and not _self:ChannelLive() then
+        if _self.isReady and not _self:ChannelWorking() then
             _self:SendGuildSync()
         end
         _self:InitGuildTicker()
@@ -592,12 +622,12 @@ function WoWForeverRaceSync:AddBuddy(name, quiet)
 end
 
 -- Send BPING to up to BuddyPingBatchSize buddies (random sample if more).
--- Not while the realm channel carries traffic.
+-- Not while the realm channel works (Channel:IsWorking).
 function WoWForeverRaceSync:SendBuddyPings()
     if not self.isReady then return end
     if self.DB.factionrealm.finished then return end
     if not self.DB.profile.options.networking then return end
-    if self:ChannelLive() then return end
+    if self:ChannelWorking() then return end
 
     -- group members get the group ping (ScheduleGroupSync, same gates) instead
     local inGroup = self.Core:GroupMemberNames()
@@ -857,13 +887,13 @@ end
 
 -- Sends BPING to GROUP so all members can exchange hashes and push any missing
 -- leaderboards. Debounced to avoid firing multiple times in quick succession.
--- Not while the realm channel carries traffic.
+-- Not while the realm channel works (Channel:IsWorking).
 function WoWForeverRaceSync:ScheduleGroupSync()
     if not self.isReady then return end
     if not self.DB.profile.options.networking then return end
     if self.DB.factionrealm.finished then return end
     if GetNumGroupMembers() == 0 then return end
-    if self:ChannelLive() then return end
+    if self:ChannelWorking() then return end
 
     -- debounce: multiple roster events can fire in quick succession
     if self.groupSyncPending then return end

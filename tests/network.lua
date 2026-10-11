@@ -147,6 +147,29 @@ describe("Network", function()
                     WoWForeverRace.Config.Network.Prefix, match.is_string(), "CHANNEL", "2", "BULK", match.is_function())
         end)
 
+        it("notes what we sent to the realm channel and our own message coming back from it", function()
+            channel:TryJoin()
+            assert.is_nil(channel.unansweredSince)
+
+            -- the client took a message to the realm channel (as the send callback reports it)
+            network:OnMessageSent(false, nil, NetworkEvents.ChannelSync, {1}, "RACE", nil, "BULK", 0)
+            assert.is_not_nil(channel.unansweredSince)
+            -- a whisper owes no echo, and neither does a refused packet
+            network:OnMessageSent(false, nil, NetworkEvents.BuddyPing, {1}, "WHISPER", "Dude", "BULK", 0)
+            channel.unansweredSince = nil
+            network:OnMessageSent(true, 4, NetworkEvents.ChannelSync, {1}, "RACE", nil, "BULK", 0)
+            assert.is_nil(channel.unansweredSince)
+            network:OnMessageSent(false, nil, NetworkEvents.ChannelSync, {1}, "RACE", nil, "BULK", 0)
+
+            -- another player's channel message is not our echo, ours is
+            receive({NetworkEvents.ChannelSync, {1}, "Alliance"}, "CHANNEL")
+            assert.is_nil(channel.lastEchoAt)
+            receive({NetworkEvents.ChannelSync, {1}, "Alliance"}, "CHANNEL", "Nub")
+            assert.is_not_nil(channel.lastEchoAt)
+            assert.is_nil(channel.unansweredSince)
+            assert.is_true(channel:IsWorking())
+        end)
+
         it("notes who was heard on a chat channel", function()
             channel:TryJoin()
             assert.is_false(channel:IsLive())

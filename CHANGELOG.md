@@ -18,6 +18,16 @@
   sync round every 5 minutes went through the guild.
 - The debug window lists at most 20 players of a received or sent batch, then
   how many more it held.
+- The realm channel is now the one place the addon syncs through, from login
+  on. The guild announce, the buddy whispers and the group sync only run when
+  the channel does not work: when the addon could not join it, or when its own
+  channel messages stop coming back for five minutes. They start the moment
+  that happens and stop again when the channel is back. Before, they ran next
+  to the channel until another addon user was heard on it, which on a quiet
+  realm or with the beta's chat lag meant most of the time.
+- Level-ups spotted in the seconds between login and the channel join now wait
+  for the channel instead of going out by whisper.
+- The realm channel is closed to players without the addon.
 
 ### Fixed
 - Level-ups spotted in the first minute after joining the realm channel now

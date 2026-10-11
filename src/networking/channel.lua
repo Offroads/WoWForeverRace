@@ -25,11 +25,16 @@ Its name is public, so anybody can lock it with a password. A channel that asks 
 is given up for the same name with the next number (WFRaceHorde2, ...). The players who
 were in it before the password stay in, so every message carries the number of its
 sender's channel (see Network) and the highest number wins: whoever hears a higher one
-moves there (MoveTo), and the realm ends up on one channel again. A ban, a kick or a
-/leave just leaves us out, and the sync flows from before the channel take over.
+moves there (MoveTo), and the realm ends up on one channel again. It is joined with a
+fixed password (Config.RaceChannelPassword), so nobody wanders in by hand.
 
-It also keeps track of who was heard on the channel: that tells whether the channel
-carries traffic at all (IsLive) and how many players are on it (Size).
+The channel is the sync path from login on: the guild, group and buddy flows only run
+while it is not working (IsWorking), and they start the moment it stops (ChannelState
+event). Not working means we are not in it and no join is under way (a ban, a kick, a
+/leave, every name locked, the joins unanswered), or we are in it but what we send there
+stopped coming back to us (NoteSent / NoteEcho, ChannelEchoTimeout). Hearing another
+player on it counts as working too (NoteSender); that also tells how many players are
+on it (Size) and whether it carries traffic of others at all (IsLive).
 ]]--
 ---@class WoWForeverRaceChannel
 ---@field Config WoWForeverRaceConfig
@@ -63,6 +68,9 @@ function WoWForeverRaceChannel.new(Config, Core, DB, EventBus)
     self.settleAt = nil       -- from when our own dings may go to the channel, see SettleDelay
     self.senders = {}         -- [name] = when we last heard that player on the channel
     self.lastHeardAt = nil
+    self.lastEchoAt = nil         -- when one of our own messages last came back from the channel
+    self.unansweredSince = nil    -- when the oldest of our sends that no echo answered went out
+    self.wasWorking = nil         -- the state last published, see PublishState
 
     self.Thread = CreateFrame("Frame")
     self.Thread:Hide()
@@ -122,20 +130,65 @@ function WoWForeverRaceChannel:IsJoining()
     return self.status == IDLE and self.joinScheduled and self:Wanted()
 end
 
--- Whether the channel carries traffic: we are in it and heard another player on it
--- lately (see NoteSender). Only then does it replace the other sync flows; an empty
--- or broken channel leaves them running.
+-- Whether the channel carries traffic of others: we are in it and heard another player
+-- on it lately (see NoteSender).
 function WoWForeverRaceChannel:IsLive()
     return self:IsJoined() and self.lastHeardAt ~= nil
             and self.Core:Now() - self.lastHeardAt <= self.Config.ChannelLiveTTL
 end
 
--- Another player was heard on the channel, or answered what we sent there.
+-- Whether the channel is our sync path right now: we are in it and what we send there
+-- comes back (not IsDead), or a join is under way and will tell. Only while this is
+-- false do the guild, group and buddy flows run (Sync, Tracker).
+function WoWForeverRaceChannel:IsWorking()
+    if self.status == JOINED then
+        return self:Number() ~= nil and not self:IsDead()
+    end
+    return self:IsJoining()
+end
+
+-- We sent to the channel, and neither an echo of our own message nor another player
+-- came back for ChannelEchoTimeout: the channel does not deliver.
+function WoWForeverRaceChannel:IsDead()
+    return self.unansweredSince ~= nil
+            and self.Core:Now() - self.unansweredSince > self.Config.ChannelEchoTimeout
+end
+
+-- A message of ours went to the channel (Network:OnMessageSent): from the first one
+-- that no echo answered yet, the clock runs.
+function WoWForeverRaceChannel:NoteSent()
+    if self.unansweredSince == nil then
+        self.unansweredSince = self.Core:Now()
+    end
+end
+
+-- One of our own messages came back from the channel (Network:HandleAddonMessage).
+function WoWForeverRaceChannel:NoteEcho()
+    self.lastEchoAt = self.Core:Now()
+    self.unansweredSince = nil
+    self:PublishState()
+end
+
+-- Another player was heard on the channel, or answered what we sent there. That also
+-- shows the channel delivers, like an echo of our own.
 function WoWForeverRaceChannel:NoteSender(name)
     if type(name) ~= "string" then return end
     local now = self.Core:Now()
     self.senders[name] = now
     self.lastHeardAt = now
+    self.unansweredSince = nil
+    self:PublishState()
+end
+
+-- Tells the others when the channel starts or stops working (ChannelState, with the new
+-- state), once per change. Called wherever the state can change, and from a ticker for
+-- the echo timeout, which nothing else notices.
+function WoWForeverRaceChannel:PublishState()
+    local working = self:IsWorking()
+    if working == self.wasWorking then return end
+    self.wasWorking = working
+    WoWForeverRace:DebugPrint("Channel: " .. (working and "working" or "not working: the guild, buddy and group sync take over"))
+    self.EventBus:PublishEvent(self.Config.Events.ChannelState, working)
 end
 
 -- The number of players heard on the channel within a sync interval. Everybody
@@ -175,6 +228,11 @@ end
 -- (General, Trade, ...) can take a low number and push those around.
 function WoWForeverRaceChannel:Init()
     self:ScheduleJoin(self.Config.ChannelJoinDelay)
+    -- the echo timeout passes without an event: look every so often
+    local _self = self
+    C_Timer.NewTicker(self.Config.ChannelJoinRetry, function()
+        _self:PublishState()
+    end)
 end
 
 function WoWForeverRaceChannel:ScheduleJoin(delay)
@@ -211,13 +269,15 @@ function WoWForeverRaceChannel:TryJoin()
     if self.attempts >= self.Config.ChannelJoinAttempts then
         WoWForeverRace:DebugPrint("Channel: could not join " .. self:Name())
         self.status = FAILED
+        self:PublishState()
         return
     end
 
     self.attempts = self.attempts + 1
     WoWForeverRace:DebugPrint("Channel: joining " .. self:Name())
-    -- no chat frame argument: the channel is not added to any chat window
-    JoinTemporaryChannel(self:Name())
+    -- with the fixed password, and no chat frame argument: the channel is not added to
+    -- any chat window
+    JoinTemporaryChannel(self:Name(), self.Config.RaceChannelPassword)
     -- the join is confirmed by a channel notice, or by the next check finding the number
     self:ScheduleJoin(retry)
 end
@@ -232,8 +292,11 @@ function WoWForeverRaceChannel:OnJoined()
     if not moved then
         self.settleAt = self.joinedAt + self.Config.ChannelSettleTime
     end
+    -- a fresh start for the echo clock: what went to the channel we left is not owed
+    self.unansweredSince = nil
     WoWForeverRace:DebugPrint("Channel: joined " .. self:Name() .. " as channel " .. tostring(self:Number()))
     self.EventBus:PublishEvent(self.Config.Events.ChannelJoined, moved)
+    self:PublishState()
 end
 
 -- The channel we are joining asks for a password: give it up for the next name.
@@ -242,6 +305,7 @@ function WoWForeverRaceChannel:OnLocked()
     if self.index >= self.Config.ChannelMaxIndex then
         WoWForeverRace:DebugPrint("Channel: " .. self:Name() .. " asks for a password, no name left to try")
         self.status = REFUSED
+        self:PublishState()
         return
     end
 
@@ -327,6 +391,7 @@ function WoWForeverRaceChannel:OnChannelNotice(noticeType, _, _, _, _, _, _, _, 
         if self.status == JOINED then
             WoWForeverRace:DebugPrint("Channel: left " .. self:Name())
             self.status = LEFT
+            self:PublishState()
         end
     elseif noticeType == "WRONG_PASSWORD" then
         self:OnLocked()
@@ -335,6 +400,7 @@ function WoWForeverRaceChannel:OnChannelNotice(noticeType, _, _, _, _, _, _, _, 
         if self.status == IDLE then
             WoWForeverRace:DebugPrint("Channel: " .. self:Name() .. " banned us")
             self.status = REFUSED
+            self:PublishState()
         end
     end
 end
@@ -358,4 +424,5 @@ function WoWForeverRaceChannel:OnNetworkingChanged()
             LeaveChannelByName(self:Name())
         end
     end
+    self:PublishState()
 end

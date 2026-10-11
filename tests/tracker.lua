@@ -381,7 +381,7 @@ describe("Tracker", function()
             _G.SetChatChannels(nil)
         end)
 
-        it("sends a ding to the channel after a short delay, next to the backup while nobody is heard", function()
+        it("sends a ding to the channel after a short delay, and nowhere else while the channel works", function()
             db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
             assert.equals(0, #sent)
@@ -392,14 +392,33 @@ describe("Tracker", function()
             assert.equals("Nubone", players[1].name)
             assert.equals(5, players[1].level)
 
-            -- the backup: the buddies hear it after the usual delay
+            -- no backup: nobody was heard yet, but the channel is the path until it fails
             _G.C_Timer.Advance(config.DingPushDelay)
-            local whispers = sentTo("WHISPER")
-            assert.equals(1, #whispers)
-            assert.equals("Bob Faraway", whispers[1].target)
+            assert.equals(0, #sentTo("WHISPER"))
         end)
 
-        it("only sends to the channel while it is live", function()
+        it("holds a ding for the channel while the join is under way", function()
+            db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
+            _G.LeaveChannelByName(RACE_CHANNEL)
+            channel.status = "idle"
+            channel:ScheduleJoin(config.ChannelJoinRetry)
+            assert.is_false(channel:IsJoined())
+            assert.is_true(channel:IsWorking())
+
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            _G.C_Timer.Advance(config.DingPushDelay)
+            assert.equals(0, #sent)
+
+            -- the join went through: the ding goes to the channel once it settled
+            _G.SetChatChannels({"General", RACE_CHANNEL})
+            _G.C_Timer.Advance(config.ChannelJoinRetry)
+            assert.is_true(channel:IsJoined())
+            advance(config.ChannelSettleTime + config.ChannelDingDelayMax)
+            assert.equals(1, #sentTo("RACE"))
+            assert.equals(0, #sentTo("WHISPER"))
+        end)
+
+        it("only sends to the channel while it works", function()
             _G.SetIsInGuild(true)
             _G.SetGroupState(2, false, false)
             db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
@@ -412,15 +431,30 @@ describe("Tracker", function()
             assert.equals("Nubone", channelBatch()[1].name)
         end)
 
-        it("falls back to the other pushes when the channel went quiet", function()
+        it("falls back to the other pushes when our messages stop coming back, next to the channel", function()
             db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
-            channel:NoteSender("Dude")
-            time = time + config.ChannelLiveTTL + 1
+            channel:NoteSent()
+            time = time + config.ChannelEchoTimeout + 1
+            assert.is_false(channel:IsWorking())
 
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
             _G.C_Timer.Advance(config.DingPushDelay)
 
             assert.equals(1, #sentTo("WHISPER"))
+            assert.equals(1, #sentTo("RACE"))
+        end)
+
+        it("stops the other pushes again once a message of ours came back", function()
+            db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
+            channel:NoteSent()
+            time = time + config.ChannelEchoTimeout + 1
+            channel:NoteEcho()
+
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            _G.C_Timer.Advance(config.DingPushDelay)
+
+            assert.equals(0, #sentTo("WHISPER"))
+            assert.equals(1, #sentTo("RACE"))
         end)
 
         it("waits a random time within the delay range", function()
@@ -741,8 +775,10 @@ describe("Tracker", function()
         end)
 
         it("does not repeat the backup for a ding that already took it", function()
-            -- joined, but nobody heard: the ding takes the backup paths as usual
+            -- joined, but our messages don't come back: the ding takes the backup paths as usual
             db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
+            channel:NoteSent()
+            time = time + config.ChannelEchoTimeout + 1
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
 
             _G.SetChatChannels({"General"})

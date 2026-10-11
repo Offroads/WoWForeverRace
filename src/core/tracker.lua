@@ -384,10 +384,11 @@ function WoWForeverRaceTracker:ChannelJoined()
     return self.Channel ~= nil and self.Channel:IsJoined()
 end
 
--- While the realm channel carries traffic it reaches every addon user of our faction,
--- and the guild, group and buddy pushes are only its backup.
-function WoWForeverRaceTracker:ChannelLive()
-    return self.Channel ~= nil and self.Channel:IsLive()
+-- The realm channel reaches every addon user of our faction with one message. While it
+-- works (or a join is under way) it is the only path for a ding; the group and buddy
+-- pushes are its backup, see Channel:IsWorking.
+function WoWForeverRaceTracker:ChannelWorking()
+    return self.Channel ~= nil and self.Channel:IsWorking()
 end
 
 function WoWForeverRaceTracker:OnScanFinished(endofrace)
@@ -478,16 +479,17 @@ function WoWForeverRaceTracker:ScheduleDingPush(changedPlayers, toGroup)
     if self.DB.factionrealm.finished then return end
 
     local route = {}
-    -- the realm channel reaches every addon user of our faction with one message;
-    -- everything below is the backup for when nobody is heard there
+    -- The realm channel is the path: in it, or about to be (the dings wait for the join,
+    -- FlushChannelDingPush). Everything below is the backup for when it does not work.
+    if self:ChannelWorking() then
+        self:ScheduleChannelDingPush(changedPlayers, true)
+        WoWForeverRace:DebugPrint("Ding push: " .. #changedPlayers .. " player(s) -> realm channel only")
+        return
+    end
     if self:ChannelJoined() then
-        local live = self:ChannelLive()
-        self:ScheduleChannelDingPush(changedPlayers, live)
-        if live then
-            WoWForeverRace:DebugPrint("Ding push: " .. #changedPlayers .. " player(s) -> realm channel only (live)")
-            return
-        end
-        route[#route + 1] = "realm channel (not live)"
+        -- in it, but what we send there does not come back: try it anyway, next to the backup
+        self:ScheduleChannelDingPush(changedPlayers, false)
+        route[#route + 1] = "realm channel (not working)"
     else
         route[#route + 1] = "no realm channel"
     end
@@ -562,7 +564,7 @@ end
 -- sends first makes the others drop theirs (DropHeardDings). Right after joining the
 -- channel they also wait for the join sync (Channel:SettleDelay).
 -- backupSkipped: our own sightings that only go to the channel (ScheduleDingPush on a
--- live channel); should the channel be gone when they are due, they take the backup paths.
+-- working channel); should the channel be gone when they are due, they take the backup paths.
 function WoWForeverRaceTracker:ScheduleChannelDingPush(changedPlayers, backupSkipped)
     for _, p in ipairs(changedPlayers) do
         self.pendingChannelDings[p.name] = p

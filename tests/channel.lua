@@ -56,13 +56,16 @@ describe("Channel", function()
     end)
 
     describe("joining", function()
-        it("waits for a while after login, then joins without a chat frame", function()
+        it("waits for a while after login, then joins with the fixed password and without a chat frame", function()
             channel:Init()
             advance(Config.ChannelJoinDelay - 1)
             assert.same({}, _G.GetChannelJoinRequests())
+            -- a join under way counts as working: the backup flows wait for its outcome
+            assert.is_true(channel:IsWorking())
 
             advance(1)
             assert.same({NAME}, _G.GetChannelJoinRequests())
+            assert.equals(Config.RaceChannelPassword, _G.GetLastChannelJoinPassword())
             assert.is_false(channel:IsJoined())
 
             -- the next check finds the channel number
@@ -479,6 +482,62 @@ describe("Channel", function()
             channel:NoteSender(nil)
             assert.is_false(channel:IsLive())
             assert.equals(0, channel:Size())
+        end)
+
+        it("works from the join on, before anybody was heard", function()
+            assert.is_true(channel:IsWorking())
+        end)
+
+        it("stops working when our messages do not come back, and works again when one does", function()
+            channel:NoteSent()
+            advance(Config.ChannelEchoTimeout)
+            assert.is_true(channel:IsWorking())
+            advance(1)
+            assert.is_false(channel:IsWorking())
+
+            channel:NoteEcho()
+            assert.is_true(channel:IsWorking())
+        end)
+
+        it("takes another player heard as proof that it works", function()
+            channel:NoteSent()
+            advance(Config.ChannelEchoTimeout + 1)
+            channel:NoteSender("Dude")
+            assert.is_true(channel:IsWorking())
+        end)
+
+        it("counts the wait from the oldest send an echo has not answered", function()
+            channel:NoteSent()
+            advance(100)
+            channel:NoteSent()
+            advance(100)
+            channel:NoteEcho()
+            advance(Config.ChannelEchoTimeout)
+            assert.is_true(channel:IsWorking())
+
+            channel:NoteSent()
+            advance(Config.ChannelEchoTimeout + 1)
+            assert.is_false(channel:IsWorking())
+        end)
+
+        it("does not work after leaving the channel", function()
+            _G.LeaveChannelByName(NAME)
+            assert.is_false(channel:IsWorking())
+        end)
+
+        it("tells the others once when it stops working and once when it works again", function()
+            local states = {}
+            eventbus:RegisterCallback(Config.Events.ChannelState, {}, function(_, working)
+                states[#states + 1] = working
+            end)
+            channel:Init()
+            channel:NoteSent()
+            advance(Config.ChannelEchoTimeout + Config.ChannelJoinRetry + 1)
+            assert.same({false}, states)
+
+            channel:NoteEcho()
+            channel:NoteEcho()
+            assert.same({false, true}, states)
         end)
     end)
 end)
