@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.0.0 - 2026-10-12
 
 ### Changed
 - Automatic `/who` scans now run at most every 10 seconds instead of every 5,
