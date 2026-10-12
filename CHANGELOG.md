@@ -27,7 +27,6 @@
   realm or with the beta's chat lag meant most of the time.
 - Level-ups spotted in the seconds between login and the channel join now wait
   for the channel instead of going out by whisper.
-- The realm channel is closed to players without the addon.
 
 ### Fixed
 - Level-ups spotted in the first minute after joining the realm channel now
