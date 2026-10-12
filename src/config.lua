@@ -171,7 +171,12 @@ local WoWForeverRaceConfig = {
 
     LaunchCheckInterval = 60,  -- how often an idle client checks whether the realm launch passed, see Tracker:InitLaunchTicker
 
-    GuildSyncInterval = 300,   -- periodic guild sync every 5 minutes
+    -- The guild is a discovery path, not a carrier: an addon message to GUILD scrolls the
+    -- chat frame of every guild member on this client although it is never shown, so
+    -- the guild only hears our hashes at login and about once per hour (+-25%, see
+    -- Sync:InitGuildTicker); the members who answer become buddies and get everything
+    -- else by whisper
+    GuildSyncInterval = 3600,  -- periodic guild sync about once per hour
     GuildSyncWait = 10,        -- seconds to collect guild offers before picking a partner
     GuildSyncLateOffer = 120,   -- a window that closed empty still takes the first offer arriving this much later
 
@@ -183,12 +188,18 @@ local WoWForeverRaceConfig = {
     GroupSyncInterval = 300,   -- group sync every 5 minutes while grouped (members already in sync don't answer)
     GroupSyncWait = 5,         -- seconds a group pinger collects pongs before sending to the group
 
-    DingPushDelay = 10,        -- seconds to batch dings before pushing to guild + buddies
+    DingPushDelay = 10,        -- seconds to batch dings before whispering them to the buddies
 
     -- Realm channel: a hidden player-made chat channel per faction (RaceChannelPrefix .. faction)
-    -- that every addon user of the faction joins. While it carries traffic it is the main
-    -- path, and guild, group and buddy sync only run as its backup, see Channel:IsLive.
+    -- that every addon user of the faction joins. It is the sync path from login on; the
+    -- guild, group and buddy sync only run while it is not working (we are not in it, or
+    -- what we send there stops coming back), see Channel:IsWorking.
     RaceChannelPrefix = "WFRace",
+    -- Joined with a fixed password, so nobody wanders in by hand. A channel an outsider
+    -- made first has no password (we join it anyway) or another one (given up like any
+    -- locked channel, see ChannelMaxIndex). Older clients join without the password: the
+    -- server asks them for one and they move on to the next name, see Channel:OnLocked
+    RaceChannelPassword = "wfr4ce2026",
     -- A channel that asks for a password is given up for the same name with the next number
     -- (WFRaceHorde2, ...), and the highest number any player is on wins, see Channel:MoveTo
     ChannelMaxIndex = 5,       -- the last number tried
@@ -200,6 +211,11 @@ local WoWForeverRaceConfig = {
     -- the channel counts as live this long after another player was heard on it: longer than
     -- the longest gap between two full syncs of one player, so two players keep it live
     ChannelLiveTTL = 4800,
+    -- Our own channel messages come back to us. When none did for this long after a send
+    -- (and nobody else was heard either), the channel is not working (Channel:IsWorking)
+    -- and the guild, buddy and group sync take over until one comes back. The beta's
+    -- whisper and channel lag was about 155 s, see the chat latency note in AGENTS.md
+    ChannelEchoTimeout = 300,
     ChannelSettleTime = 60,    -- after joining, our own dings wait this long for the join sync (they may be old news)
     ChannelDingDelayMin = 2,   -- a ding goes to the channel after a random delay in this range: of the
     ChannelDingDelayMax = 6,   -- clients that spot the same ding, the first to send makes the others drop theirs
@@ -207,6 +223,10 @@ local WoWForeverRaceConfig = {
     ChannelSyncWait = 10,      -- seconds to collect channel offers before picking a partner
     ChannelFollowUp = 300,     -- a full sync that brought us new players is followed by another one this soon
     ChannelOfferTarget = 5,    -- offers a channel sync should draw, however many players are on the channel
+    -- A ding batch longer than this goes to the channel in several messages: a long
+    -- message is many chat packets, and the client's channel throttle cuts it off
+    ChannelDingChunkSize = 50,  -- players per PINFOB to the channel
+    ChannelDingChunkDelay = 5,  -- seconds between two chunks
 
     -- Version check: every client tells its build in its channel sync, its guild sync and
     -- its buddy pings and pongs, see VersionCheck
@@ -227,6 +247,7 @@ local WoWForeverRaceConfig = {
     PacketTimeout = 30,        -- a packet ChatThrottleLib gave no answer for counts as handed over after this
     SendRetryDelay = 5,        -- a message with a packet the client refused is sent again after this
     SendRetryMax = 2,          -- and at most this often
+    ChannelThrottleRetryDelay = 15, -- after the client's channel throttle it waits this long instead
     SendRefusalLimit = 3,      -- refusals in a row on one distribution before nothing is sent again there
     -- A whisper that can't be decoded, or a history pull with chunks missing, is repaired by
     -- asking its sender again for what still differs (Sync:ScheduleRepair)
@@ -261,6 +282,7 @@ local WoWForeverRaceConfig = {
     Events = {
         NetworkReady = "NETWORK_READY",
         ChannelJoined = "CHANNEL_JOINED",
+        ChannelState = "CHANNEL_STATE",   -- (working): the realm channel started or stopped working, see Channel:IsWorking
         -- ChannelHeard(sender): a player of our faction sent something on the realm channel
         ChannelHeard = "CHANNEL_HEARD",
         -- MessageGarbled(sender, distribution): a message of that player could not be decoded

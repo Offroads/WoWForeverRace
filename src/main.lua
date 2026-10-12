@@ -96,8 +96,10 @@ function WoWForeverRace:OnEnable()
     self.Core:InitMe(player, realm)
     self:DebugPrint("me: " .. self.Core:RealMe())
 
-    self.Network:Init()
+    -- the channel first: NETWORK_READY runs the login sync, which leaves the guild and
+    -- the buddies alone while a channel join is under way (Sync:InitSync)
     self.Channel:Init()
+    self.Network:Init()
 
     self.Tracker:InitLaunchTicker()
     self.Sync:InitGuildTicker()

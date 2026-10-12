@@ -245,24 +245,24 @@ describe("Tracker", function()
             assert.equals(0, #db.factionrealm.leaderboard[0].players)
         end)
 
-        it("should broadcast to network OnSlashWhoResult", function()
+        it("whispers a scan result to the buddies after the delay, never to the guild", function()
             local networkSpy = spy.on(network, "SendObject")
+            _G.SetIsInGuild(true)
+            db.factionrealm.buddies = {["Dude"] = {lastSeen = 0}}
 
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
             -- nothing right away: the push is batched (DingPushDelay)
             assert.spy(networkSpy).was_not_called()
 
-            -- guild push is batched behind DingPushDelay
             _G.C_Timer.Advance(config.DingPushDelay)
             assert.spy(networkSpy).was_called_with(match.is_ref(network), config.Network.Events.PlayerInfoBatch,
-                    match.is_table(), "GUILD")
+                    match.is_table(), "WHISPER", "Dude")
             assert.spy(networkSpy).called_at_most(1)
         end)
 
-        it("should not broadcast to the guild when not in guild", function()
+        it("sends a scan result nowhere without buddies, in a guild or not", function()
             local networkSpy = spy.on(network, "SendObject")
-
-            _G.SetIsInGuild(false)
+            _G.SetIsInGuild(true)
 
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
             _G.C_Timer.Advance(config.DingPushDelay)
@@ -381,7 +381,7 @@ describe("Tracker", function()
             _G.SetChatChannels(nil)
         end)
 
-        it("sends a ding to the channel after a short delay, next to the backup while nobody is heard", function()
+        it("sends a ding to the channel after a short delay, and nowhere else while the channel works", function()
             db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
             assert.equals(0, #sent)
@@ -392,14 +392,33 @@ describe("Tracker", function()
             assert.equals("Nubone", players[1].name)
             assert.equals(5, players[1].level)
 
-            -- the backup: the buddies hear it after the usual delay
+            -- no backup: nobody was heard yet, but the channel is the path until it fails
             _G.C_Timer.Advance(config.DingPushDelay)
-            local whispers = sentTo("WHISPER")
-            assert.equals(1, #whispers)
-            assert.equals("Bob Faraway", whispers[1].target)
+            assert.equals(0, #sentTo("WHISPER"))
         end)
 
-        it("only sends to the channel while it is live", function()
+        it("holds a ding for the channel while the join is under way", function()
+            db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
+            _G.LeaveChannelByName(RACE_CHANNEL)
+            channel.status = "idle"
+            channel:ScheduleJoin(config.ChannelJoinRetry)
+            assert.is_false(channel:IsJoined())
+            assert.is_true(channel:IsWorking())
+
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            _G.C_Timer.Advance(config.DingPushDelay)
+            assert.equals(0, #sent)
+
+            -- the join went through: the ding goes to the channel once it settled
+            _G.SetChatChannels({"General", RACE_CHANNEL})
+            _G.C_Timer.Advance(config.ChannelJoinRetry)
+            assert.is_true(channel:IsJoined())
+            advance(config.ChannelSettleTime + config.ChannelDingDelayMax)
+            assert.equals(1, #sentTo("RACE"))
+            assert.equals(0, #sentTo("WHISPER"))
+        end)
+
+        it("only sends to the channel while it works", function()
             _G.SetIsInGuild(true)
             _G.SetGroupState(2, false, false)
             db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
@@ -412,15 +431,74 @@ describe("Tracker", function()
             assert.equals("Nubone", channelBatch()[1].name)
         end)
 
-        it("falls back to the other pushes when the channel went quiet", function()
+        it("falls back to the other pushes when our messages stop coming back, next to the channel", function()
             db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
-            channel:NoteSender("Dude")
-            time = time + config.ChannelLiveTTL + 1
+            channel:NoteSent()
+            time = time + config.ChannelEchoTimeout + 1
+            assert.is_false(channel:IsWorking())
 
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
             _G.C_Timer.Advance(config.DingPushDelay)
 
             assert.equals(1, #sentTo("WHISPER"))
+            assert.equals(1, #sentTo("RACE"))
+        end)
+
+        it("takes the backup for our own waiting dings when the channel stopped working meanwhile", function()
+            db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            -- queued for the channel only; then our messages stop coming back before it goes out
+            channel:NoteSent()
+            time = time + config.ChannelEchoTimeout + 1
+
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+            assert.equals(1, #sentTo("RACE"))
+            _G.C_Timer.Advance(config.DingPushDelay)
+            local whispers = sentTo("WHISPER")
+            assert.equals(1, #whispers)
+            assert.equals("Bob Faraway", whispers[1].target)
+        end)
+
+        it("keeps the group among the backup paths of a waiting ding, unless it came from the group roster", function()
+            _G.SetGroupState(2, false, false)
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            tracker:OnSlashWhoResult({ playerInfo("Nubtwo", 6, WARRIORIDX), }, config.WhoResultSources.Group)
+            channel:NoteSent()
+            time = time + config.ChannelEchoTimeout + 1
+
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+            assert.equals(1, #sentTo("RACE"))
+            local group = sentTo("GROUP")
+            assert.equals(1, #group)
+            local players = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(group[1].payload[1])
+            assert.equals(1, #players)
+            assert.equals("Nubone", players[1].name)
+            -- no buddies: nothing else goes out
+            _G.C_Timer.Advance(config.DingPushDelay)
+            assert.equals(0, #sentTo("WHISPER"))
+        end)
+
+        it("keeps the group among the backup paths of a waiting ding when we left the channel", function()
+            _G.SetGroupState(2, false, false)
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            _G.SetChatChannels({"General"})
+
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+            assert.equals(1, #sentTo("GROUP"))
+            assert.equals(0, #sentTo("RACE"))
+        end)
+
+        it("stops the other pushes again once a message of ours came back", function()
+            db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
+            channel:NoteSent()
+            time = time + config.ChannelEchoTimeout + 1
+            channel:NoteEcho()
+
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            _G.C_Timer.Advance(config.DingPushDelay)
+
+            assert.equals(0, #sentTo("WHISPER"))
+            assert.equals(1, #sentTo("RACE"))
         end)
 
         it("waits a random time within the delay range", function()
@@ -463,6 +541,54 @@ describe("Tracker", function()
             local players = channelBatch()
             assert.equals(1, #players)
             assert.equals("Nubtwo", players[1].name)
+        end)
+
+        it("sends a big batch to the channel in chunks, dropping what the channel brought meanwhile", function()
+            channel:NoteSender("Dude")
+            local chunkSize = 6
+            config.ChannelDingChunkSize = chunkSize
+            -- three classes, so every player lands on a class board (5 per board in these
+            -- tests) and counts as a change: 15 players, chunks of 6, 6 and 3
+            local classes = {DRUIDIDX, WARRIORIDX, PRIESTIDX}
+            local players = {}
+            for i = 1, 3 * config.MaxLeaderboardSize do
+                players[i] = playerInfo("Nub" .. string.char(96 + i) .. " Chunk", 5, classes[(i % 3) + 1])
+            end
+            tracker:OnSlashWhoResult(players)
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            local toChannel = sentTo("RACE")
+            assert.equals(1, #toChannel)
+            local first = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(toChannel[1].payload[1])
+            assert.equals(chunkSize, #first)
+            assert.equals("Nuba Chunk", first[1].name)
+
+            -- another player sent one of the waiting dings meanwhile, and a new one came in
+            tracker:OnNetPlayerInfoBatch(batchPayload({ playerInfo("Nubj Chunk", 5, classes[(10 % 3) + 1]), }),
+                    "Dude", "CHANNEL")
+            tracker:OnSlashWhoResult({ playerInfo("Zed Late", 7, WARRIORIDX), })
+
+            _G.C_Timer.Advance(config.ChannelDingChunkDelay)
+            toChannel = sentTo("RACE")
+            assert.equals(2, #toChannel)
+            local second = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(toChannel[2].payload[1])
+            assert.equals(chunkSize, #second)
+            for _, p in ipairs(second) do
+                assert.not_equals("Nubj Chunk", p.name)
+            end
+
+            -- the rest: 9 were waiting, the channel brought one, and the late warrior pushed
+            -- the lowest of the five warriors off its full board, so that ding no longer
+            -- stands; 6 went in the second chunk, the last one and the late one go now
+            _G.C_Timer.Advance(config.ChannelDingChunkDelay)
+            toChannel = sentTo("RACE")
+            assert.equals(3, #toChannel)
+            local third = WoWForeverRace.Serializer.DeserializePlayerInfoBatch(toChannel[3].payload[1])
+            assert.equals(2, #third)
+            assert.equals("Zed Late", third[2].name)
+
+            _G.C_Timer.Advance(config.ChannelDingChunkDelay)
+            assert.equals(3, #sentTo("RACE"))
         end)
 
         it("sends nothing when the channel heard everything that was waiting", function()
@@ -693,8 +819,10 @@ describe("Tracker", function()
         end)
 
         it("does not repeat the backup for a ding that already took it", function()
-            -- joined, but nobody heard: the ding takes the backup paths as usual
+            -- joined, but our messages don't come back: the ding takes the backup paths as usual
             db.factionrealm.buddies = {["Bob Faraway"] = {lastSeen = time}}
+            channel:NoteSent()
+            time = time + config.ChannelEchoTimeout + 1
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
 
             _G.SetChatChannels({"General"})

@@ -47,7 +47,7 @@ function WoWForeverRaceTracker.new(Config, Core, DB, EventBus, Network, Channel)
     self.pendingDings = {}
     self.dingPushPending = false
     self.pendingChannelDings = {}  -- [name] = playerInfo: dings waiting to go to the realm channel
-    self.backupSkipped = {}        -- [name] = true: those of them we spotted ourselves and kept off the backup paths
+    self.backupSkipped = {}        -- [name] = {toGroup}: those of them we spotted ourselves and kept off the backup paths, and whether the group was among those
     self.channelDingPending = false
 
     self.launchPurged = false      -- true once PurgePreLaunchData ran after the realm launch
@@ -384,10 +384,11 @@ function WoWForeverRaceTracker:ChannelJoined()
     return self.Channel ~= nil and self.Channel:IsJoined()
 end
 
--- While the realm channel carries traffic it reaches every addon user of our faction,
--- and the guild, group and buddy pushes are only its backup.
-function WoWForeverRaceTracker:ChannelLive()
-    return self.Channel ~= nil and self.Channel:IsLive()
+-- The realm channel reaches every addon user of our faction with one message. While it
+-- works (or a join is under way) it is the only path for a ding; the group and buddy
+-- pushes are its backup, see Channel:IsWorking.
+function WoWForeverRaceTracker:ChannelWorking()
+    return self.Channel ~= nil and self.Channel:IsWorking()
 end
 
 function WoWForeverRaceTracker:OnScanFinished(endofrace)
@@ -478,27 +479,35 @@ function WoWForeverRaceTracker:ScheduleDingPush(changedPlayers, toGroup)
     if self.DB.factionrealm.finished then return end
 
     local route = {}
-    -- the realm channel reaches every addon user of our faction with one message;
-    -- everything below is the backup for when nobody is heard there
+    -- The realm channel is the path: in it, or about to be (the dings wait for the join,
+    -- FlushChannelDingPush). Everything below is the backup for when it does not work.
+    if self:ChannelWorking() then
+        self:ScheduleChannelDingPush(changedPlayers, true, toGroup)
+        WoWForeverRace:DebugPrint("Ding push: " .. #changedPlayers .. " player(s) -> realm channel only")
+        return
+    end
     if self:ChannelJoined() then
-        local live = self:ChannelLive()
-        self:ScheduleChannelDingPush(changedPlayers, live)
-        if live then
-            WoWForeverRace:DebugPrint("Ding push: " .. #changedPlayers .. " player(s) -> realm channel only (live)")
-            return
-        end
-        route[#route + 1] = "realm channel (not live)"
+        -- in it, but what we send there does not come back: try it anyway, next to the backup
+        self:ScheduleChannelDingPush(changedPlayers, false)
+        route[#route + 1] = "realm channel (not working)"
     else
         route[#route + 1] = "no realm channel"
     end
+    self:ScheduleBackupDingPush(changedPlayers, toGroup, route)
+end
 
+-- The backup paths for a ding: the group right away, a sample of the buddies by whisper
+-- DingPushDelay later (FlushDingPush). route: the debug line's parts so far.
+function WoWForeverRaceTracker:ScheduleBackupDingPush(changedPlayers, toGroup, route)
     -- to the group right away: a member would otherwise only hear of it on the next group sync
     if toGroup and GetNumGroupMembers() > 0 then
         local batchstr = WoWForeverRace.Serializer.SerializePlayerInfoBatch(changedPlayers)
         self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, {batchstr, false, 0}, "GROUP")
         route[#route + 1] = "group now"
     end
-    route[#route + 1] = "guild and buddies in " .. self.Config.DingPushDelay .. "s"
+    -- never to the guild: an addon message to GUILD scrolls every member's chat frame on
+    -- this client, so guild members are reached as buddies (Sync:OnNetGuildSync)
+    route[#route + 1] = "buddies in " .. self.Config.DingPushDelay .. "s"
     WoWForeverRace:DebugPrint("Ding push: " .. #changedPlayers .. " player(s) -> " .. table.concat(route, ", "))
 
     -- accumulate into pending set (keyed by name to deduplicate across rapid scans)
@@ -529,13 +538,10 @@ function WoWForeverRaceTracker:FlushDingPush()
     local batchstr = WoWForeverRace.Serializer.SerializePlayerInfoBatch(players)
     local payload = {batchstr, false, 0}
 
-    if IsInGuild() then
-        self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, payload, "GUILD")
-    end
-
     -- whisper a random sample of buddies (capped at BuddyPingBatchSize); group members
     -- got the group push or read the level themselves, and after one group sync every
-    -- member is a buddy: a raid level-up would otherwise cost 40 x 39 whispers
+    -- member is a buddy: a raid level-up would otherwise cost 40 x 39 whispers. Guild
+    -- members who run the addon are buddies too (Sync:OnNetGuildSync)
     local inGroup = self.Core:GroupMemberNames()
     local names = {}
     for name, _ in pairs(self.DB.factionrealm.buddies) do
@@ -551,8 +557,7 @@ function WoWForeverRaceTracker:FlushDingPush()
         end
         for i = batchSize + 1, #names do names[i] = nil end
     end
-    WoWForeverRace:DebugPrint("Ding push: " .. #players .. " player(s) -> " .. (IsInGuild() and "GUILD" or "no guild")
-            .. ", " .. #names .. " buddies whispered")
+    WoWForeverRace:DebugPrint("Ding push: " .. #players .. " player(s) -> " .. #names .. " buddies whispered")
     for _, name in ipairs(names) do
         self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, payload, "WHISPER", name)
     end
@@ -564,12 +569,14 @@ end
 -- sends first makes the others drop theirs (DropHeardDings). Right after joining the
 -- channel they also wait for the join sync (Channel:SettleDelay).
 -- backupSkipped: our own sightings that only go to the channel (ScheduleDingPush on a
--- live channel); should the channel be gone when they are due, they take the backup paths.
-function WoWForeverRaceTracker:ScheduleChannelDingPush(changedPlayers, backupSkipped)
+-- working channel); should the channel be gone when they are due, they take the backup
+-- paths, with the group among them when toGroup says so (not for a sighting from the
+-- group roster, which every member reads itself).
+function WoWForeverRaceTracker:ScheduleChannelDingPush(changedPlayers, backupSkipped, toGroup)
     for _, p in ipairs(changedPlayers) do
         self.pendingChannelDings[p.name] = p
         if backupSkipped then
-            self.backupSkipped[p.name] = true
+            self.backupSkipped[p.name] = {toGroup = toGroup == true}
         end
     end
 
@@ -622,20 +629,75 @@ function WoWForeverRaceTracker:FlushChannelDingPush()
     if #players == 0 then return end
     table.sort(players, function(a, b) return a.name < b.name end)
 
+    -- the players we spotted ourselves, split by whether their backup includes the group
+    local function ownSightings()
+        local withGroup, withoutGroup = {}, {}
+        for _, p in ipairs(players) do
+            local skipped = backupSkipped[p.name]
+            if skipped ~= nil then
+                if skipped.toGroup then
+                    withGroup[#withGroup + 1] = p
+                else
+                    withoutGroup[#withoutGroup + 1] = p
+                end
+            end
+        end
+        return withGroup, withoutGroup
+    end
+
     if not self:ChannelJoined() then
         -- We are not in the channel anymore (a /leave, a kick). What we spotted ourselves
         -- takes the backup paths after all, they were skipped for it; what we only
         -- passed on is dropped, like a client without the channel never passes on.
-        local own = {}
-        for _, p in ipairs(players) do
-            if backupSkipped[p.name] then
-                own[#own + 1] = p
-            end
+        local withGroup, withoutGroup = ownSightings()
+        if #withGroup > 0 then
+            self:ScheduleDingPush(withGroup, true)
         end
-        if #own > 0 then
-            self:ScheduleDingPush(own)
+        if #withoutGroup > 0 then
+            self:ScheduleDingPush(withoutGroup)
         end
         return
+    end
+
+    -- In the channel, but it stopped working since these were queued (the echo timeout
+    -- passed): they go out there anyway, and what we spotted ourselves takes the backup
+    -- paths it skipped. Once: the flag does not follow a player into a later chunk.
+    if not self:ChannelWorking() then
+        local withGroup, withoutGroup = ownSightings()
+        backupSkipped = {}
+        local route = {"realm channel (stopped working while they waited)"}
+        if #withGroup > 0 then
+            self:ScheduleBackupDingPush(withGroup, true, route)
+        end
+        if #withoutGroup > 0 then
+            self:ScheduleBackupDingPush(withoutGroup, nil, route)
+        end
+    end
+
+    -- A long message is many chat packets, and the client's channel throttle cuts it off
+    -- (a minute of scans after a join once piled up into 490 players, refused twice and
+    -- lost). So at most ChannelDingChunkSize players go per message; the rest waits its
+    -- turn ChannelDingChunkDelay later and passes every check above again, so what the
+    -- channel brings meanwhile is dropped from it (DropHeardDings)
+    local chunkSize = self.Config.ChannelDingChunkSize
+    if #players > chunkSize then
+        for i = chunkSize + 1, #players do
+            local p = players[i]
+            self.pendingChannelDings[p.name] = p
+            if backupSkipped[p.name] ~= nil then
+                self.backupSkipped[p.name] = backupSkipped[p.name]
+            end
+        end
+        local chunk = {}
+        for i = 1, chunkSize do
+            chunk[i] = players[i]
+        end
+        players = chunk
+        self.channelDingPending = true
+        local _self = self
+        C_Timer.After(self.Config.ChannelDingChunkDelay, function()
+            _self:FlushChannelDingPush()
+        end)
     end
 
     local batchstr = WoWForeverRace.Serializer.SerializePlayerInfoBatch(players)

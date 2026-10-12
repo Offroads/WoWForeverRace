@@ -64,8 +64,16 @@ _G.GetChannelName = function(name)
     return 0, nil, 0
 end
 
-_G.JoinTemporaryChannel = function(name)
+-- the password the last join was made with, see GetLastChannelJoinPassword()
+local lastJoinPassword
+
+_G.GetLastChannelJoinPassword = function()
+    return lastJoinPassword
+end
+
+_G.JoinTemporaryChannel = function(name, password)
     joinRequests[#joinRequests + 1] = name
+    lastJoinPassword = password
     local refused = joinRefused == true
     if type(joinRefused) == "table" then
         for _, refusedName in ipairs(joinRefused) do

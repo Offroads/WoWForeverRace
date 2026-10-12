@@ -288,19 +288,23 @@ function WoWForeverRaceDebugFrame:Render()
     self.scroll:DoLayout()
 end
 
--- The realm channel: whether we are in it, and whether it carries traffic (while it
--- does, the guild, group and buddy sync stay quiet).
+-- The realm channel: whether we are in it and whether it works (while it does, the
+-- guild, group and buddy sync stay quiet), and whether others were heard on it.
 function WoWForeverRaceDebugFrame:RenderChannel()
     local channel = WoWForeverRace.Channel
     if type(channel) ~= "table" or channel.Status == nil or channel.status == nil then return end
 
     local state
     if channel:IsLive() then
-        state = GREEN .. "live|r"
+        state = GREEN .. "working, others heard|r"
+    elseif channel:IsJoined() and channel:IsWorking() then
+        state = GREEN .. "working, nobody heard yet|r"
     elseif channel:IsJoined() then
-        state = ORANGE .. "joined, nobody heard|r"
+        state = ORANGE .. "joined, our messages don't come back: backup flows running|r"
+    elseif channel:IsWorking() then
+        state = ORANGE .. "joining|r"
     else
-        state = GRAY .. channel:Status() .. "|r"
+        state = GRAY .. channel:Status() .. ": backup flows running|r"
     end
 
     local label = AceGUI:Create("Label")

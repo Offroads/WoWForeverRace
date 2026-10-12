@@ -500,24 +500,71 @@ describe("Sync end to end with real data", function()
         assert.is_nil(after[NetEvents.SyncPayload])
     end)
 
-    it("ding push: a scan result reaches the guild after the delay", function()
+    it("ding push: a scan result reaches a guild member by whisper, never through the guild", function()
         _G.SetIsInGuild(true)
         local a = stack("Alpha Tester", realSavedVariables())
         local b = stack("Beta Tester", realSavedVariables())
         a.sync.isReady, b.sync.isReady = true, true
+
+        -- the guild rounds introduce the members to each other: both are in sync, so
+        -- nobody offers, but whoever heard the other announce has it as a buddy now
+        a.sync:SendGuildSync()
+        pump()
+        advance(Config.GuildSyncWait + 1)
+        b.sync:SendGuildSync()
+        pump()
+        advance(Config.GuildSyncWait + 1)
+        assert.is_nil(countEvents()[NetEvents.GuildOffer])
+        assert.is_not_nil(b.db.factionrealm.buddies[a.name], "a guild member who announced is a buddy")
+        assert.is_not_nil(a.db.factionrealm.buddies[b.name])
+        local mark = #log + 1
 
         b.eventbus:PublishEvent(Events.SlashWhoResult, {
             {name = "Guild Tester", level = 21, classIndex = 4, raceIndex = 8},
         })
         pump()
         -- nothing right away: the push is batched (DingPushDelay)
-        assert.is_nil(countEvents()[NetEvents.PlayerInfoBatch])
+        assert.is_nil(countEvents(mark)[NetEvents.PlayerInfoBatch])
 
         advance(Config.DingPushDelay)
-        assert.equals(1, countEvents()[NetEvents.PlayerInfoBatch], "guild push after DingPushDelay")
+        assert.equals(1, countEvents(mark)[NetEvents.PlayerInfoBatch], "buddy push after DingPushDelay")
+        for i = mark, #log do
+            assert.equals("WHISPER", log[i].channel, "the guild carries no ding")
+        end
         assert.equals("Guild Tester", a.db.factionrealm.leaderboard[0].players[1].name)
         assert.equals(8, a.db.factionrealm.leaderboard[0].players[1].raceIndex)
         assertAllBoardsEqual(a, b)
+    end)
+
+    it("ding push: a guild member the announcer never heard of catches up on its own buddy ping", function()
+        _G.SetIsInGuild(true)
+        local a = stack("Alpha Tester", realSavedVariables())
+        local b = stack("Beta Tester", realSavedVariables())
+        a.sync.isReady, b.sync.isReady = true, true
+
+        -- only a announces; b is in sync, so it offers nothing and a never hears of it
+        a.sync:SendGuildSync()
+        pump()
+        advance(Config.GuildSyncWait + 1)
+        assert.is_not_nil(b.db.factionrealm.buddies[a.name])
+        assert.is_nil(a.db.factionrealm.buddies[b.name], "an in-sync member stays unknown to the announcer")
+
+        -- a's next sighting reaches nobody: it has no buddies yet
+        local mark = #log + 1
+        a.eventbus:PublishEvent(Events.SlashWhoResult, {
+            {name = "Guild Tester", level = 21, classIndex = 4, raceIndex = 8},
+        })
+        pump()
+        advance(Config.DingPushDelay)
+        assert.is_nil(countEvents(mark)[NetEvents.PlayerInfoBatch])
+        assert.not_equals(hashes(a).full, hashes(b).full)
+
+        -- b's periodic buddy ping (every BuddySyncInterval) brings it over, and a knows b from now on
+        b.sync:SendBuddyPings()
+        pump()
+        advance(2)
+        assertAllBoardsEqual(a, b)
+        assert.is_not_nil(a.db.factionrealm.buddies[b.name])
     end)
 
     -- ---------------------------------------------------------------------------

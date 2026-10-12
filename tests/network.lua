@@ -147,6 +147,29 @@ describe("Network", function()
                     WoWForeverRace.Config.Network.Prefix, match.is_string(), "CHANNEL", "2", "BULK", match.is_function())
         end)
 
+        it("notes what we sent to the realm channel and our own message coming back from it", function()
+            channel:TryJoin()
+            assert.is_nil(channel.unansweredSince)
+
+            -- the client took a message to the realm channel (as the send callback reports it)
+            network:OnMessageSent(false, nil, NetworkEvents.ChannelSync, {1}, "RACE", nil, "BULK", 0)
+            assert.is_not_nil(channel.unansweredSince)
+            -- a whisper owes no echo, and neither does a refused packet
+            network:OnMessageSent(false, nil, NetworkEvents.BuddyPing, {1}, "WHISPER", "Dude", "BULK", 0)
+            channel.unansweredSince = nil
+            network:OnMessageSent(true, 4, NetworkEvents.ChannelSync, {1}, "RACE", nil, "BULK", 0)
+            assert.is_nil(channel.unansweredSince)
+            network:OnMessageSent(false, nil, NetworkEvents.ChannelSync, {1}, "RACE", nil, "BULK", 0)
+
+            -- another player's channel message is not our echo, ours is
+            receive({NetworkEvents.ChannelSync, {1}, "Alliance"}, "CHANNEL")
+            assert.is_nil(channel.lastEchoAt)
+            receive({NetworkEvents.ChannelSync, {1}, "Alliance"}, "CHANNEL", "Nub")
+            assert.is_not_nil(channel.lastEchoAt)
+            assert.is_nil(channel.unansweredSince)
+            assert.is_true(channel:IsWorking())
+        end)
+
         it("notes who was heard on a chat channel", function()
             channel:TryJoin()
             assert.is_false(channel:IsLive())
@@ -551,10 +574,13 @@ describe("Network", function()
             ctlStub = stub(CTL, "SendAddonMessage", function(_, _, _, text, distribution, target, _, callback, arg)
                 packets[#packets + 1] = {text = text, distribution = distribution, target = target}
                 local ok = taken(#packets)
-                -- like ChatThrottleLib: whether the client took it, and the client's answer;
-                -- "silent" is a ChatThrottleLib that never calls back
-                if ok ~= "silent" then
-                    callback(arg, ok, ok and 0 or 8)
+                -- like ChatThrottleLib: whether the client took it, and the client's answer
+                -- (a number from taken is the answer for a refused packet, else 4 like a
+                -- refused yell); "silent" is a ChatThrottleLib that never calls back
+                if type(ok) == "number" then
+                    callback(arg, false, ok)
+                elseif ok ~= "silent" then
+                    callback(arg, ok, ok and 0 or 4)
                 end
             end)
         end)
@@ -690,9 +716,28 @@ describe("Network", function()
             network:SendObject(NetworkEvents.DataAvailable, 1, "YELL")
 
             assert.stub(debugStub).was_called_with(match.is_ref(WoWForeverRace),
-                    "Send failed: DATAAVAIL -> YELL (client result 8), sending it again")
+                    "Send failed: DATAAVAIL -> YELL (client result 4), sending it again in "
+                    .. WoWForeverRace.Config.SendRetryDelay .. "s")
             debugStub:revert()
             WoWForeverRace.DB = nil
+        end)
+
+        it("waits longer after the channel throttle, without holding it against the channel", function()
+            local Config = WoWForeverRace.Config
+            taken = function(n) return packets[n].distribution == "CHANNEL" and 8 or true end
+
+            network:SendObject(NetworkEvents.PlayerInfoBatch, {"a", false, 0}, "CHANNEL", "6")
+            advance(Config.SendRetryDelay / INTERVAL + 2)
+            -- not on the usual retry delay
+            assert.equals(1, #packets)
+            advance((Config.ChannelThrottleRetryDelay - Config.SendRetryDelay) / INTERVAL)
+            assert.equals(2, #packets)
+            assert.is_nil(network.refusals["CHANNEL"])
+
+            -- throttled every time, it gives up like any other refused message
+            advance(Config.ChannelThrottleRetryDelay / INTERVAL * 2 + 2)
+            assert.equals(1 + Config.SendRetryMax, #packets)
+            assert.is_nil(network.refusals["CHANNEL"])
         end)
     end)
 
@@ -805,6 +850,31 @@ describe("Network", function()
             WoWForeverRace.DB = db
             return db
         end
+
+        it("lists at most a few players of a batch in the debug log", function()
+            debugDB()
+            local lines = {}
+            local debugStub = stub(WoWForeverRace, "DebugPrint", function(_, message)
+                lines[#lines + 1] = message
+            end)
+            local players = {}
+            for i = 1, 30 do
+                players[i] = {name = "Nub Number" .. i, level = 5, classIndex = 11, dingedAt = 1000}
+            end
+            sentMessages(function()
+                network:SendObject(NetworkEvents.PlayerInfoBatch,
+                        {WoWForeverRace.Serializer.SerializePlayerInfoBatch(players), false, 0}, "WHISPER", "Dude")
+            end)
+            debugStub:revert()
+
+            local named, more = 0, nil
+            for _, line in ipairs(lines) do
+                if string.find(line, " lvl5 ", 1, true) then named = named + 1 end
+                if string.find(line, "and 10 more", 1, true) then more = line end
+            end
+            assert.equals(20, named)
+            assert.is_not_nil(more)
+        end)
 
         it("tags every outgoing event with the player's faction", function()
             for _, event in pairs(NetworkEvents) do

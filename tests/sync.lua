@@ -1421,13 +1421,26 @@ describe("Sync", function()
                 sent = {}
             end)
 
-            it("keeps pinging buddies, the group and the guild while nobody is heard on the channel", function()
+            it("starts none of them while the channel works, heard or not", function()
                 _G.SetGroupState(2, false, false)
                 sync:InitGuildTicker()
 
                 sync:SendBuddyPings()
                 sync:ScheduleGroupSync()
-                AdvanceClock(Config.GuildSyncInterval)
+                AdvanceClock(Config.GuildSyncInterval * 1.25)
+
+                assert.equals(0, #sent)
+            end)
+
+            it("runs them when our messages stop coming back from the channel", function()
+                _G.SetGroupState(2, false, false)
+                sync:InitGuildTicker()
+                channel:NoteSent()
+                AdvanceClock(Config.ChannelEchoTimeout + 1)
+
+                sync:SendBuddyPings()
+                sync:ScheduleGroupSync()
+                AdvanceClock(Config.GuildSyncInterval * 1.25)
 
                 assert.equals(1, #sentOf(NetEvents.GuildSync))
                 local pings = sentOf(NetEvents.BuddyPing)
@@ -1436,25 +1449,48 @@ describe("Sync", function()
                 assert.equals("GROUP", pings[2].channel)
             end)
 
-            it("starts none of them while the channel is live", function()
-                _G.SetGroupState(2, false, false)
-                sync:InitGuildTicker()
-                channel:NoteSender("Dude")
+            it("stops them again once a message of ours came back", function()
+                channel:NoteSent()
+                AdvanceClock(Config.ChannelEchoTimeout + 1)
+                channel:NoteEcho()
 
                 sync:SendBuddyPings()
-                sync:ScheduleGroupSync()
-                AdvanceClock(Config.GuildSyncInterval)
 
                 assert.equals(0, #sent)
             end)
 
-            it("picks them up again when the channel went quiet", function()
-                channel:NoteSender("Dude")
-                AdvanceClock(Config.ChannelLiveTTL + 1)
+            it("runs them after we were kicked or left", function()
+                _G.LeaveChannelByName(channel:Name())
 
                 sync:SendBuddyPings()
 
                 assert.equals(1, #sentOf(NetEvents.BuddyPing))
+            end)
+
+            it("starts them the moment the channel stops working, with the login guild sync that waited", function()
+                _G.SetGroupState(2, false, false)
+                sync.isReady = false
+                sync:InitSync()
+                assert.is_true(sync.isReady)
+                assert.equals(0, #sent, "the channel is the sync path at login")
+
+                channel:NoteSent()
+                AdvanceClock(Config.ChannelEchoTimeout + 1)
+                channel:PublishState()
+
+                local guild = sentOf(NetEvents.GuildSync)
+                assert.equals(1, #guild)
+                assert.is_not_nil(guild[1].payload[5], "the login pull of the history rides along")
+                assert.equals(1, #sentOf(NetEvents.BuddyPing))
+                AdvanceClock(2)
+                assert.equals(2, #sentOf(NetEvents.BuddyPing), "and the group is pinged")
+
+                -- back: nothing more starts, and the login sync is not repeated
+                channel:NoteEcho()
+                channel:NoteSent()
+                AdvanceClock(Config.ChannelEchoTimeout + 1)
+                channel:PublishState()
+                assert.equals(1, #sentOf(NetEvents.GuildSync))
             end)
 
             it("still answers a buddy, the guild and the group while the channel is live", function()
@@ -1478,6 +1514,20 @@ describe("Sync", function()
                 AdvanceClock(Config.GuildSyncWait)
                 assert.equals(1, #sentOf(NetEvents.GuildOffer))
                 assert.not_equals(myFullHash, fullHash())
+            end)
+
+            it("makes a buddy of every guild member heard announcing or offering", function()
+                db.factionrealm.buddies = {}
+
+                eventbus:PublishEvent(NetEvents.GuildSync, {11, fullHash(), time, myFTLHash}, "Bea Guildie", "GUILD")
+                eventbus:PublishEvent(NetEvents.GuildOffer, {11, nil, 12345, 1, 1, time, myFTLHash, 1},
+                        "Cid Offerer", "WHISPER")
+
+                assert.equals(time, db.factionrealm.buddies["Bea Guildie"].lastSeen)
+                assert.equals(time, db.factionrealm.buddies["Cid Offerer"].lastSeen)
+                -- in sync with Bea: nothing to offer, the buddy entry is all that round left
+                AdvanceClock(Config.GuildSyncWait)
+                assert.equals(0, #sentOf(NetEvents.GuildOffer))
             end)
         end)
     end)

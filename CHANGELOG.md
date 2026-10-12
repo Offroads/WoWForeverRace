@@ -9,6 +9,32 @@
 - Chat announcements now default to the first player of each leaderboard only:
   the global and class top N sliders start at 1, like the race one. Existing
   installs keep the top N values they already have.
+- The guild hears far less from the addon. The game client scrolls the chat
+  window for every addon message sent to the guild although the message itself
+  is never shown, so the addon now only announces itself to the guild at login
+  and about once an hour, to meet the guild members who run it. Dings and
+  leaderboards reach those members by whisper from then on, like they reach
+  every other player the addon traded with before. Before, every ding and a
+  sync round every 5 minutes went through the guild.
+- The debug window lists at most 20 players of a received or sent batch, then
+  how many more it held.
+- The realm channel is now the one place the addon syncs through, from login
+  on. The guild announce, the buddy whispers and the group sync only run when
+  the channel does not work: when the addon could not join it, or when its own
+  channel messages stop coming back for five minutes. They start the moment
+  that happens and stop again when the channel is back. Before, they ran next
+  to the channel until another addon user was heard on it, which on a quiet
+  realm or with the beta's chat lag meant most of the time.
+- Level-ups spotted in the seconds between login and the channel join now wait
+  for the channel instead of going out by whisper.
+
+### Fixed
+- Level-ups spotted in the first minute after joining the realm channel now
+  reach it. They wait that minute for the join sync and then went out as one
+  message; on a busy day that was hundreds of players, the game client's
+  channel throttle cut the message off and it was lost. They now go out 50
+  players at a time, a few seconds apart, and a message the channel throttle
+  refused is sent again after a longer pause.
 
 ## v0.1.0-beta16 - 2026-10-10
 
