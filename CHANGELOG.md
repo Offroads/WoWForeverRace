@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.0.1 - 2026-11-05
 
 ### Fixed
 - Leaderboards sync between players again on the live realms. The game servers
