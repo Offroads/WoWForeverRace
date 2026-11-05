@@ -43,10 +43,14 @@ local stacks, queue, activeStack, log, undelivered, now
 -- wireFault(msg, event): what happens to a message on its way, nil for a clean wire.
 -- "drop": it never arrives; "garble": it arrives with a packet missing
 local wireFault
+-- channelRefused: the server refuses addon messages on the realm channel, like the live
+-- servers on every player-made channel: nobody gets one, its sender gets a notice
+local channelRefused
 
 local function resetWorld()
     stacks, queue, log, undelivered = {}, {}, {}, {}
     wireFault = nil
+    channelRefused = false
     activeStack = nil
     now = START
     _G.SetTime(now)
@@ -78,6 +82,12 @@ local function pump()
         end
         -- a dropped message was lost on the way, not sent to nobody
         local delivered = fate == "drop"
+        if msg.channel == "CHANNEL" and channelRefused then
+            local name = msg.from.channel:Name()
+            msg.from.channel.Thread:FireEvent("CHAT_MSG_CHANNEL_NOTICE", "NOT_ALLOWED_IN_CHANNEL", name, "",
+                    tostring(msg.target) .. ". " .. name, "", "", 0, tonumber(msg.target), name)
+            fate = "drop"
+        end
         for _, stack in ipairs(stacks) do
             if stack ~= msg.from and fate ~= "drop" then
                 local wanted = true
@@ -830,6 +840,118 @@ describe("Sync end to end with real data", function()
         assertAllBoardsEqual(b, c)
         assertFTLEqual(b, c)
         assert.is_nil(countChannels(mark)["CHANNEL"])
+    end)
+
+    it("refused realm channel: a fresh client pulls everything by whisper from a member in its list", function()
+        channelRefused = true
+        local a = stack("Alpha Tester", realSavedVariables())
+        a.sync.isReady = true
+        _G.SetChannelMembers(RACE_CHANNEL, {a.name})
+        joinChannel(a)
+        advance(Config.ChannelSyncWait + 1)
+        assert.is_true(a.channel:IsSendRefused())
+        local before = hashes(a)
+
+        local b = stack("Beta Tester", {})
+        b.sync.isReady = true
+        _G.SetChannelMembers(RACE_CHANNEL, {a.name, b.name})
+        local mark = #log + 1
+        joinChannel(b)
+        -- the announce is refused, then the member list is read and one member asked
+        advance(2 * Config.ChannelRosterDelay + historyPullTime(a))
+
+        local counts = countEvents(mark)
+        assert.equals(1, counts[NetEvents.ChannelSync], "only the refused announce went to the channel")
+        assert.equals(1, counts[NetEvents.BuddyPing])
+        assert.is_nil(counts[NetEvents.ChannelOffer])
+        assert.equals(1, countChannels(mark)["CHANNEL"])
+        assertAllBoardsEqual(a, b)
+        assertFTLEqual(a, b)
+        assertHistoryCovered(a, b)
+        assert.same(before, hashes(a))
+        -- each knows the other as a buddy now
+        assert.is_table(b.db.factionrealm.buddies[a.name])
+        assert.is_table(a.db.factionrealm.buddies[b.name])
+    end)
+
+    it("refused realm channel: a member that does not answer is replaced by another", function()
+        channelRefused = true
+        local a = stack("Alpha Tester", realSavedVariables())
+        a.sync.isReady = true
+        -- in the channel, but nothing gets out of it (a dungeon): what it is sent is lost
+        stack("Ghost Tester", {})
+        wireFault = function(msg) return msg.target == "Ghost Tester" and "drop" or nil end
+        _G.SetChannelMembers(RACE_CHANNEL, {a.name})
+        joinChannel(a)
+        advance(Config.ChannelSyncWait + 1)
+
+        local b = stack("Beta Tester", {})
+        b.sync.isReady = true
+        _G.SetChannelMembers(RACE_CHANNEL, {"Ghost Tester", a.name, b.name})
+        -- every random pick takes the first candidate: the silent member first
+        local originalRandom = _G.math.random
+        _G.math.random = function(low) return low or 0 end
+        finally(function() _G.math.random = originalRandom end)
+        local mark = #log + 1
+        joinChannel(b)
+        advance(2 * Config.ChannelRosterDelay + Config.ChannelRosterAnswerWait - 1)
+        assert.equals(1, countEvents(mark)[NetEvents.BuddyPing], "the silent member gets its time")
+
+        advance(1 + historyPullTime(a))
+
+        local pings = {}
+        for i = mark, #log do
+            if log[i].event == NetEvents.BuddyPing then pings[#pings + 1] = log[i].target end
+        end
+        assert.same({"Ghost Tester", a.name}, pings)
+        assertAllBoardsEqual(a, b)
+        assertFTLEqual(a, b)
+        assertHistoryCovered(a, b)
+
+        -- a's answer ends the round: nobody else is asked
+        advance(Config.ChannelRosterAnswerWait * 2)
+        assert.equals(2, countEvents(mark)[NetEvents.BuddyPing])
+    end)
+
+    it("refused realm channel: a ding reaches the channel's members by whisper, never the channel", function()
+        channelRefused = true
+        local a = stack("Alpha Tester", realSavedVariables())
+        local b = stack("Beta Tester", realSavedVariables())
+        a.sync.isReady, b.sync.isReady = true, true
+        _G.SetChannelMembers(RACE_CHANNEL, {a.name, b.name})
+        joinChannel(a)
+        joinChannel(b)
+        advance(2 * Config.ChannelRosterDelay + Config.ChannelSyncWait + 2)
+        assert.is_false(a.channel:IsWorking())
+        assert.is_false(b.channel:IsWorking())
+        local mark = #log + 1
+
+        b.eventbus:PublishEvent(Events.SlashWhoResult, {
+            {name = "Far Tester", level = 21, classIndex = 4, raceIndex = 8},
+        })
+        advance(Config.DingPushDelay + Config.ChannelDingDelayMax)
+
+        assert.equals("Far Tester", a.db.factionrealm.leaderboard[0].players[1].name)
+        assertAllBoardsEqual(a, b)
+        assert.same({WHISPER = 1}, countChannels(mark))
+    end)
+
+    it("refused realm channel: a member who joins later is found at the next read of the list", function()
+        channelRefused = true
+        local a = stack("Alpha Tester", realSavedVariables())
+        a.sync.isReady = true
+        _G.SetChannelMembers(RACE_CHANNEL, {a.name})
+        joinChannel(a)
+        advance(2 * Config.ChannelRosterDelay + Config.ChannelSyncWait + 2)
+        assert.same({}, a.channel:Members())
+
+        local b = stack("Beta Tester", realSavedVariables())
+        _G.SetChannelMembers(RACE_CHANNEL, {a.name, b.name})
+        a.channel:RequestRoster()
+        advance(Config.ChannelRosterDelay)
+
+        assert.same({b.name}, a.channel:Members())
+        assert.is_table(a.db.factionrealm.buddies[b.name])
     end)
 
     it("realm-wide reset: an author empties everybody's leaderboards, also for a player who comes later", function()

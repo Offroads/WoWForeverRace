@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Leaderboards sync between players again on the live realms. The game servers
+  refuse addon messages in the hidden chat channel the addon synced through, so
+  unless you shared a guild or a group with another player, nothing reached
+  them and nothing reached you. The addon now uses the channel only to find the
+  other players who run it, and trades leaderboards and level-ups with them by
+  whisper. Whispers reach players on every server of your realm type, and a
+  fresh install gets the full leaderboards a few seconds after login.
+
 ## v1.0.0 - 2026-10-12
 
 ### Changed

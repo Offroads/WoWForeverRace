@@ -24,6 +24,9 @@ end
 -- SetChatChannels. The state is shared by every addon stack of a test.
 local defaultChannels = {"General", "Trade"}
 local chatChannels, joinRefused, joinRequests
+-- channel member lists, see SetChannelMembers; rosterKnown: the channels whose list the
+-- client holds (a SetSelectedDisplayChannel asked for it), rosterRequests: how often
+local channelMembers, rosterKnown, rosterRequests
 
 _G.SetChatChannels = function(names)
     chatChannels = {}
@@ -32,6 +35,7 @@ _G.SetChatChannels = function(names)
     end
     joinRefused = false
     joinRequests = {}
+    channelMembers, rosterKnown, rosterRequests = {}, {}, 0
 end
 _G.SetChatChannels(nil)
 
@@ -91,4 +95,47 @@ _G.LeaveChannelByName = function(name)
     if id > 0 then
         table.remove(chatChannels, id)
     end
+end
+
+-- The Channels window's list and the member lists of its channels. The display index is
+-- the slot here too (the real client puts category headers in between). The member count
+-- is nil until SetSelectedDisplayChannel asked the server for that channel's list, like
+-- on the client; the CHANNEL_ROSTER_UPDATE it causes there is not fired by the stub.
+-- SetChannelMembers(name, names): who is in that channel (names ignore case).
+_G.SetChannelMembers = function(name, names)
+    channelMembers[string.lower(name)] = names
+end
+
+_G.GetChannelRosterRequests = function()
+    return rosterRequests
+end
+
+_G.GetNumDisplayChannels = function()
+    return #chatChannels
+end
+
+-- name, header, collapsed, channelNumber, count, active, category, channelType
+_G.GetChannelDisplayInfo = function(index)
+    local name = chatChannels[index]
+    if name == nil then return nil end
+    local count = nil
+    if rosterKnown[string.lower(name)] then
+        count = #(channelMembers[string.lower(name)] or {})
+    end
+    return name, false, false, index, count, true, "CHANNEL_CATEGORY_CUSTOM", 0
+end
+
+_G.SetSelectedDisplayChannel = function(index)
+    local name = chatChannels[index]
+    if name == nil then return end
+    rosterKnown[string.lower(name)] = true
+    rosterRequests = rosterRequests + 1
+end
+
+-- name, owner, moderator, guid
+_G.C_ChatInfo.GetChannelRosterInfo = function(index, rosterIndex)
+    local name = chatChannels[index]
+    local members = name ~= nil and channelMembers[string.lower(name)] or nil
+    if members == nil or members[rosterIndex] == nil then return nil end
+    return members[rosterIndex], rosterIndex == 1, false, "Player-1-" .. string.format("%08X", rosterIndex)
 end

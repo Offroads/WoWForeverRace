@@ -295,7 +295,10 @@ function WoWForeverRaceDebugFrame:RenderChannel()
     if type(channel) ~= "table" or channel.Status == nil or channel.status == nil then return end
 
     local state
-    if channel:IsLive() then
+    if channel:IsJoined() and channel.IsSendRefused ~= nil and channel:IsSendRefused() then
+        state = ORANGE .. "refuses addon messages: its " .. #channel:Members()
+                .. " other member(s) are reached by whisper|r"
+    elseif channel:IsLive() then
         state = GREEN .. "working, others heard|r"
     elseif channel:IsJoined() and channel:IsWorking() then
         state = GREEN .. "working, nobody heard yet|r"

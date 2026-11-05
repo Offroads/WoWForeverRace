@@ -540,4 +540,137 @@ describe("Channel", function()
             assert.same({false, true}, states)
         end)
     end)
+
+    describe("a server that refuses addon messages on the channel", function()
+        local states
+
+        before_each(function()
+            _G.SetChatChannels({"General", NAME})
+            states = {}
+            eventbus:RegisterCallback(Config.Events.ChannelState, {}, function(_, working)
+                states[#states + 1] = working
+            end)
+            channel:TryJoin()
+        end)
+
+        it("stops working at the NOT_ALLOWED_IN_CHANNEL notice, but stays in the channel", function()
+            assert.is_true(channel:IsWorking())
+            assert.is_true(channel:CanSend())
+
+            notice("NOT_ALLOWED_IN_CHANNEL")
+
+            assert.is_true(channel:IsSendRefused())
+            assert.is_false(channel:IsWorking())
+            assert.is_false(channel:CanSend())
+            assert.is_true(channel:IsJoined())
+            assert.same({true, false}, states)
+        end)
+
+        it("tells the others once, however many sends the server refuses", function()
+            notice("NOT_ALLOWED_IN_CHANNEL")
+            notice("NOT_ALLOWED_IN_CHANNEL")
+            advance(Config.ChannelJoinRetry * 2)
+            assert.same({true, false}, states)
+        end)
+
+        it("does not work again when somebody is heard or an echo comes", function()
+            notice("NOT_ALLOWED_IN_CHANNEL")
+            channel:NoteSender("Dude")
+            channel:NoteEcho()
+            assert.is_false(channel:IsWorking())
+        end)
+
+        it("takes the channel name from the notice when it has no base name", function()
+            channel.Thread:FireEvent("CHAT_MSG_CHANNEL_NOTICE", "NOT_ALLOWED_IN_CHANNEL", NAME, "",
+                    "2. " .. NAME, "", "", 0, 2, nil)
+            assert.is_true(channel:IsSendRefused())
+        end)
+
+        it("ignores the notice of another channel", function()
+            notice("NOT_ALLOWED_IN_CHANNEL", "General")
+            assert.is_false(channel:IsSendRefused())
+            assert.is_true(channel:IsWorking())
+        end)
+    end)
+
+    describe("the member list", function()
+        local rosters
+
+        before_each(function()
+            rosters = {}
+            eventbus:RegisterCallback(Config.Events.ChannelRoster, {}, function(_, names)
+                rosters[#rosters + 1] = names
+            end)
+        end)
+
+        after_each(function()
+            _G.ChannelFrame = nil
+        end)
+
+        local function joinWithMembers(members)
+            channel:Init()
+            _G.SetChannelMembers(NAME, members)
+            advance(Config.ChannelJoinDelay + Config.ChannelJoinRetry)
+            assert.is_true(channel:IsJoined())
+        end
+
+        it("is read a moment after joining, without us", function()
+            joinWithMembers({"Zorg Torg", "Nub", "Am Gaar"})
+            assert.same({}, rosters)
+
+            advance(Config.ChannelRosterDelay)
+            assert.equals(1, _G.GetChannelRosterRequests())
+            advance(Config.ChannelRosterDelay)
+
+            assert.same({{"Zorg Torg", "Am Gaar"}}, rosters)
+            assert.same({"Zorg Torg", "Am Gaar"}, channel:Members())
+        end)
+
+        it("is read again every so often, and when the server answers a request", function()
+            joinWithMembers({"Zorg Torg"})
+            advance(2 * Config.ChannelRosterDelay)
+            assert.equals(1, #rosters)
+
+            _G.SetChannelMembers(NAME, {"Zorg Torg", "Am Gaar"})
+            channel.Thread:FireEvent("CHANNEL_ROSTER_UPDATE", channel:DisplayIndex(), 2)
+            assert.same({"Zorg Torg", "Am Gaar"}, rosters[2])
+
+            advance(Config.ChannelRosterInterval + Config.ChannelRosterDelay)
+            assert.equals(2, _G.GetChannelRosterRequests())
+            assert.equals(3, #rosters)
+        end)
+
+        it("ignores the list of another channel the player looks at", function()
+            joinWithMembers({"Zorg Torg"})
+            channel.Thread:FireEvent("CHANNEL_ROSTER_UPDATE", 1, 12)
+            assert.same({}, rosters)
+        end)
+
+        it("publishes nothing while the client does not hold the list yet", function()
+            joinWithMembers({"Zorg Torg"})
+            channel:ReadRoster()
+            assert.same({}, rosters)
+        end)
+
+        it("is not asked for while the player has the Channels window open", function()
+            local frame = _G.CreateFrame("Frame")
+            frame:Show()
+            _G.ChannelFrame = frame
+            joinWithMembers({"Zorg Torg"})
+            advance(2 * Config.ChannelRosterDelay)
+            assert.equals(0, _G.GetChannelRosterRequests())
+
+            frame:Hide()
+            advance(Config.ChannelRosterInterval + Config.ChannelRosterDelay)
+            assert.equals(1, _G.GetChannelRosterRequests())
+            assert.same({{"Zorg Torg"}}, rosters)
+        end)
+
+        it("is empty while we are not in the channel", function()
+            joinWithMembers({"Zorg Torg"})
+            advance(2 * Config.ChannelRosterDelay)
+            _G.LeaveChannelByName(NAME)
+            assert.same({}, channel:Members())
+        end)
+    end)
 end)

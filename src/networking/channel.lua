@@ -5,6 +5,8 @@ local WoWForeverRace = _G.WoWForeverRace
 local CreateFrame, C_Timer, C_ChatInfo, math = _G.CreateFrame, _G.C_Timer, _G.C_ChatInfo, _G.math
 local JoinTemporaryChannel, LeaveChannelByName = _G.JoinTemporaryChannel, _G.LeaveChannelByName
 local GetChannelName, GetChannelList = _G.GetChannelName, _G.GetChannelList
+local GetNumDisplayChannels, GetChannelDisplayInfo = _G.GetNumDisplayChannels, _G.GetChannelDisplayInfo
+local SetSelectedDisplayChannel = _G.SetSelectedDisplayChannel
 
 -- status values
 local IDLE = "idle"         -- not in the channel (yet): waiting to join, joining, or sharing is turned off
@@ -35,6 +37,13 @@ event). Not working means we are not in it and no join is under way (a ban, a ki
 stopped coming back to us (NoteSent / NoteEcho, ChannelEchoTimeout). Hearing another
 player on it counts as working too (NoteSender); that also tells how many players are
 on it (Size) and whether it carries traffic of others at all (IsLive).
+
+The live servers refuse addon messages on every player-made channel: a send is taken by
+the client and answered with a NOT_ALLOWED_IN_CHANNEL notice. That makes the channel not
+working at once (IsSendRefused), and nothing more is sent there this session. We stay in
+it all the same: its member list (RequestRoster) works and spans the whole game mode,
+and since only the addon joins it with the password, every member runs the addon. Sync
+makes each of them a buddy and trades with them by whisper (ChannelRoster event).
 ]]--
 ---@class WoWForeverRaceChannel
 ---@field Config WoWForeverRaceConfig
@@ -71,18 +80,23 @@ function WoWForeverRaceChannel.new(Config, Core, DB, EventBus)
     self.lastEchoAt = nil         -- when one of our own messages last came back from the channel
     self.unansweredSince = nil    -- when the oldest of our sends that no echo answered went out
     self.wasWorking = nil         -- the state last published, see PublishState
+    self.sendRefused = false      -- the server refuses addon messages on the channel, see IsSendRefused
+    self.members = {}             -- the channel's members at the last read, without us, see RequestRoster
 
     self.Thread = CreateFrame("Frame")
     self.Thread:Hide()
     self.Thread:SetScript("OnEvent", function(_, event, ...)
         if event == "CHANNEL_PASSWORD_REQUEST" then
             self:OnPasswordRequest(...)
+        elseif event == "CHANNEL_ROSTER_UPDATE" then
+            self:OnRosterUpdate(...)
         else
             self:OnChannelNotice(...)
         end
     end)
     self.Thread:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
     self.Thread:RegisterEvent("CHANNEL_PASSWORD_REQUEST")
+    self.Thread:RegisterEvent("CHANNEL_ROSTER_UPDATE")
 
     return self
 end
@@ -125,6 +139,18 @@ function WoWForeverRaceChannel:IsJoined()
     return self.status == JOINED and self:Number() ~= nil
 end
 
+-- The server answered a message of ours on the channel with NOT_ALLOWED_IN_CHANNEL, as
+-- the live servers do on every player-made channel. Holds for the rest of the session.
+function WoWForeverRaceChannel:IsSendRefused()
+    return self.sendRefused
+end
+
+-- Whether a message to the channel can reach anybody: we are in it and the server
+-- takes addon messages there. Being in it is still worth it otherwise, see Members.
+function WoWForeverRaceChannel:CanSend()
+    return self:IsJoined() and not self.sendRefused
+end
+
 -- A join is under way: its next attempt, or the check that confirms it, is scheduled.
 function WoWForeverRaceChannel:IsJoining()
     return self.status == IDLE and self.joinScheduled and self:Wanted()
@@ -137,12 +163,12 @@ function WoWForeverRaceChannel:IsLive()
             and self.Core:Now() - self.lastHeardAt <= self.Config.ChannelLiveTTL
 end
 
--- Whether the channel is our sync path right now: we are in it and what we send there
--- comes back (not IsDead), or a join is under way and will tell. Only while this is
--- false do the guild, group and buddy flows run (Sync, Tracker).
+-- Whether the channel is our sync path right now: we are in it, the server takes what
+-- we send there and it comes back (not IsDead), or a join is under way and will tell.
+-- Only while this is false do the guild, group and buddy flows run (Sync, Tracker).
 function WoWForeverRaceChannel:IsWorking()
     if self.status == JOINED then
-        return self:Number() ~= nil and not self:IsDead()
+        return self:Number() ~= nil and not self.sendRefused and not self:IsDead()
     end
     return self:IsJoining()
 end
@@ -233,6 +259,10 @@ function WoWForeverRaceChannel:Init()
     C_Timer.NewTicker(self.Config.ChannelJoinRetry, function()
         _self:PublishState()
     end)
+    -- players come and go: read the member list again every so often
+    C_Timer.NewTicker(self.Config.ChannelRosterInterval, function()
+        _self:RequestRoster()
+    end)
 end
 
 function WoWForeverRaceChannel:ScheduleJoin(delay)
@@ -297,6 +327,11 @@ function WoWForeverRaceChannel:OnJoined()
     WoWForeverRace:DebugPrint("Channel: joined " .. self:Name() .. " as channel " .. tostring(self:Number()))
     self.EventBus:PublishEvent(self.Config.Events.ChannelJoined, moved)
     self:PublishState()
+    -- the member list, once the client has caught up with the join
+    local _self = self
+    C_Timer.After(self.Config.ChannelRosterDelay, function()
+        _self:RequestRoster()
+    end)
 end
 
 -- The channel we are joining asks for a password: give it up for the next name.
@@ -374,11 +409,16 @@ function WoWForeverRaceChannel:MoveTo(index)
 end
 
 -- CHAT_MSG_CHANNEL_NOTICE: text (the notice type), playerName, languageName, channelName,
--- playerName2, specialFlags, zoneChannelID, channelIndex, channelBaseName
-function WoWForeverRaceChannel:OnChannelNotice(noticeType, _, _, _, _, _, _, _, baseName)
+-- playerName2, specialFlags, zoneChannelID, channelIndex, channelBaseName. The channel
+-- name is "<number>. <name>"; it stands in for the base name when that is missing.
+function WoWForeverRaceChannel:OnChannelNotice(noticeType, _, _, channelName, _, _, _, _, baseName)
     -- the notice type is a secret value during a chat messaging lockdown
     if _G.issecretvalue ~= nil and _G.issecretvalue(noticeType) then return end
-    if type(noticeType) ~= "string" or type(baseName) ~= "string" then return end
+    if type(noticeType) ~= "string" then return end
+    if type(baseName) ~= "string" or baseName == "" then
+        baseName = type(channelName) == "string" and string.match(channelName, "^%d+%. (.+)$") or nil
+    end
+    if type(baseName) ~= "string" then return end
     if string.lower(baseName) ~= string.lower(self:Name()) then return end
 
     if noticeType == "YOU_CHANGED" or noticeType == "YOU_JOINED" then
@@ -393,6 +433,14 @@ function WoWForeverRaceChannel:OnChannelNotice(noticeType, _, _, _, _, _, _, _, 
             self.status = LEFT
             self:PublishState()
         end
+    elseif noticeType == "NOT_ALLOWED_IN_CHANNEL" then
+        -- the server refuses addon messages on the channel: no use sending there again
+        if not self.sendRefused then
+            WoWForeverRace:DebugPrint("Channel: " .. self:Name() .. " refuses addon messages, "
+                    .. "its members are reached by whisper")
+            self.sendRefused = true
+            self:PublishState()
+        end
     elseif noticeType == "WRONG_PASSWORD" then
         self:OnLocked()
     elseif noticeType == "BANNED" then
@@ -403,6 +451,77 @@ function WoWForeverRaceChannel:OnChannelNotice(noticeType, _, _, _, _, _, _, _, 
             self:PublishState()
         end
     end
+end
+
+-- The channel's place in the client's channel list as the Channels window shows it, the
+-- index the roster API takes (not the channel number), or nil when it is not listed.
+function WoWForeverRaceChannel:DisplayIndex()
+    if GetNumDisplayChannels == nil or GetChannelDisplayInfo == nil then return nil end
+    local wanted = string.lower(self:Name())
+    for i = 1, GetNumDisplayChannels() do
+        local name = GetChannelDisplayInfo(i)
+        if type(name) == "string" and string.lower(name) == wanted then
+            return i
+        end
+    end
+    return nil
+end
+
+-- Asks the server for the channel's member list (CHANNEL_ROSTER_UPDATE answers it) and
+-- reads what the client holds a moment later, should the event not come. Not while the
+-- player has the Channels window open: selecting a channel would switch what it shows.
+function WoWForeverRaceChannel:RequestRoster()
+    if not self:IsJoined() or not self:Wanted() then return end
+    if SetSelectedDisplayChannel == nil then return end
+    if _G.ChannelFrame ~= nil and _G.ChannelFrame:IsShown() then return end
+    local index = self:DisplayIndex()
+    if index == nil then return end
+
+    SetSelectedDisplayChannel(index)
+    local _self = self
+    C_Timer.After(self.Config.ChannelRosterDelay, function()
+        _self:ReadRoster()
+    end)
+end
+
+-- CHANNEL_ROSTER_UPDATE: displayIndex, count. Also fires for the channel the player looks
+-- at in the Channels window: only ours is read.
+function WoWForeverRaceChannel:OnRosterUpdate(displayIndex)
+    if displayIndex == nil or displayIndex ~= self:DisplayIndex() then return end
+    self:ReadRoster()
+end
+
+-- Reads the member list the client holds for the channel and publishes it (ChannelRoster,
+-- without us). Nothing when the client has none yet: the count is nil until the server
+-- answered a request.
+function WoWForeverRaceChannel:ReadRoster()
+    if not self:IsJoined() or not self:Wanted() then return end
+    local getInfo = C_ChatInfo ~= nil and C_ChatInfo.GetChannelRosterInfo or nil
+    if getInfo == nil then return end
+    local index = self:DisplayIndex()
+    if index == nil then return end
+    local _, _, _, _, count = GetChannelDisplayInfo(index)
+    if type(count) ~= "number" or count < 1 then return end
+
+    local me = self.Core:RealMe()
+    local members = {}
+    for i = 1, count do
+        local name = getInfo(index, i)
+        local secret = _G.issecretvalue ~= nil and _G.issecretvalue(name)
+        if not secret and type(name) == "string" and name ~= "" and name ~= me then
+            members[#members + 1] = name
+        end
+    end
+    self.members = members
+    WoWForeverRace:DebugPrint("Channel: " .. #members .. " other member(s) in " .. self:Name())
+    self.EventBus:PublishEvent(self.Config.Events.ChannelRoster, members)
+end
+
+-- The other members of the channel at the last read (RequestRoster), empty while we are
+-- not in it.
+function WoWForeverRaceChannel:Members()
+    if not self:IsJoined() then return {} end
+    return self.members
 end
 
 -- The sharing option was switched: leave the channel with it, join when it comes back.
