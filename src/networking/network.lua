@@ -263,9 +263,10 @@ function WoWForeverRaceNetwork:ResolveGroupChannel()
 end
 
 -- Resolves the virtual "RACE" channel to the number of the realm channel (see
--- Channel) as the "CHANNEL" target, or nil when we are not in it.
+-- Channel) as the "CHANNEL" target, or nil when we are not in it or the server refuses
+-- addon messages there (Channel:CanSend).
 function WoWForeverRaceNetwork:ResolveRaceChannel()
-    if self.Channel == nil or not self.Channel:IsJoined() then
+    if self.Channel == nil or not self.Channel:CanSend() then
         return nil
     end
     return tostring(self.Channel:Number())
@@ -424,7 +425,9 @@ function WoWForeverRaceNetwork:SendObject(event, object, channel, target, prio, 
     elseif channel == "RACE" then
         target = self:ResolveRaceChannel()
         if target == nil then
-            WoWForeverRace:DebugPrint("Dropped " .. event .. " -> RACE (not in the realm channel)")
+            WoWForeverRace:DebugPrint("Dropped " .. event .. " -> RACE ("
+                    .. (self.Channel ~= nil and self.Channel:IsJoined() and "the realm channel refuses addon messages"
+                        or "not in the realm channel") .. ")")
             return
         end
         channel = "CHANNEL"

@@ -380,8 +380,10 @@ function WoWForeverRaceTracker:PrunePlayerHistory()
     end
 end
 
+-- In the realm channel, and the server takes addon messages there (Channel:CanSend):
+-- every channel ding below needs that. A channel that refuses them counts as none.
 function WoWForeverRaceTracker:ChannelJoined()
-    return self.Channel ~= nil and self.Channel:IsJoined()
+    return self.Channel ~= nil and self.Channel:CanSend()
 end
 
 -- The realm channel reaches every addon user of our faction with one message. While it
@@ -490,6 +492,8 @@ function WoWForeverRaceTracker:ScheduleDingPush(changedPlayers, toGroup)
         -- in it, but what we send there does not come back: try it anyway, next to the backup
         self:ScheduleChannelDingPush(changedPlayers, false)
         route[#route + 1] = "realm channel (not working)"
+    elseif self.Channel ~= nil and self.Channel:IsSendRefused() then
+        route[#route + 1] = "realm channel refuses addon messages"
     else
         route[#route + 1] = "no realm channel"
     end
@@ -646,7 +650,8 @@ function WoWForeverRaceTracker:FlushChannelDingPush()
     end
 
     if not self:ChannelJoined() then
-        -- We are not in the channel anymore (a /leave, a kick). What we spotted ourselves
+        -- We are not in the channel anymore (a /leave, a kick), or the server turned out to
+        -- refuse addon messages there. What we spotted ourselves
         -- takes the backup paths after all, they were skipped for it; what we only
         -- passed on is dropped, like a client without the channel never passes on.
         local withGroup, withoutGroup = ownSightings()

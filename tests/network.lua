@@ -129,6 +129,18 @@ describe("Network", function()
             assert.spy(commSpy).was_not_called()
         end)
 
+        it("is dropped once the server refused addon messages on the realm channel", function()
+            channel:TryJoin()
+            channel.Thread:FireEvent("CHAT_MSG_CHANNEL_NOTICE", "NOT_ALLOWED_IN_CHANNEL", RACE_CHANNEL, "",
+                    "3. " .. RACE_CHANNEL, "", "", 0, 3, RACE_CHANNEL)
+            network:SendObject(NetworkEvents.ChannelSync, {1}, "RACE")
+            assert.spy(commSpy).was_not_called()
+
+            -- whispers to its members still go out
+            network:SendObject(NetworkEvents.BuddyPing, {1}, "WHISPER", "Zorg Torg")
+            assert.spy(commSpy).was_called(1)
+        end)
+
         it("is dropped without a channel component", function()
             network = WoWForeverRace.Network(core, eventbus)
             network:SendObject(NetworkEvents.ChannelSync, {1}, "RACE")

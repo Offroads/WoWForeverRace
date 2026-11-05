@@ -192,8 +192,9 @@ local WoWForeverRaceConfig = {
 
     -- Realm channel: a hidden player-made chat channel per faction (RaceChannelPrefix .. faction)
     -- that every addon user of the faction joins. It is the sync path from login on; the
-    -- guild, group and buddy sync only run while it is not working (we are not in it, or
-    -- what we send there stops coming back), see Channel:IsWorking.
+    -- guild, group and buddy sync only run while it is not working (we are not in it, the
+    -- server refuses what we send there, or what we send stops coming back), see
+    -- Channel:IsWorking. Its member list is read either way, see ChannelRosterInterval.
     RaceChannelPrefix = "WFRace",
     -- Joined with a fixed password, so nobody wanders in by hand. A channel an outsider
     -- made first has no password (we join it anyway) or another one (given up like any
@@ -227,6 +228,16 @@ local WoWForeverRaceConfig = {
     -- message is many chat packets, and the client's channel throttle cuts it off
     ChannelDingChunkSize = 50,  -- players per PINFOB to the channel
     ChannelDingChunkDelay = 5,  -- seconds between two chunks
+    -- The live servers refuse addon messages on every player-made channel (a
+    -- NOT_ALLOWED_IN_CHANNEL notice), but the channel's member list still works and
+    -- spans the whole game mode: every member runs the addon, and each becomes a buddy
+    -- we sync with by whisper, see Channel:RequestRoster
+    ChannelRosterDelay = 3,       -- seconds after joining before the member list is first read
+    ChannelRosterInterval = 300,  -- seconds between two reads of the member list
+    -- A member asked for a trade may not answer (in a dungeon nothing gets out): after
+    -- this long another member is asked, up to ChannelRosterTries members per round
+    ChannelRosterAnswerWait = 30,
+    ChannelRosterTries = 3,
 
     -- Version check: every client tells its build in its channel sync, its guild sync and
     -- its buddy pings and pongs, see VersionCheck
@@ -285,6 +296,8 @@ local WoWForeverRaceConfig = {
         ChannelState = "CHANNEL_STATE",   -- (working): the realm channel started or stopped working, see Channel:IsWorking
         -- ChannelHeard(sender): a player of our faction sent something on the realm channel
         ChannelHeard = "CHANNEL_HEARD",
+        -- ChannelRoster(names): the realm channel's member list was read, without us
+        ChannelRoster = "CHANNEL_ROSTER",
         -- MessageGarbled(sender, distribution): a message of that player could not be decoded
         MessageGarbled = "MESSAGE_GARBLED",
         SlashWhoResult = "WHO_RESULT",

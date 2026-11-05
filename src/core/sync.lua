@@ -155,6 +155,8 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network, Channel)
     self.channelOffers = nil  -- non-nil only during an active channel sync window
     self.channelJoinRound = false  -- whether the open channel window belongs to the sync at the join
     self.channelRound = nil  -- our latest channel trade: {partner, gained}, see DoChannelSync
+    self.rosterSyncPending = nil  -- {joinRound}: a roster trade waits for the member list, see SendRosterSync
+    self.rosterJoined = false  -- a roster trade ran as the join round this session, see OnChannelState
     self.historyPulled = false  -- whether a login sync already brought player history
     self.channelSyncRetry = false  -- whether a channel sync is waiting for a chat messaging lockdown to end
     self.peers = {}  -- [name] = when we last asked that player for data or got some, see ScheduleRepair
@@ -175,6 +177,7 @@ function WoWForeverRaceSync.new(Config, Core, DB, EventBus, Network, Channel)
     EventBus:RegisterCallback(self.Config.Events.ChannelJoined, self, self.OnChannelJoined)
     EventBus:RegisterCallback(self.Config.Events.ChannelState, self, self.OnChannelState)
     EventBus:RegisterCallback(self.Config.Events.ChannelHeard, self, self.OnChannelHeard)
+    EventBus:RegisterCallback(self.Config.Events.ChannelRoster, self, self.OnChannelRoster)
     EventBus:RegisterCallback(self.Config.Events.MessageGarbled, self, self.OnMessageGarbled)
     EventBus:RegisterCallback(self.Config.Events.DataReset, self, self.OnDataReset)
 
@@ -346,6 +349,14 @@ function WoWForeverRaceSync:OnChannelState(working)
     end
     self:SendBuddyPings()
     self:ScheduleGroupSync()
+
+    -- The server refuses addon messages on the realm channel (what we just sent there was
+    -- answered with NOT_ALLOWED_IN_CHANNEL): an announce we made gets no offer. Trade with
+    -- one of the channel's members by whisper instead, as the join round the first time.
+    if self.Channel ~= nil and self.Channel:IsSendRefused() and self.Channel:IsJoined() then
+        self.channelOffers = nil
+        self:SendRosterSync(not self.rosterJoined)
+    end
 end
 
 function WoWForeverRaceSync:SelectPartnerFromList(offers)
@@ -740,6 +751,11 @@ function WoWForeverRaceSync:OnNetBuddyPong(payload, sender)
     if not self.DB.profile.options.networking then return end
     self:AddBuddy(sender)
     WoWForeverRace:DebugPrint("BuddyPong from " .. sender)
+    -- our channel trade partner answered, see SendRosterSync
+    local round = self.channelRound
+    if round ~= nil and (round.partner == sender or round.partner == self.Core:SplitFullPlayer(sender)) then
+        round.answered = true
+    end
 
     if not self.isReady then return end
 
@@ -1105,6 +1121,12 @@ function WoWForeverRaceSync:SendChannelSync(joinRound)
     if not self.DB.profile.options.networking then return end
     if self.DB.factionrealm.finished then return end
 
+    -- the server refuses addon messages on the channel: trade with one of its members
+    if self.Channel:IsSendRefused() then
+        self:SendRosterSync(joinRound)
+        return
+    end
+
     -- nobody could answer us yet: try again once the lockdown has ended
     if self.Network.IsLockedDown and self.Network:IsLockedDown() then
         if not self.channelSyncRetry then
@@ -1203,9 +1225,15 @@ function WoWForeverRaceSync:DoChannelSync()
     end
 
     WoWForeverRace:DebugPrint("DoChannelSync with " .. best.name)
+    self:TradeWithChannelPartner(best.name, self.channelJoinRound)
+end
 
+-- The trade of a channel sync: a BPING by whisper to the partner, who pushes what we lack
+-- and answers with its hashes, so we push what it lacks. In the join round the ping also
+-- asks for the player history when no login sync brought it yet.
+function WoWForeverRaceSync:TradeWithChannelPartner(name, joinRound)
     local myPHHash = nil
-    if self.channelJoinRound then
+    if joinRound then
         if not self.historyPulled then
             myPHHash = computePHHash(self.DB, self.Config, self.Core:MyFaction())
         end
@@ -1213,15 +1241,84 @@ function WoWForeverRaceSync:DoChannelSync()
         self.Channel:Settle()
     end
     self.Network:SendObject(self.Config.Network.Events.BuddyPing,
-            {myFullHash, self:MyBoardHashes(), myFTLHash, myPHHash, self.Config:BuildInfo()}, "WHISPER", best.name)
-    self:NotePeer(best.name, myPHHash ~= nil)
+            {computeFullHash(self.DB, self.Config, nil, self.Core:MyFaction()), self:MyBoardHashes(),
+             computeFTLHash(self.DB, self.Config), myPHHash, self.Config:BuildInfo()}, "WHISPER", name)
+    self:NotePeer(name, myPHHash ~= nil)
 
-    local round = {partner = best.name, gained = false}
+    local round = {partner = name, gained = false, answered = false}
     self.channelRound = round
     local _self = self
     C_Timer.After(self.Config.ChannelFollowUp, function()
         _self:FollowUpChannelSync(round)
     end)
+end
+
+-- The channel sync while the server refuses addon messages on the realm channel: no
+-- announce, but a trade by whisper with one of the channel's members, picked at random
+-- (only the addon joins the channel, so every member runs it). The member list may not
+-- have been read yet: then the trade waits for it (OnChannelRoster). A member that does
+-- not answer within ChannelRosterAnswerWait (in a dungeon nothing gets out) is replaced
+-- by another, up to ChannelRosterTries members in all.
+-- tried: {[name] = true}, the members this round asked already.
+function WoWForeverRaceSync:SendRosterSync(joinRound, tried)
+    if not self.DB.profile.options.networking then return end
+    if self.DB.factionrealm.finished then return end
+
+    local members = self.Channel:Members()
+    if #members == 0 then
+        local pending = self.rosterSyncPending
+        self.rosterSyncPending = {joinRound = joinRound == true or (pending ~= nil and pending.joinRound)}
+        WoWForeverRace:DebugPrint("Roster sync: waiting for the channel's member list")
+        return
+    end
+    self.rosterSyncPending = nil
+
+    tried = tried or {}
+    local candidates, asked = {}, 0
+    for _, name in ipairs(members) do
+        if not tried[name] then
+            candidates[#candidates + 1] = name
+        end
+    end
+    for _ in pairs(tried) do asked = asked + 1 end
+    if #candidates == 0 then
+        WoWForeverRace:DebugPrint("Roster sync: none of the " .. asked .. " member(s) asked answered")
+        return
+    end
+    if joinRound then
+        self.rosterJoined = true
+    end
+
+    local partner = candidates[math.random(1, #candidates)]
+    tried[partner] = true
+    asked = asked + 1
+    WoWForeverRace:DebugPrint("Roster sync with " .. partner .. " (" .. #members .. " other member(s) in the channel)")
+    self:TradeWithChannelPartner(partner, joinRound)
+
+    if asked >= self.Config.ChannelRosterTries then return end
+    local round = self.channelRound
+    local _self = self
+    C_Timer.After(self.Config.ChannelRosterAnswerWait, function()
+        -- answered, or a newer trade took over
+        if _self.channelRound ~= round or round.answered then return end
+        if not _self.Channel:IsSendRefused() then return end
+        WoWForeverRace:DebugPrint("Roster sync: no answer from " .. partner .. ", asking another member")
+        _self:SendRosterSync(joinRound, tried)
+    end)
+end
+
+-- The realm channel's member list was read (Channel:ReadRoster). Every member runs the
+-- addon, so each becomes a buddy: whispered by the buddy pings and the ding pushes while
+-- the channel does not work. A roster trade that waited for the list runs now.
+function WoWForeverRaceSync:OnChannelRoster(names)
+    if not self.DB.profile.options.networking then return end
+    for _, name in ipairs(names) do
+        self:AddBuddy(name, true)
+    end
+    local pending = self.rosterSyncPending
+    if pending ~= nil and self.isReady and #names > 0 then
+        self:SendRosterSync(pending.joinRound)
+    end
 end
 
 -- A trade that brought us players we lacked means we were behind, and one partner may
