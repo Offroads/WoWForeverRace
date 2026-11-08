@@ -673,4 +673,141 @@ describe("Channel", function()
             assert.same({}, channel:Members())
         end)
     end)
+
+    describe("on a WoW Forever realm", function()
+        local RP = NAME .. "RP"
+
+        before_each(function()
+            _G.SetRuleset("RP")
+        end)
+
+        after_each(function()
+            _G.SetRuleset(nil)
+            Config.LegacyRaceChannel = true
+        end)
+
+        -- our own channel joined, then the one of older clients
+        local function joinBoth()
+            channel:Init()
+            advance(Config.ChannelJoinDelay + 2 * Config.ChannelJoinRetry)
+            assert.is_true(channel:IsJoined())
+            assert.is_true(channel:IsInLegacy())
+        end
+
+        it("is named after the faction and the ruleset", function()
+            assert.equals("WFRaceAllianceRP", channel:Name())
+            _G.SetRuleset("RP-PvP")
+            assert.equals("WFRaceAllianceRPPvP", channel:Name())
+            _G.SetRuleset("PvE")
+            _G.SetFaction("Horde")
+            assert.equals("WFRaceHordePvE", channel:Name())
+            assert.equals("WFRaceHorde", channel:LegacyName())
+        end)
+
+        it("puts the number behind the ruleset", function()
+            _G.SetChannelJoinRefused({RP})
+            channel:Init()
+            advance(Config.ChannelJoinDelay)
+            channel.Thread:FireEvent("CHANNEL_PASSWORD_REQUEST", RP)
+            advance(Config.ChannelJoinRetry * 2)
+
+            assert.equals(RP .. "2", channel:Name())
+            assert.is_true(channel:IsJoined())
+        end)
+
+        it("joins its own channel first, then the one of older clients with the same password", function()
+            joinBoth()
+            assert.same({RP, NAME}, _G.GetChannelJoinRequests())
+            assert.equals(Config.RaceChannelPassword, _G.GetLastChannelJoinPassword())
+            assert.equals(3, channel:Number())
+        end)
+
+        it("reads only the members of its own channel", function()
+            local rosters = {}
+            eventbus:RegisterCallback(Config.Events.ChannelRoster, {}, function(_, names)
+                rosters[#rosters + 1] = names
+            end)
+            _G.SetChannelMembers(RP, {"Rp Racer"})
+            _G.SetChannelMembers(NAME, {"Rp Racer", "Pve Racer", "Pvp Racer"})
+            joinBoth()
+            advance(Config.ChannelRosterInterval + 2 * Config.ChannelRosterDelay)
+
+            assert.is_true(#rosters > 0)
+            for _, names in ipairs(rosters) do
+                assert.same({"Rp Racer"}, names)
+            end
+            assert.same({"Rp Racer"}, channel:Members())
+        end)
+
+        it("keeps the notices of the two channels apart", function()
+            joinBoth()
+            notice("NOT_ALLOWED_IN_CHANNEL", NAME)
+            assert.is_false(channel:IsSendRefused())
+
+            -- a /leave of the old channel is not fought, and leaves ours alone
+            _G.LeaveChannelByName(NAME)
+            notice("YOU_LEFT", NAME)
+            assert.is_true(channel:IsJoined())
+            assert.is_false(channel:IsInLegacy())
+            advance(Config.ChannelRosterInterval)
+            assert.same({RP, NAME}, _G.GetChannelJoinRequests())
+        end)
+
+        it("gives the old channel up when it asks for a password, without its next number", function()
+            local hidden = {}
+            _G.StaticPopup_Hide = function(which, data) hidden[#hidden + 1] = which .. ":" .. tostring(data) end
+            _G.SetChannelJoinRefused({NAME})
+            channel:Init()
+            advance(Config.ChannelJoinDelay + Config.ChannelJoinRetry)
+            channel.Thread:FireEvent("CHANNEL_PASSWORD_REQUEST", NAME)
+            advance(Config.ChannelJoinRetry * 3)
+
+            assert.same({"CHAT_CHANNEL_PASSWORD:" .. NAME}, { hidden[1] })
+            assert.same({RP, NAME}, _G.GetChannelJoinRequests())
+            assert.equals(1, channel:Index())
+            assert.is_true(channel:IsJoined())
+            assert.is_false(channel:IsInLegacy())
+        end)
+
+        it("stops trying the old channel after a few unanswered joins", function()
+            _G.SetChannelJoinRefused({NAME})
+            channel:Init()
+            advance(Config.ChannelJoinDelay + Config.ChannelJoinRetry * (Config.ChannelJoinAttempts + 3))
+
+            assert.equals(1 + Config.ChannelJoinAttempts, #_G.GetChannelJoinRequests())
+            assert.is_true(channel:IsJoined())
+        end)
+
+        it("leaves both with sharing turned off and joins both again when it comes back", function()
+            joinBoth()
+            db.profile.options.networking = false
+            channel:OnNetworkingChanged()
+            assert.equals(0, (_G.GetChannelName(RP)))
+            assert.equals(0, (_G.GetChannelName(NAME)))
+            -- our own leave is not the player leaving
+            notice("YOU_LEFT", NAME)
+
+            db.profile.options.networking = true
+            channel:OnNetworkingChanged()
+            advance(1 + 2 * Config.ChannelJoinRetry)
+            assert.is_true(channel:IsJoined())
+            assert.is_true(channel:IsInLegacy())
+        end)
+
+        it("joins no old channel with LegacyRaceChannel off", function()
+            Config.LegacyRaceChannel = false
+            channel:Init()
+            advance(Config.ChannelJoinDelay + 3 * Config.ChannelJoinRetry)
+
+            assert.is_nil(channel:LegacyName())
+            assert.same({RP}, _G.GetChannelJoinRequests())
+        end)
+    end)
+
+    it("has no old channel to join where the name holds no ruleset", function()
+        assert.is_nil(channel:LegacyName())
+        channel:Init()
+        advance(Config.ChannelJoinDelay + 3 * Config.ChannelJoinRetry)
+        assert.same({NAME}, _G.GetChannelJoinRequests())
+    end)
 end)

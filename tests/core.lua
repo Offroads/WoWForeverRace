@@ -41,6 +41,23 @@ describe("Core", function()
         end)
     end)
 
+    describe("MyRuleset", function()
+        after_each(function()
+            SetRuleset(nil)
+        end)
+
+        it("is the ruleset AceDB scopes the race data by on WoW Forever", function()
+            for _, ruleset in ipairs({"Hardcore", "RP-PvP", "RP", "PvP", "PvE"}) do
+                SetRuleset(ruleset)
+                assert.equals(ruleset, core:MyRuleset())
+            end
+        end)
+
+        it("is nil on a client without regional unique names", function()
+            assert.is_nil(core:MyRuleset())
+        end)
+    end)
+
     describe("PredatesLaunch", function()
         it("is false for everything while the launch is still ahead", function()
             SetTime(1999)

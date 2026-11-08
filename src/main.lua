@@ -127,12 +127,20 @@ function WoWForeverRace:DBMigrations()
         -- Record server time as realm-opened reference on first ever login.
         -- GetServerTime() is server-synced (UTC), not affected by client timezone.
         self.DB.factionrealm.realmOpenedAt = GetServerTime()
+        self.DB.factionrealm.buddiesPerRuleset = true
         return
     end
     -- one-time migration: seed pioneer data from existing leaderboard entries
     if not self.DB.factionrealm.pioneersMigrated then
         self:MigratePioneerData()
         self.DB.factionrealm.pioneersMigrated = true
+    end
+    -- one-time migration: the faction-only realm channel spanned every ruleset, and its
+    -- members became buddies our whispers never reach. The channel of our own ruleset
+    -- brings the right ones back within minutes.
+    if not self.DB.factionrealm.buddiesPerRuleset then
+        self.DB.factionrealm.buddies = {}
+        self.DB.factionrealm.buddiesPerRuleset = true
     end
 end
 

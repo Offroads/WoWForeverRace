@@ -58,6 +58,9 @@ local WoWForeverRaceDefaultDB = {
         -- classFilter 0 = overall, 1-12 = per class (see Config.ClassIndexes)
         firstToLevel = {},
         pioneersMigrated = false,
+        -- whether the buddies were emptied once for the realm channel per ruleset: the
+        -- faction-only channel made players of every ruleset buddies, see DBMigrations
+        buddiesPerRuleset = false,
     },
 }
 
