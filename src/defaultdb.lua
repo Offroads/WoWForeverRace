@@ -62,3 +62,17 @@ local WoWForeverRaceDefaultDB = {
 }
 
 WoWForeverRace.DefaultDB = WoWForeverRaceDefaultDB
+
+-- Empties the race data of the faction-realm the AceDB `db` belongs to and returns its
+-- fresh factionrealm table, filled with the defaults. Only that one: the SavedVariables
+-- table is shared by the whole account and holds a faction-realm per faction and ruleset,
+-- which AceDB's own db:ResetDB() would empty together with every profile.
+function WoWForeverRace.ResetFactionRealm(db)
+    local saved = db.sv.factionrealm
+    if saved then
+        saved[db.keys.factionrealm] = nil
+    end
+    -- the next access creates the section anew from the defaults
+    rawset(db, "factionrealm", nil)
+    return db.factionrealm
+end

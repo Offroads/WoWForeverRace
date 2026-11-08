@@ -65,10 +65,6 @@ function WoWForeverRace:OnInitialize()
     WoWForeverRace.MsgStats = { send = {}, recv = {} }
     WoWForeverRace.HashLog = {}
 
-    -- any reset of the database (ours, the options panel, a dev command, a
-    -- future profile reset) hands the components fresh tables to bind to
-    self.DB.RegisterCallback(self, "OnDatabaseReset", "OnDatabaseReset")
-
     -- a reset from the network keeps the tables but empties them: scan and read the rosters anew
     self.EventBus:RegisterCallback(self.Config.Events.DataReset, self, function()
         self.scanner:ResetState()
@@ -166,17 +162,19 @@ function WoWForeverRace:ResetDB()
     -- and the realm-wide reset we know, so data from before it stays out.
     local realmOpenedAt = self.DB.factionrealm.realmOpenedAt
     local resetAt = self.DB.factionrealm.resetAt
-    -- fires OnDatabaseReset, which re-binds the components to the new tables
-    self.DB:ResetDB()
-    self.DB.factionrealm.dbversion = self.Config.Version
+    -- this faction-realm only: the other faction and the other rulesets of the
+    -- account keep their race data, and every character keeps its settings
+    local factionrealm = WoWForeverRace.ResetFactionRealm(self.DB)
+    factionrealm.dbversion = self.Config.Version
     if realmOpenedAt then
-        self.DB.factionrealm.realmOpenedAt = realmOpenedAt
+        factionrealm.realmOpenedAt = realmOpenedAt
     end
-    self.DB.factionrealm.resetAt = resetAt
+    factionrealm.resetAt = resetAt
+    self:OnDatabaseReset()
 end
 
--- AceDB replaces db.factionrealm and db.profile on a reset; everything that
--- cached a sub-table has to pick up the new one.
+-- ResetDB replaces db.factionrealm; everything that cached a sub-table has to
+-- pick up the new one.
 function WoWForeverRace:OnDatabaseReset()
     if self.Tracker then
         self.Tracker:ReinitLeaderboards()
@@ -188,12 +186,7 @@ function WoWForeverRace:OnDatabaseReset()
         self.Roster:Refresh()
     end
     if self.StatusFrame then
-        if self.StatusFrame.frame then
-            -- re-open so the window binds to the fresh profile status table too
-            self.StatusFrame:Show()
-        else
-            self.StatusFrame:Refresh()
-        end
+        self.StatusFrame:Refresh()
     end
 end
 

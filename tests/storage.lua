@@ -35,6 +35,7 @@ describe("Storage", function()
     after_each(function()
         -- the other test files share this Lua state and expect the Alliance default
         SetFaction(nil)
+        SetRuleset(nil)
         reloadAceDB()
         _G.WoWForeverRace_DB = nil
     end)
@@ -70,6 +71,82 @@ describe("Storage", function()
         assert.equals(1, #allianceBoard.players)
         assert.equals("Ally", allianceBoard.players[1].name)
         assert.equals("Hordie", saved[horde.keys.factionrealm].leaderboard[0].players[1].name)
+    end)
+
+    it("keys the faction-realm by ruleset on WoW Forever", function()
+        SetRuleset("PvP")
+        reloadAceDB()
+        assert.equals("Alliance - PvP", newDB().keys.factionrealm)
+
+        SetRuleset("PvE")
+        reloadAceDB()
+        assert.equals("Alliance - PvE", newDB().keys.factionrealm)
+    end)
+
+    describe("reset", function()
+        local function seed(db, name)
+            db.factionrealm.dbversion = "v1.0.1"
+            db.factionrealm.leaderboard[0].players[1] = {name = name, level = 60, classIndex = 1, dingedAt = time}
+            db.factionrealm.firstToLevel[0] = {[60] = {name = name, classIndex = 1, dingedAt = time}}
+            db.factionrealm.playerHistory[name] = {classIndex = 1, levels = {[60] = time}}
+            db.factionrealm.buddies[name] = {lastSeen = time}
+            db.factionrealm.pioneersMigrated = true
+        end
+
+        it("leaves the other rulesets of the account alone", function()
+            -- a character on a PvP realm, with race data and settings of its own
+            SetRuleset("PvP")
+            reloadAceDB()
+            local pvp = newDB()
+            seed(pvp, "Pvp Racer")
+            pvp.profile.options.scanCooldown = 30
+
+            -- the first login on a PvE realm finds no race data and resets it
+            SetRuleset("PvE")
+            reloadAceDB()
+            local pve = newDB()
+            assert.equals("0.0.0", pve.factionrealm.dbversion)
+            WoWForeverRace.ResetFactionRealm(pve)
+
+            local saved = _G.WoWForeverRace_DB
+            local pvpData = saved.factionrealm["Alliance - PvP"]
+            assert.is_not_nil(pvpData)
+            assert.equals("v1.0.1", pvpData.dbversion)
+            assert.equals("Pvp Racer", pvpData.leaderboard[0].players[1].name)
+            assert.equals("Pvp Racer", pvpData.firstToLevel[0][60].name)
+            assert.is_not_nil(pvpData.playerHistory["Pvp Racer"])
+            assert.is_not_nil(pvpData.buddies["Pvp Racer"])
+            assert.is_true(pvpData.pioneersMigrated)
+            assert.equals(30, saved.profiles["Default"].options.scanCooldown)
+
+            -- and back on the PvP realm, the race goes on where it was
+            SetRuleset("PvP")
+            reloadAceDB()
+            local again = newDB()
+            assert.equals("v1.0.1", again.factionrealm.dbversion)
+            assert.equals("Pvp Racer", again.factionrealm.leaderboard[0].players[1].name)
+        end)
+
+        it("empties this faction-realm and fills it with the defaults", function()
+            SetRuleset("PvP")
+            reloadAceDB()
+            local db = newDB()
+            seed(db, "Pvp Racer")
+            local old = db.factionrealm
+
+            local fresh = WoWForeverRace.ResetFactionRealm(db)
+
+            assert.are_not.equal(old, fresh)
+            assert.equals(fresh, db.factionrealm)
+            assert.equals(fresh, _G.WoWForeverRace_DB.factionrealm["Alliance - PvP"])
+            assert.equals("0.0.0", fresh.dbversion)
+            assert.equals(0, #fresh.leaderboard[0].players)
+            assert.equals(2, fresh.leaderboard[1].minLevel)
+            assert.is_nil(next(fresh.firstToLevel))
+            assert.is_nil(next(fresh.playerHistory))
+            assert.is_nil(next(fresh.buddies))
+            assert.is_false(fresh.pioneersMigrated)
+        end)
     end)
 
     -- A failure here means data was added outside the factionrealm scope. Race data

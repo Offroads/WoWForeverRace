@@ -40,14 +40,31 @@ _G.BNSendGameData = function() end
 _G.C_BattleNet = {}
 
 -- realm rulesets: on WoW Forever clients AceDB keys the realm by ruleset
--- ("Hardcore", "RP", "PvP", else "PvE") instead of by GetRealmName()
+-- ("Hardcore", "RP-PvP", "RP", "PvP", else "PvE") instead of by GetRealmName().
+-- See SetRuleset(ruleset): nil (the default) is a realm AceDB keys by GetRealmName(),
+-- one of those names a WoW Forever realm of that ruleset. AceDB reads it once, when
+-- its file is loaded.
+local ruleset = nil
 _G.Enum = _G.Enum or {}
 _G.Enum.GameRule = { HardcoreRuleset = 1, RPRuleset = 2, PvPRuleset = 3 }
+_G.RegionalUniqueNamesEnabled = function()      -- AceDB
+    return ruleset ~= nil
+end
 _G.C_GameRules = {
-    IsGameRuleActive = function()     -- AceDB
+    IsGameRuleActive = function(rule)     -- AceDB
+        if rule == _G.Enum.GameRule.HardcoreRuleset then
+            return ruleset == "Hardcore"
+        elseif rule == _G.Enum.GameRule.RPRuleset then
+            return ruleset == "RP" or ruleset == "RP-PvP"
+        elseif rule == _G.Enum.GameRule.PvPRuleset then
+            return ruleset == "PvP" or ruleset == "RP-PvP"
+        end
         return false
     end,
 }
+_G.SetRuleset = function(value)
+    ruleset = value
+end
 
 -- Mockable clock: GetTime() (uptime) and GetServerTime() (epoch) both return
 -- the same controllable value; SetTime() moves it.
