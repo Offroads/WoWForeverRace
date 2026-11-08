@@ -16,8 +16,8 @@ local REFUSED = "refused"   -- banned, or every channel name asks for a password
 local FAILED = "failed"     -- the joins tried went unanswered
 
 --[[
-Channel keeps us in the realm channel: a player-made chat channel per faction that
-every addon user joins, so one addon message reaches all of them (Network sends to
+Channel keeps us in the realm channel: a player-made chat channel per faction and realm
+ruleset that every addon user there joins, so one addon message reaches all of them (Network sends to
 it as the virtual "RACE" distribution). The server refuses addon messages on its own
 channels (General, Trade, ...), a player-made one carries them.
 
@@ -43,7 +43,12 @@ the client and answered with a NOT_ALLOWED_IN_CHANNEL notice. That makes the cha
 working at once (IsSendRefused), and nothing more is sent there this session. We stay in
 it all the same: its member list (RequestRoster) works and spans the whole game mode,
 and since only the addon joins it with the password, every member runs the addon. Sync
-makes each of them a buddy and trades with them by whisper (ChannelRoster event).
+makes each of them a buddy and trades with them by whisper (ChannelRoster event). The
+whispers do not reach a player on another ruleset, hence the ruleset in the name.
+
+Clients from before that join the faction-only channel (LegacyName), which spans every
+ruleset. We join it too, so that they still find us in its member list, but send nothing
+there and read none of its members (JoinLegacy).
 ]]--
 ---@class WoWForeverRaceChannel
 ---@field Config WoWForeverRaceConfig
@@ -82,6 +87,9 @@ function WoWForeverRaceChannel.new(Config, Core, DB, EventBus)
     self.wasWorking = nil         -- the state last published, see PublishState
     self.sendRefused = false      -- the server refuses addon messages on the channel, see IsSendRefused
     self.members = {}             -- the channel's members at the last read, without us, see RequestRoster
+    self.legacyStatus = IDLE      -- in the channel of older clients, see JoinLegacy
+    self.legacyAttempts = 0
+    self.legacyScheduled = false
 
     self.Thread = CreateFrame("Frame")
     self.Thread:Hide()
@@ -101,15 +109,38 @@ function WoWForeverRaceChannel.new(Config, Core, DB, EventBus)
     return self
 end
 
--- One channel per faction: the race is per faction, and the other faction's
--- messages would be dropped anyway (see Network:HandleAddonMessage). The number is
--- only part of the name from the second channel on.
+-- "WFRaceAlliance": the prefix and our faction
+local function factionName(self)
+    return self.Config.RaceChannelPrefix .. tostring(self.Core:MyFaction())
+end
+
+-- Our realm ruleset the way it goes into the channel name, letters only ("RPPvP"), or ""
+-- on a client that has none (its channels do not span realms).
+local function rulesetTag(self)
+    local ruleset = self.Core:MyRuleset()
+    if ruleset == nil then return "" end
+    return (string.gsub(ruleset, "[^%a]", ""))
+end
+
+-- One channel per faction and ruleset, like the race data (the factionrealm scope): the
+-- other faction's messages would be dropped anyway (see Network:HandleAddonMessage), and
+-- a channel's member list spans every ruleset of the game mode, while a whisper only
+-- reaches players on our own. The number is only part of the name from the second
+-- channel on.
 function WoWForeverRaceChannel:Name()
-    local name = self.Config.RaceChannelPrefix .. tostring(self.Core:MyFaction())
+    local name = factionName(self) .. rulesetTag(self)
     if self.index > 1 then
         name = name .. self.index
     end
     return name
+end
+
+-- The channel older clients join: one per faction across every ruleset, without a
+-- number (they rarely move on from the first name). nil when our own name is the same,
+-- or with Config.LegacyRaceChannel off.
+function WoWForeverRaceChannel:LegacyName()
+    if not self.Config.LegacyRaceChannel or rulesetTag(self) == "" then return nil end
+    return factionName(self)
 end
 
 function WoWForeverRaceChannel:Index()
@@ -332,6 +363,66 @@ function WoWForeverRaceChannel:OnJoined()
     C_Timer.After(self.Config.ChannelRosterDelay, function()
         _self:RequestRoster()
     end)
+    self:JoinLegacy()
+end
+
+-- Joins the channel of older clients (LegacyName) once we are in ours, with the same
+-- password, so that they find us in its member list and whisper us; whoever reaches us
+-- by whisper is on our ruleset and becomes a buddy then. We send nothing there and read
+-- none of its members: most of them are on another ruleset. Retried like our own join,
+-- and given up for the session on a /leave, a ban or a password.
+function WoWForeverRaceChannel:JoinLegacy()
+    local name = self:LegacyName()
+    if name == nil or self.legacyStatus ~= IDLE or self.legacyScheduled then return end
+    if not self:Wanted() or not self:IsJoined() then return end
+
+    local id = GetChannelName(name)
+    if type(id) == "number" and id > 0 then
+        self.legacyStatus = JOINED
+        WoWForeverRace:DebugPrint("Channel: in " .. name .. " for older clients")
+        return
+    end
+    if self.legacyAttempts >= self.Config.ChannelJoinAttempts then
+        WoWForeverRace:DebugPrint("Channel: could not join " .. name)
+        self.legacyStatus = FAILED
+        return
+    end
+    if not isLockedDown() then
+        self.legacyAttempts = self.legacyAttempts + 1
+        JoinTemporaryChannel(name, self.Config.RaceChannelPassword)
+    end
+    self.legacyScheduled = true
+    local _self = self
+    C_Timer.After(self.Config.ChannelJoinRetry, function()
+        _self.legacyScheduled = false
+        _self:JoinLegacy()
+    end)
+end
+
+-- Whether we are in the channel of older clients, see JoinLegacy.
+function WoWForeverRaceChannel:IsInLegacy()
+    local name = self:LegacyName()
+    if name == nil or self.legacyStatus ~= JOINED then return false end
+    local id = GetChannelName(name)
+    return type(id) == "number" and id > 0
+end
+
+-- A notice for the channel of older clients: only joining and leaving it matter.
+function WoWForeverRaceChannel:OnLegacyNotice(noticeType)
+    if noticeType == "YOU_CHANGED" or noticeType == "YOU_JOINED" then
+        if self.legacyStatus == IDLE and self:Wanted() then
+            self.legacyStatus = JOINED
+        end
+    elseif noticeType == "YOU_LEFT" then
+        -- a /leave or a kick: like our own channel, not rejoined this session
+        if self.legacyStatus == JOINED then
+            self.legacyStatus = LEFT
+        end
+    elseif noticeType == "WRONG_PASSWORD" or noticeType == "BANNED" then
+        if self.legacyStatus == IDLE then
+            self.legacyStatus = REFUSED
+        end
+    end
 end
 
 -- The channel we are joining asks for a password: give it up for the next name.
@@ -351,13 +442,7 @@ function WoWForeverRaceChannel:OnLocked()
     self:ScheduleJoin(self.Config.ChannelJoinRetry)
 end
 
--- CHANNEL_PASSWORD_REQUEST: the server wants a password for a channel we are joining.
--- The client answers that with a password dialog, which the player never asked for.
-function WoWForeverRaceChannel:OnPasswordRequest(channelName)
-    if type(channelName) ~= "string" or string.lower(channelName) ~= string.lower(self:Name()) then return end
-    -- a player joining the channel by hand gets the dialog
-    if self.status ~= IDLE or self.attempts == 0 then return end
-
+local function hidePasswordDialog(channelName)
     local function hideDialog()
         if _G.StaticPopup_Hide ~= nil then
             _G.StaticPopup_Hide("CHAT_CHANNEL_PASSWORD", channelName)
@@ -366,7 +451,26 @@ function WoWForeverRaceChannel:OnPasswordRequest(channelName)
     hideDialog()
     -- the client's own handler may run after ours
     C_Timer.After(0, hideDialog)
+end
 
+-- CHANNEL_PASSWORD_REQUEST: the server wants a password for a channel we are joining.
+-- The client answers that with a password dialog, which the player never asked for.
+function WoWForeverRaceChannel:OnPasswordRequest(channelName)
+    if type(channelName) ~= "string" then return end
+    local legacy = self:LegacyName()
+    if legacy ~= nil and string.lower(channelName) == string.lower(legacy) then
+        -- a player joining it by hand gets the dialog
+        if self.legacyStatus ~= IDLE or self.legacyAttempts == 0 then return end
+        hidePasswordDialog(channelName)
+        WoWForeverRace:DebugPrint("Channel: " .. legacy .. " asks for a password, given up")
+        self.legacyStatus = REFUSED
+        return
+    end
+    if string.lower(channelName) ~= string.lower(self:Name()) then return end
+    -- a player joining the channel by hand gets the dialog
+    if self.status ~= IDLE or self.attempts == 0 then return end
+
+    hidePasswordDialog(channelName)
     self:OnLocked()
 end
 
@@ -419,6 +523,11 @@ function WoWForeverRaceChannel:OnChannelNotice(noticeType, _, _, channelName, _,
         baseName = type(channelName) == "string" and string.match(channelName, "^%d+%. (.+)$") or nil
     end
     if type(baseName) ~= "string" then return end
+    local legacy = self:LegacyName()
+    if legacy ~= nil and string.lower(baseName) == string.lower(legacy) then
+        self:OnLegacyNotice(noticeType)
+        return
+    end
     if string.lower(baseName) ~= string.lower(self:Name()) then return end
 
     if noticeType == "YOU_CHANGED" or noticeType == "YOU_JOINED" then
@@ -535,12 +644,29 @@ function WoWForeverRaceChannel:OnNetworkingChanged()
             self.attempts = 0
             self:ScheduleJoin(0)
         end
-    elseif self.status == JOINED or self.status == IDLE then
-        local wasIn = self:Number() ~= nil
-        -- back to idle first, so our own YOU_LEFT notice is not taken for the player leaving
-        self.status = IDLE
-        if wasIn then
-            LeaveChannelByName(self:Name())
+        -- the channel of older clients follows once we are in ours (OnJoined)
+        if self.legacyStatus == FAILED then
+            self.legacyStatus = IDLE
+            self.legacyAttempts = 0
+        end
+    else
+        if self.status == JOINED or self.status == IDLE then
+            local wasIn = self:Number() ~= nil
+            -- back to idle first, so our own YOU_LEFT notice is not taken for the player leaving
+            self.status = IDLE
+            if wasIn then
+                LeaveChannelByName(self:Name())
+            end
+        end
+        local legacy = self:LegacyName()
+        if legacy ~= nil and (self.legacyStatus == JOINED or self.legacyStatus == IDLE) then
+            -- the same for the channel of older clients
+            self.legacyStatus = IDLE
+            self.legacyAttempts = 0
+            local id = GetChannelName(legacy)
+            if type(id) == "number" and id > 0 then
+                LeaveChannelByName(legacy)
+            end
         end
     end
     self:PublishState()

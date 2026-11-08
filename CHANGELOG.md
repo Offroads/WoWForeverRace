@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- No more "No player named ... is currently playing" messages in chat for
+  players on other realm types. The addon met players of every realm type
+  (PvE, PvP, RP, Hardcore) and tried to sync with them, but it can only
+  reach players on your own realm type. It now only meets those, and clears
+  the players it had saved from the other realm types once. Players who have
+  not updated yet can still find and sync with you.
+
 ## v1.0.2 - 2026-11-08
 
 ### Fixed

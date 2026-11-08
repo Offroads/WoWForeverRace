@@ -102,6 +102,29 @@ function WoWForeverRaceCore:MyFaction()
     return faction
 end
 
+-- The ruleset of a WoW Forever realm ("Hardcore", "RP-PvP", "RP", "PvP", "PvE"), read
+-- the way AceDB reads it to scope the factionrealm data there (libs/AceDB). nil on a
+-- client without regional unique names, where AceDB scopes it by the realm name.
+function WoWForeverRaceCore:MyRuleset()
+    local uniqueNames = _G.RegionalUniqueNamesEnabled
+    if uniqueNames == nil or not uniqueNames() then
+        return nil
+    end
+    local rules, isActive = _G.Enum.GameRule, _G.C_GameRules.IsGameRuleActive
+    if isActive(rules.HardcoreRuleset) then
+        return "Hardcore"
+    end
+    local isRP, isPVP = isActive(rules.RPRuleset), isActive(rules.PvPRuleset)
+    if isRP and isPVP then
+        return "RP-PvP"
+    elseif isRP then
+        return "RP"
+    elseif isPVP then
+        return "PvP"
+    end
+    return "PvE"
+end
+
 function WoWForeverRaceCore:ClassIndex(className)
     className = string.upper(className)
     className = string.gsub(className, " ", "")

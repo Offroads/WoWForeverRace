@@ -195,7 +195,12 @@ local WoWForeverRaceConfig = {
     -- guild, group and buddy sync only run while it is not working (we are not in it, the
     -- server refuses what we send there, or what we send stops coming back), see
     -- Channel:IsWorking. Its member list is read either way, see ChannelRosterInterval.
+    -- On WoW Forever the realm ruleset follows the faction (WFRaceAllianceRP, ...), see
+    -- Channel:Name: a channel spans every ruleset of the game mode, a whisper does not.
     RaceChannelPrefix = "WFRace",
+    -- Also stay in the faction-only channel of older clients, so they still find us
+    -- (Channel:JoinLegacy). Nothing is sent there and its members are not read.
+    LegacyRaceChannel = true,
     -- Joined with a fixed password, so nobody wanders in by hand. A channel an outsider
     -- made first has no password (we join it anyway) or another one (given up like any
     -- locked channel, see ChannelMaxIndex). Older clients join without the password: the
