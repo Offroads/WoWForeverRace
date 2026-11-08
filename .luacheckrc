@@ -45,7 +45,7 @@ files["tests"] = {
     read_globals = {
         "SetTime", "SetWhoResults", "GetWhoQuery", "ResetWhoQuery", "SetWhoPanelVisible", "SetChatLockdown",
         "SetIsInGuild", "SetGroupState", "SetGroupMembers", "SetGuildRoster", "GetGuildRosterRequests",
-        "SetFaction", "SetRaceNames", "SetInCombat",
+        "SetFaction", "SetRaceNames", "SetInCombat", "SetRuleset",
         "SetChatChannels", "SetChannelJoinRefused", "GetChannelJoinRequests",
     },
 }

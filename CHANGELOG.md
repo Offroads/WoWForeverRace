@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Playing a character on another realm type (PvE, PvP, RP, Hardcore) or of the
+  other faction no longer wipes your leaderboards. The addon keeps the race
+  data of every realm type and faction apart, but the first login on a new one
+  erased all of them, along with your settings, so switching back and forth
+  started every leaderboard over. Now that first login only sets up the new
+  one. "Reset Data" in the options likewise only clears the leaderboards of the
+  realm type and faction you are playing, and keeps your settings.
+
 ## v1.0.1 - 2026-11-05
 
 ### Fixed
