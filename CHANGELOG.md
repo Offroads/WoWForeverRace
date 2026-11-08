@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.0.3 - 2026-11-09
 
 ### Fixed
 - No more "No player named ... is currently playing" messages in chat for
