@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.0.2 - 2026-11-08
 
 ### Fixed
 - Playing a character on another realm type (PvE, PvP, RP, Hardcore) or of the
