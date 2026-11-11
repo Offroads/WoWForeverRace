@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.0.4 - 2026-11-11
 
 ### Changed
 - Players still on a version before v1.0.3 no longer find you across the
