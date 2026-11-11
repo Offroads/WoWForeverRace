@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Players still on a version before v1.0.3 no longer find you across the
+  realm. Guild and group sync with them still works; they need to update to
+  meet everyone else again.
+
 ## v1.0.3 - 2026-11-09
 
 ### Fixed
