@@ -12,10 +12,10 @@
   find them again after a longer break.
 
 ### Fixed
-- The addon only whispers players it knows are online: in its channel, online
-  in your guild or friends list, or heard from in the last 15 minutes. Players
-  who logged off no longer cause "No player named ... is currently playing"
-  messages in your chat.
+- Far fewer "No player named ... is currently playing" messages in your chat.
+  The addon only whispers players it believes are online: in its channel,
+  online in your guild or friends list, or heard from in the last 15 minutes.
+  A player who logs off within those 15 minutes can still cause one.
 
 ## v1.0.4 - 2026-11-11
 
