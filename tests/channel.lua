@@ -234,18 +234,18 @@ describe("Channel", function()
             assert.is_true(channel:IsJoined())
         end)
 
-        it("does not join with sharing turned off or after the race", function()
+        it("does not join with sharing turned off", function()
             db.profile.options.networking = false
             channel:Init()
             advance(Config.ChannelJoinDelay + Config.ChannelJoinRetry)
             assert.same({}, _G.GetChannelJoinRequests())
+        end)
 
-            db.profile.options.networking = true
+        it("still joins once the race is finished", function()
             db.factionrealm.finished = true
-            channel = WoWForeverRace.Channel(Config, core, db, eventbus)
             channel:Init()
             advance(Config.ChannelJoinDelay + Config.ChannelJoinRetry)
-            assert.same({}, _G.GetChannelJoinRequests())
+            assert.is_true(channel:IsJoined())
         end)
     end)
 

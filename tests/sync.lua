@@ -137,16 +137,12 @@ describe("Sync", function()
         assert.is_false(sync.isReady)
     end)
 
-    it("does nothing at login when the race is finished", function()
-        local networkSpy = spy.on(network, "SendObject")
-
-        -- mark race finished
+    it("still runs the login sync when the race is finished", function()
         db.factionrealm.finished = true
 
         sync:InitSync()
 
-        assert.spy(networkSpy).called_at_most(0)
-        assert.is_false(sync.isReady)
+        assert.is_true(sync.isReady)
     end)
 
     it("runs the login sync when sharing is turned on after login", function()
@@ -163,12 +159,12 @@ describe("Sync", function()
         assert.is_true(sync.isReady)
     end)
 
-    it("runs the login sync when a reset or the launch purge cleared a finished race", function()
-        db.factionrealm.finished = true
+    it("runs a skipped login sync again on a reset or the launch purge", function()
+        db.profile.options.networking = false
         sync:InitSync()
         assert.is_false(sync.isReady)
 
-        db.factionrealm.finished = false
+        db.profile.options.networking = true
         eventbus:PublishEvent(Events.DataReset)
         assert.is_true(sync.isReady)
     end)
@@ -535,6 +531,8 @@ describe("Sync", function()
                 ["Online Buddy"] = {lastSeen = stale},
                 ["Channel Buddy"] = {lastSeen = stale},
             }
+            _G.SetFriends({{name = "Online Buddy", connected = true}})
+            finally(function() _G.SetFriends(nil) end)
             local pinged = {}
             network.SendObject = function(_, event, _, channel, target)
                 if event == NetEvents.BuddyPing and channel == "WHISPER" then
@@ -542,9 +540,9 @@ describe("Sync", function()
                 end
             end
 
-            -- the login sync ends with a ping to the buddies, stale or not
+            -- the login sync ends with a ping to the buddies known to be online, stale or not
             sync:InitSync()
-            assert.same({["Offline Buddy"] = true, ["Online Buddy"] = true, ["Channel Buddy"] = true}, pinged)
+            assert.same({["Online Buddy"] = true}, pinged)
 
             -- one answers it, another is heard on the realm channel
             sync:OnNetBuddyPong({}, "Online Buddy")
@@ -649,7 +647,7 @@ describe("Sync", function()
             assert.equals(1, #groupPings)
         end)
 
-        it("does not ping the group from the ticker once the race is finished", function()
+        it("still pings the group from the ticker once the race is finished", function()
             _G.SetGroupState(2, false, false)
             sync.isReady = true
             db.factionrealm.finished = true
@@ -658,7 +656,7 @@ describe("Sync", function()
             AdvanceClock(WoWForeverRace.Config.GroupSyncInterval)
             AdvanceClock(2)
 
-            assert.equals(0, #groupPings)
+            assert.equals(1, #groupPings)
         end)
 
         it("does not whisper a buddy ping to group members, who get the group ping", function()
@@ -1050,7 +1048,7 @@ describe("Sync", function()
                 assert.same({myFullHash, myFTLHash, nil, {1790000000, "v0.1.0-beta14"}}, sent[1].payload)
             end)
 
-            it("stays quiet outside the channel, with sharing off and after the race", function()
+            it("stays quiet outside the channel and with sharing off", function()
                 sync:SendChannelSync()
                 assert.equals(0, #sent)
 
@@ -1058,11 +1056,17 @@ describe("Sync", function()
                 sent = {}
                 db.profile.options.networking = false
                 sync:SendChannelSync()
-                db.profile.options.networking = true
+
+                assert.equals(0, #sent)
+            end)
+
+            it("still announces once the race is finished", function()
+                channel:TryJoin()
+                sent = {}
                 db.factionrealm.finished = true
                 sync:SendChannelSync()
 
-                assert.equals(0, #sent)
+                assert.equals(1, #sentOf(NetEvents.ChannelSync))
             end)
 
             it("announces again about once per ChannelSyncInterval once ready", function()

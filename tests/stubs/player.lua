@@ -19,7 +19,18 @@ _G.C_FriendList = {
     SendWho = function(query)
         whoQuery = query
     end,
+    -- the friends list, see SetFriends
+    GetNumFriends = function()
+        return #(_G.C_FriendList.friends or {})
+    end,
+    GetFriendInfoByIndex = function(index)
+        return (_G.C_FriendList.friends or {})[index]
+    end,
 }
+-- friends: list of {name, connected}, nil for none
+_G.SetFriends = function(friends)
+    _G.C_FriendList.friends = friends
+end
 -- results: list of {fullName, level, filename, raceStr}; total: server-side match count
 -- (defaults to #results, pass a higher value to simulate a truncated result)
 _G.SetWhoResults = function(results, total)

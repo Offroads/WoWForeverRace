@@ -153,9 +153,10 @@ function WoWForeverRaceChannel:Status()
     return self.status
 end
 
--- no point in the channel when we share nothing, or when the race is over
+-- no point in the channel when we share nothing. A finished race stays in it: the
+-- boards are full, but the earliest times and pioneers still spread through it.
 function WoWForeverRaceChannel:Wanted()
-    return self.DB.profile.options.networking == true and not self.DB.factionrealm.finished
+    return self.DB.profile.options.networking == true
 end
 
 function WoWForeverRaceChannel:IsJoined()

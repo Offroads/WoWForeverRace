@@ -182,8 +182,13 @@ local WoWForeverRaceConfig = {
 
     BuddySyncInterval = 600,   -- buddy ping every 10 minutes
     BuddyPingBatchSize = 50,   -- max buddies to ping per cycle (random sample if more)
-    BuddyMaxAge = 3 * 24 * 60 * 60, -- buddies not heard from for 3 days are dropped after login
+    BuddyMaxAge = 30 * 24 * 60 * 60, -- buddies not heard from for 30 days are dropped after login
     BuddyPruneDelay = 60,      -- seconds after the login sync before they are dropped: who is online answers first
+    -- Only buddies known to be online are whispered (Core:OnlineBuddies): a whisper to an
+    -- offline player prints "No player named ... is currently playing". Besides the channel
+    -- member list, guild roster and friends list, a buddy heard from this recently counts
+    -- as online; it covers more than one BuddySyncInterval, so a buddy answering every ping stays in.
+    BuddyOnlineWindow = 15 * 60,
 
     GroupSyncInterval = 300,   -- group sync every 5 minutes while grouped (members already in sync don't answer)
     GroupSyncWait = 5,         -- seconds a group pinger collects pongs before sending to the group

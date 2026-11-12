@@ -30,6 +30,49 @@ describe("Core", function()
         end)
     end)
 
+    describe("OnlineBuddies", function()
+        local now = 1000000000
+
+        local function sorted(list)
+            table.sort(list)
+            return list
+        end
+
+        after_each(function()
+            SetGuildRoster(nil)
+            _G.SetFriends(nil)
+            SetGroupMembers(nil)
+        end)
+
+        it("only lists the buddies known to be online", function()
+            local long = now - config.BuddyOnlineWindow - 1
+            SetGuildRoster({
+                {name = "Guildie-NubVille", level = 60, class = "WARRIOR", online = true},
+                {name = "Sleeper-NubVille", level = 60, class = "MAGE", online = false},
+            })
+            _G.SetFriends({{name = "Friend", connected = true}, {name = "Away Friend", connected = false}})
+            local buddies = {
+                Guildie = {lastSeen = long},
+                Sleeper = {lastSeen = long},
+                Friend = {lastSeen = long},
+                ["Away Friend"] = {lastSeen = long},
+                Member = {lastSeen = long},
+                Recent = {lastSeen = now - config.BuddyOnlineWindow},
+                Gone = {lastSeen = long},
+            }
+
+            assert.same({"Friend", "Guildie", "Member", "Recent"},
+                    sorted(core:OnlineBuddies(buddies, {"Member-NubVille", "Stranger"})))
+        end)
+
+        it("leaves out the members of our group", function()
+            SetGroupMembers({{name = "Groupie", level = 60, class = "MAGE"}})
+            local buddies = {Groupie = {lastSeen = now}, Other = {lastSeen = now}}
+
+            assert.same({"Other"}, core:OnlineBuddies(buddies))
+        end)
+    end)
+
     describe("MyFaction", function()
         it("returns the player's faction", function()
             assert.equals("Alliance", core:MyFaction())

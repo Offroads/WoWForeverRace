@@ -469,7 +469,6 @@ end
 function WoWForeverRaceTracker:RelayToChannel(changedPlayers)
     if #changedPlayers == 0 then return end
     if not self.DB.profile.options.networking then return end
-    if self.DB.factionrealm.finished then return end
     if not self:ChannelJoined() or self.Channel:SettleDelay() > 0 then return end
 
     self:ScheduleChannelDingPush(changedPlayers)
@@ -478,7 +477,6 @@ end
 -- toGroup: also push to our group; not for levels every group member reads itself
 function WoWForeverRaceTracker:ScheduleDingPush(changedPlayers, toGroup)
     if not self.DB.profile.options.networking then return end
-    if self.DB.factionrealm.finished then return end
 
     local route = {}
     -- The realm channel is the path: in it, or about to be (the dings wait for the join,
@@ -542,17 +540,13 @@ function WoWForeverRaceTracker:FlushDingPush()
     local batchstr = WoWForeverRace.Serializer.SerializePlayerInfoBatch(players)
     local payload = {batchstr, false, 0}
 
-    -- whisper a random sample of buddies (capped at BuddyPingBatchSize); group members
-    -- got the group push or read the level themselves, and after one group sync every
-    -- member is a buddy: a raid level-up would otherwise cost 40 x 39 whispers. Guild
-    -- members who run the addon are buddies too (Sync:OnNetGuildSync)
-    local inGroup = self.Core:GroupMemberNames()
-    local names = {}
-    for name, _ in pairs(self.DB.factionrealm.buddies) do
-        if not inGroup[name] then
-            names[#names + 1] = name
-        end
-    end
+    -- whisper a random sample of the buddies known to be online (capped at
+    -- BuddyPingBatchSize, see Core:OnlineBuddies); group members got the group push or
+    -- read the level themselves, and after one group sync every member is a buddy: a raid
+    -- level-up would otherwise cost 40 x 39 whispers. Guild members who run the addon are
+    -- buddies too (Sync:OnNetGuildSync)
+    local names = self.Core:OnlineBuddies(self.DB.factionrealm.buddies,
+            self.Channel ~= nil and self.Channel:Members() or nil)
     local batchSize = self.Config.BuddyPingBatchSize
     if #names > batchSize then
         for i = 1, batchSize do
@@ -622,7 +616,6 @@ function WoWForeverRaceTracker:FlushChannelDingPush()
     self.pendingChannelDings, self.backupSkipped = {}, {}
 
     if not self.DB.profile.options.networking then return end
-    if self.DB.factionrealm.finished then return end
 
     local players = {}
     for _, p in pairs(pending) do
@@ -804,11 +797,6 @@ function WoWForeverRaceTracker:ProcessPlayerInfo(playerInfo)
     -- beta records must not hold a slot against the first dings after the launch
     -- (same in OnPHSyncResult and OnFTLSyncResult)
     self:PurgePreLaunchData()
-
-    -- don't process more player info when we know the race has finished
-    if self.DB.factionrealm.finished then
-        return
-    end
 
     if playerInfo.dingedAt == nil then
         playerInfo.dingedAt = self.Core:Now()
