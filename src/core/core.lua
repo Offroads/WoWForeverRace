@@ -244,6 +244,59 @@ function WoWForeverRaceCore:GroupMemberNames()
     return names
 end
 
+-- The players the client knows to be online right now, keyed like buddies (short name on
+-- our realm): the guild members its guild roster shows online, and the friends shown online.
+function WoWForeverRaceCore:KnownOnlineNames()
+    local names = {}
+    local function add(fullName)
+        if type(fullName) ~= "string" or fullName == "" then return end
+        local name, realm = self:SplitFullPlayer(fullName)
+        names[self:IsMyRealm(realm) and name or fullName] = true
+    end
+
+    local getRosterInfo = _G.GetGuildRosterInfo
+    if _G.IsInGuild ~= nil and _G.IsInGuild() and _G.GetNumGuildMembers ~= nil and getRosterInfo ~= nil then
+        for i = 1, _G.GetNumGuildMembers() or 0 do
+            local fullName, _, _, _, _, _, _, _, isOnline = getRosterInfo(i)
+            if isOnline then add(fullName) end
+        end
+    end
+
+    local friends = _G.C_FriendList
+    if friends ~= nil and friends.GetNumFriends ~= nil and friends.GetFriendInfoByIndex ~= nil then
+        for i = 1, friends.GetNumFriends() or 0 do
+            local info = friends.GetFriendInfoByIndex(i)
+            if type(info) == "table" and info.connected then add(info.name) end
+        end
+    end
+    return names
+end
+
+-- The buddies a whisper reaches right now, without the members of our group (they hear the
+-- group's own messages). A whisper to a player who is offline makes the server print
+-- "No player named ... is currently playing" in our chat, so a buddy is only whispered
+-- when we know it is online: it is in the realm channel's member list (channelMembers,
+-- a list of names), the guild roster or the friends list shows it online, or we heard
+-- from it within Config.BuddyOnlineWindow.
+function WoWForeverRaceCore:OnlineBuddies(buddies, channelMembers)
+    local online = self:KnownOnlineNames()
+    for _, name in ipairs(channelMembers or {}) do
+        local short, realm = self:SplitFullPlayer(name)
+        online[self:IsMyRealm(realm) and short or name] = true
+    end
+    local inGroup = self:GroupMemberNames()
+    local recent = self:Now() - self.Config.BuddyOnlineWindow
+
+    local names = {}
+    for name, buddy in pairs(buddies) do
+        if not inGroup[name] and (online[name]
+                or (type(buddy) == "table" and buddy.lastSeen ~= nil and buddy.lastSeen >= recent)) then
+            names[#names + 1] = name
+        end
+    end
+    return names
+end
+
 function WoWForeverRaceCore:Now()
     return GetServerTime()
 end

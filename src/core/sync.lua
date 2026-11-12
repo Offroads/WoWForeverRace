@@ -215,7 +215,6 @@ end
 -- withHistory: the player history is part of what we want from it.
 function WoWForeverRaceSync:ScheduleRepair(name, withHistory)
     if not self.DB.profile.options.networking then return end
-    if self.DB.factionrealm.finished then return end
 
     local repair = self.repairs[name]
     if repair == nil then
@@ -246,7 +245,7 @@ function WoWForeverRaceSync:Repair(name)
     end
 
     repair.pending = false
-    if not self.DB.profile.options.networking or self.DB.factionrealm.finished then return end
+    if not self.DB.profile.options.networking then return end
     repair.count = repair.count + 1
 
     WoWForeverRace:DebugPrint("Repair: comparing with " .. name .. " again"
@@ -294,11 +293,8 @@ end
 
 function WoWForeverRaceSync:InitSync()
     self.loginSyncRequested = true
-    -- don't request updates when we know the race has finished
-    if self.DB.factionrealm.finished then
-        WoWForeverRace:DebugPrint("Login sync: skipped, the race is finished")
-        return
-    end
+    -- A finished race still syncs: the boards are full, but an earlier time for a level
+    -- or a pioneer the others found still makes them better.
     -- don't request updates when we've disabled networking
     if not self.DB.profile.options.networking then
         WoWForeverRace:DebugPrint("Login sync: skipped, sharing is off")
@@ -339,7 +335,6 @@ end
 function WoWForeverRaceSync:OnChannelState(working)
     if working then return end
     if not self.DB.profile.options.networking then return end
-    if self.DB.factionrealm.finished then return end
     -- not ready yet: InitSync sees the channel down and runs the backup login sync itself
     if not self.isReady then return end
 
@@ -370,12 +365,12 @@ function WoWForeverRaceSync:OnNetworkingChanged()
     self:RerunLoginSync()
 end
 
--- The race data was reset or purged, which also clears `finished`.
+-- The race data was reset or purged.
 function WoWForeverRaceSync:OnDataReset()
     self:RerunLoginSync()
 end
 
--- A login sync that was skipped (sharing off, race finished) runs once the client is
+-- A login sync that was skipped (sharing off) runs once the client is
 -- eligible after all; never before NETWORK_READY asked for the first one.
 function WoWForeverRaceSync:RerunLoginSync()
     if self.isReady or not self.loginSyncRequested then return end
@@ -515,7 +510,6 @@ end
 function WoWForeverRaceSync:SendGuildSync(withPlayerHistory)
     if not IsInGuild() then return end
     if not self.DB.profile.options.networking then return end
-    if self.DB.factionrealm.finished then return end
 
     self.guildOffers = {}
     self.guildLateUntil = nil
@@ -632,23 +626,21 @@ function WoWForeverRaceSync:AddBuddy(name, quiet)
     self.EventBus:PublishEvent(self.Config.Events.BuddyUpdate)
 end
 
--- Send BPING to up to BuddyPingBatchSize buddies (random sample if more).
--- Not while the realm channel works (Channel:IsWorking).
+-- Send BPING to up to BuddyPingBatchSize buddies (random sample if more), only to the
+-- ones known to be online (Core:OnlineBuddies). Not while the realm channel works
+-- (Channel:IsWorking).
 function WoWForeverRaceSync:SendBuddyPings()
     if not self.isReady then return end
-    if self.DB.factionrealm.finished then return end
     if not self.DB.profile.options.networking then return end
     if self:ChannelWorking() then return end
 
     -- group members get the group ping (ScheduleGroupSync, same gates) instead
-    local inGroup = self.Core:GroupMemberNames()
-    local names = {}
-    for name, _ in pairs(self.DB.factionrealm.buddies) do
-        if not inGroup[name] then
-            names[#names + 1] = name
-        end
+    local names = self.Core:OnlineBuddies(self.DB.factionrealm.buddies,
+            self.Channel ~= nil and self.Channel:Members() or nil)
+    if #names == 0 then
+        WoWForeverRace:DebugPrint("BuddyPing: no buddy known to be online")
+        return
     end
-    if #names == 0 then return end
 
     local batchSize = self.Config.BuddyPingBatchSize
     local selected = names
@@ -671,7 +663,7 @@ function WoWForeverRaceSync:SendBuddyPings()
     -- the fifth field of every BPING and BPONG is the build we run, see VersionCheck
     local payload = {myFullHash, myPerClassHashes, myFTLHash, nil, self.Config:BuildInfo()}
 
-    WoWForeverRace:DebugPrint("BuddyPing: pinging " .. #selected .. " of " .. #names .. " buddies")
+    WoWForeverRace:DebugPrint("BuddyPing: pinging " .. #selected .. " of " .. #names .. " online buddies")
     for _, name in ipairs(selected) do
         self.Network:SendObject(self.Config.Network.Events.BuddyPing, payload, "WHISPER", name)
     end
@@ -907,7 +899,6 @@ end
 function WoWForeverRaceSync:ScheduleGroupSync()
     if not self.isReady then return end
     if not self.DB.profile.options.networking then return end
-    if self.DB.factionrealm.finished then return end
     if GetNumGroupMembers() == 0 then return end
     if self:ChannelWorking() then return end
 
@@ -1119,7 +1110,6 @@ end
 function WoWForeverRaceSync:SendChannelSync(joinRound)
     if not self:ChannelJoined() then return end
     if not self.DB.profile.options.networking then return end
-    if self.DB.factionrealm.finished then return end
 
     -- the server refuses addon messages on the channel: trade with one of its members
     if self.Channel:IsSendRefused() then
@@ -1262,7 +1252,6 @@ end
 -- tried: {[name] = true}, the members this round asked already.
 function WoWForeverRaceSync:SendRosterSync(joinRound, tried)
     if not self.DB.profile.options.networking then return end
-    if self.DB.factionrealm.finished then return end
 
     local members = self.Channel:Members()
     if #members == 0 then

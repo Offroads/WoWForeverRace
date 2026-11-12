@@ -248,7 +248,7 @@ describe("Tracker", function()
         it("whispers a scan result to the buddies after the delay, never to the guild", function()
             local networkSpy = spy.on(network, "SendObject")
             _G.SetIsInGuild(true)
-            db.factionrealm.buddies = {["Dude"] = {lastSeen = 0}}
+            db.factionrealm.buddies = {["Dude"] = {lastSeen = time}}
 
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
             -- nothing right away: the push is batched (DingPushDelay)
@@ -257,6 +257,21 @@ describe("Tracker", function()
             _G.C_Timer.Advance(config.DingPushDelay)
             assert.spy(networkSpy).was_called_with(match.is_ref(network), config.Network.Events.PlayerInfoBatch,
                     match.is_table(), "WHISPER", "Dude")
+            assert.spy(networkSpy).called_at_most(1)
+        end)
+
+        it("whispers a scan result only to the buddies known to be online", function()
+            local networkSpy = spy.on(network, "SendObject")
+            local long = time - config.BuddyOnlineWindow - 1
+            _G.SetFriends({{name = "Pal", connected = true}})
+            finally(function() _G.SetFriends(nil) end)
+            db.factionrealm.buddies = {["Dude"] = {lastSeen = long}, ["Pal"] = {lastSeen = long}}
+
+            tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            _G.C_Timer.Advance(config.DingPushDelay)
+
+            assert.spy(networkSpy).was_called_with(match.is_ref(network), config.Network.Events.PlayerInfoBatch,
+                    match.is_table(), "WHISPER", "Pal")
             assert.spy(networkSpy).called_at_most(1)
         end)
 
@@ -692,6 +707,20 @@ describe("Tracker", function()
             assert.equals(time - 30, players[2].dingedAt)
             -- an earlier time is no ding: nothing to announce in chat
             assert.equals(0, dings)
+        end)
+
+        it("still takes and passes on an earlier time once the race is finished", function()
+            channel:NoteSender("Dude")
+            tracker:ProcessPlayerInfo(playerInfo("Nubone", 5))
+            db.factionrealm.finished = true
+
+            tracker:OnSyncResult({ playerInfo("Nubone", 5, DRUIDIDX, time - 60), })
+            _G.C_Timer.Advance(config.ChannelDingDelayMax)
+
+            assert.equals(time - 60, db.factionrealm.leaderboard[0].players[1].dingedAt)
+            local players = channelBatch()
+            assert.equals(1, #players)
+            assert.equals(time - 60, players[1].dingedAt)
         end)
 
         it("does not pass an earlier time on when it came from the channel, or right after joining", function()

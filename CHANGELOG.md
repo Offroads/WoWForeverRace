@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- The addon keeps syncing after the race is over. Once every leaderboard was
+  full at max level it stopped sharing, so players who finished early never
+  passed on what they knew. It now keeps trading leaderboards with everyone
+  on your realm type and faction, so earlier times and first-to-level records
+  still reach every player. Scanning with /who still stops at the end.
+- Players you synced with are remembered for 30 days instead of 3, so you
+  find them again after a longer break.
+
+### Fixed
+- Far fewer "No player named ... is currently playing" messages in your chat.
+  The addon only whispers players it believes are online: in its channel,
+  online in your guild or friends list, or heard from in the last 15 minutes.
+  A player who logs off within those 15 minutes can still cause one.
+
 ## v1.0.4 - 2026-11-11
 
 ### Changed

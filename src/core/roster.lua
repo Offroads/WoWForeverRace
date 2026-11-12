@@ -85,9 +85,10 @@ function WoWForeverRaceRoster:InitGuildRosterTicker()
     self:RequestGuildRoster()
 end
 
+-- Also once the race is finished: the roster then feeds nothing to the tracker (Publish),
+-- but tells which guild members are online, see Core:OnlineBuddies.
 function WoWForeverRaceRoster:RequestGuildRoster()
     if not IsInGuild() then return end
-    if self.DB.factionrealm.finished then return end
 
     local guildInfo = _G.C_GuildInfo
     if guildInfo ~= nil and guildInfo.GuildRoster ~= nil then
