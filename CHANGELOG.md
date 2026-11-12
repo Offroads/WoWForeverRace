@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.0.5 - 2026-11-12
 
 ### Changed
 - The addon keeps syncing after the race is over. Once every leaderboard was
